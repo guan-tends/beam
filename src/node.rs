@@ -7,7 +7,8 @@ use crate::adapters::MemoryStorage;
 use async_trait::async_trait;
 use log::{debug, info};
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use std::time::{SystemTime, Duration}; // TODO get time from ActorContext
 use tokio::sync::broadcast; // TODO replace with generics: Sender and Receiver traits?
 
@@ -74,11 +75,11 @@ impl Node {
     }
 
     pub fn id(&self) -> String {
-        self.uid.read().unwrap().clone()
+        self.uid.read().clone()
     }
 
     pub fn peer_id(&self) -> String {
-        self.actor_context.peer_id.read().unwrap().clone()
+        self.actor_context.peer_id.read().clone()
     }
 
     /// Create a new root-level Node using custom configuration. Starts the default or configured network and storage adapters.
@@ -123,13 +124,13 @@ impl Node {
 
         node.actor_context.node = Some(node.clone());
         let addr = node.actor_context.start_actor(Box::new(node.clone()));
-        *node.addr.write().unwrap() = Some(addr);
+        *node.addr.write() = Some(addr);
 
         let router = Box::new(Router::new(config, storage_adapters, network_adapters)); // actually, we should communicate with
                                                                                         // MemoryStorage (or sled), which has a special role in maintaining our version of the current state?
                                                                                         // MemoryStorage can then communicate with router as needed.
         let router_addr = node.actor_context.start_router(router);
-        *node.router.write().unwrap() = Some(router_addr);
+        *node.router.write() = Some(router_addr);
 
         node
     }
@@ -138,9 +139,9 @@ impl Node {
         // TODO accept puts only from our memory/sled adapter, which is supposed to serve the latest version.
         // Or store latest NodeData in Node? Would eat up memory though.
         for (node_id, node_data) in put.updated_nodes {
-            if node_id == *self.uid.read().unwrap() {
+            if node_id == *self.uid.read() {
                 for (child, child_data) in node_data {
-                    if let Some(child) = self.children.read().unwrap().get(&child) {
+                    if let Some(child) = self.children.read().get(&child) {
                         let _ = child.on_sender.send(child_data.value.clone());
                     }
                     let _ = self
@@ -153,7 +154,6 @@ impl Node {
 
     fn new_child(&self, key: String) -> Node {
         assert!(key.len() > 0, "Key length must be greater than zero");
-        debug!("new child {}", key);
         let mut path = self.path.clone();
         path.push(key.clone());
         let new_child_uid = path.join("/");
@@ -162,7 +162,7 @@ impl Node {
             path,
             children: Arc::new(RwLock::new(BTreeMap::new())),
             parent: Arc::new(RwLock::new(Some((
-                self.uid.read().unwrap().clone(),
+                self.uid.read().clone(),
                 self.clone(),
             )))),
             on_sender: broadcast::channel::<Value>(BROADCAST_CHANNEL_SIZE).0,
@@ -173,8 +173,9 @@ impl Node {
             actor_context: self.actor_context.clone(),
         };
         let addr = self.actor_context.start_actor(Box::new(node.clone()));
-        *node.addr.write().unwrap() = Some(addr);
-        self.children.write().unwrap().insert(key, node.clone());
+        *node.addr.write() = Some(addr);
+        let mut guard = self.children.write();
+        guard.insert(key, node.clone());
         node
     }
 
@@ -188,17 +189,17 @@ impl Node {
         }
         let addr;
         let node_id;
-        if let Some((parent_id, parent)) = &*self.parent.read().unwrap() {
+        if let Some((parent_id, parent)) = &*self.parent.read() {
             node_id = parent_id.clone();
-            addr = parent.addr.read().unwrap().clone().unwrap();
+            addr = parent.addr.read().clone().unwrap();
         } else {
-            node_id = self.uid.read().unwrap().to_string();
-            addr = self.addr.read().unwrap().clone().unwrap();
+            node_id = self.uid.read().to_string();
+            addr = self.addr.read().clone().unwrap();
         }
         let get = Get::new(node_id, key, addr);
         // subscribe before send
         let subscriber = self.on_sender.subscribe();
-        if let Some(router) = self.router.read().unwrap().clone() {
+        if let Some(router) = self.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
         subscriber
@@ -219,21 +220,28 @@ impl Node {
             return self.clone();
         }
         debug!("get key {}", key);
-        if let Some(child) = self.children.read().unwrap().get(key) {
-            child.clone()
-        } else {
-            self.new_child(key.to_string())
+        // Explicit scope to drop read guard BEFORE entering else branch.
+        // The temporary from `self.children.read()` would otherwise live
+        // until the end of the `if let` statement, including the else block,
+        // causing a deadlock when new_child() tries to write().
+        let existing = {
+            let guard = self.children.read();
+            guard.get(key).cloned()
+        };
+        match existing {
+            Some(child) => child,
+            None => self.new_child(key.to_string()),
         }
     }
 
     /// Subscribe to all children of this Node.
     pub fn map(&self) -> broadcast::Receiver<(String, Value)> {
-        let node_id = self.uid.read().unwrap().to_string();
-        let addr = self.addr.read().unwrap().clone().unwrap();
+        let node_id = self.uid.read().to_string();
+        let addr = self.addr.read().clone().unwrap();
         let get = Get::new(node_id, None, addr);
         // subscribe before send
         let subscriber = self.map_sender.subscribe();
-        if let Some(router) = self.router.read().unwrap().clone() {
+        if let Some(router) = self.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
         subscriber
@@ -245,7 +253,7 @@ impl Node {
         value: Value,
         updated_at: f64,
     ) {
-        let parent = &*self.parent.read().unwrap();
+        let parent = &*self.parent.read();
         if let Some((parent_id, parent)) = parent {
             if parent_id == "" {
                 return; // TODO: this breaks first_put_then_get test
@@ -274,9 +282,9 @@ impl Node {
         debug!("put {}", value.to_string());
         let mut updated_nodes = BTreeMap::new();
         self.add_parent_nodes(&mut updated_nodes, value, updated_at);
-        let my_addr = self.addr.read().unwrap().clone().unwrap();
+        let my_addr = self.addr.read().clone().unwrap();
         let put = Put::new(updated_nodes, None, my_addr);
-        if let Some(router) = &*self.router.read().unwrap() {
+        if let Some(router) = &*self.router.read() {
             let _ = router.send(Message::Put(put));
         }
     }

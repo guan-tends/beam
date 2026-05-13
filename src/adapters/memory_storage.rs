@@ -6,7 +6,8 @@ use crate::types::*;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 pub struct MemoryStorage {
     store: Arc<RwLock<HashMap<String, Children>>>, // could use an LRU cache or other existing option
@@ -20,7 +21,7 @@ impl MemoryStorage {
     }
 
     fn handle_get(&self, get: Get, ctx: &ActorContext) {
-        if let Some(children) = self.store.read().unwrap().get(&get.node_id).cloned() {
+        if let Some(children) = self.store.read().get(&get.node_id).cloned() {
             debug!("have {}: {:?}", get.node_id, children);
             let reply_with_children = match &get.child_key {
                 Some(child_key) => {
@@ -54,7 +55,7 @@ impl MemoryStorage {
         for (node_id, update_data) in put.updated_nodes.iter().rev() {
             // return in reverse
             debug!("saving k-v {}: {:?}", node_id, update_data);
-            let mut write = self.store.write().unwrap();
+            let mut write = self.store.write();
             if let Some(children) = write.get_mut(node_id) {
                 for (child_id, child_data) in update_data {
                     if let Some(existing) = children.get(child_id) {

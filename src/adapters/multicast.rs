@@ -119,7 +119,7 @@ impl Actor for Multicast {
                         Self::handle_incoming_message(data, &ctx_clone, allow_public_space);
                     }
                 }
-                if *ctx_clone.is_stopped.read().unwrap() {
+                if *ctx_clone.is_stopped.read() {
                     break;
                 }
             }

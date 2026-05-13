@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::Send;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use tokio::sync::mpsc::{
     channel, unbounded_channel, Receiver, Sender, UnboundedReceiver, UnboundedSender,
 };
@@ -81,7 +82,7 @@ impl ActorContext {
     }
 
     pub fn child_actor_count(&self) -> usize {
-        self.stop_signals.read().unwrap().len()
+        self.stop_signals.read().len()
     }
 
     fn child_context(&self, addr: Addr, stop_signal: Sender<()>) -> Self {
@@ -111,7 +112,7 @@ impl ActorContext {
         T: Future<Output = ()> + Send + 'static,
     {
         let handle = tokio::spawn(task);
-        self.task_handles.write().unwrap().push(handle);
+        self.task_handles.write().push(handle);
     }
 
     pub fn blocking_child_task<F>(&self, task: F)
@@ -119,7 +120,7 @@ impl ActorContext {
         F: FnOnce() -> () + Send + 'static,
     {
         let handle = tokio::task::spawn_blocking(task);
-        self.task_handles.write().unwrap().push(handle);
+        self.task_handles.write().push(handle);
     }
 
     fn start_actor_or_router(&self, mut actor: Box<dyn Actor>, is_router: bool) -> Addr {
@@ -132,26 +133,25 @@ impl ActorContext {
         }
         self.stop_signals
             .write()
-            .unwrap()
             .insert(addr.clone(), stop_sender);
         let stop_signals = self.stop_signals.clone();
         let addr_clone = addr.clone();
         tokio::spawn(async move {
             actor.run(receiver, stop_receiver, new_context).await;
-            stop_signals.write().unwrap().remove(&addr_clone);
+            stop_signals.write().remove(&addr_clone);
         });
         addr
     }
 
     pub fn stop(&mut self) {
-        for handle in self.task_handles.read().unwrap().iter() {
+        for handle in self.task_handles.read().iter() {
             handle.abort();
         }
-        for signal in self.stop_signals.read().unwrap().values() {
+        for signal in self.stop_signals.read().values() {
             let _ = signal.try_send(());
         }
         self.node = None;
-        *self.is_stopped.write().unwrap() = true;
+        *self.is_stopped.write() = true;
     }
 }
 
