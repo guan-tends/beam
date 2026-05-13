@@ -141,7 +141,7 @@ impl Actor for WsServer {
         let addr = format!("0.0.0.0:{}", self.ws_config.port).to_string();
         let ctx = ctx.clone();
 
-        let peer_id = ctx.peer_id.read().unwrap().clone();
+        let peer_id = ctx.peer_id.read().clone();
         let peer_id_clone = peer_id.clone();
         let config_clone = self.ws_config.clone();
         ctx.child_task(async move {
