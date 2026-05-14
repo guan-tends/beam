@@ -255,9 +255,6 @@ impl Node {
     ) {
         let parent = &*self.parent.read();
         if let Some((parent_id, parent)) = parent {
-            if parent_id == "" {
-                return; // TODO: this breaks first_put_then_get test
-            }
             let mut parent = parent.clone();
             let mut children = Children::default();
             children.insert(
