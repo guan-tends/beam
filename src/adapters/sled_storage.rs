@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::actor::{Actor, ActorContext};
-use crate::message::{Get, Message, Put};
+use crate::message::{Flush, Get, Message, Put};
 use crate::types::*;
 use crate::Config;
 
@@ -355,6 +355,38 @@ impl SledStorage {
         }
         debug!("evict done");
     }
+
+
+    async fn handle_flush(&self, flush: Flush, ctx: &ActorContext) {
+        // Flush all open trees comprehensively
+        for name in self.store.tree_names() {
+            if let Ok(tree) = self.store.open_tree(&name) {
+                if let Err(e) = tree.flush_async().await {
+                    error!("sled tree flush failed for {:?}: {}", name, e);
+                }
+            }
+        }
+        debug!("completed flush for all sled trees");
+
+        // Send ack Put back to flush requester
+        let mut ack_children = Children::default();
+        ack_children.insert(
+            "_flushed".to_string(),
+            NodeData {
+                value: Value::Text("true".to_string()),
+                updated_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as f64,
+            },
+        );
+        let mut ack_nodes = BTreeMap::new();
+        ack_nodes.insert("_ack".to_string(), ack_children);
+
+        let mut put = Put::new(ack_nodes, Some(flush.id), ctx.addr.clone());
+        put.to_string();
+        let _ = flush.from.send(Message::Put(put));
+    }
 }
 
 #[async_trait]
@@ -364,6 +396,7 @@ impl Actor for SledStorage {
         match message {
             Message::Get(get) => self.handle_get(get, ctx),
             Message::Put(put) => self.handle_put(put),
+            Message::Flush(flush) => self.handle_flush(flush, ctx).await,
             _ => {}
         }
     }
@@ -405,7 +438,7 @@ impl Actor for SledStorage {
 mod tests {
     use crate::actor::{ActorContext, Addr};
     use crate::adapters::sled_storage::SledStorage;
-    use crate::message::{Get, Message, Put};
+    use crate::message::{Flush, Get, Message, Put};
     use crate::types::{Children, NodeData, Value};
     use crate::Config;
     use tokio::sync::mpsc::unbounded_channel;
