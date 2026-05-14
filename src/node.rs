@@ -162,7 +162,7 @@ impl Node {
         }
     }
 
-    pub async fn flush_storage(&mut self, timeout: Option<Duration>) -> Result<(), String> {
+    pub async fn flush_storage(&self, timeout: Option<Duration>) -> Result<(), String> {
         let router_addr = match &*self.router.read() {
             Some(addr) => addr.clone(),
             None => return Err("router not initialized".to_string()),
