@@ -167,7 +167,7 @@ impl Node {
             Some(addr) => addr.clone(),
             None => return Err("router not initialized".to_string()),
         };
-        let flush = Flush::new(self.actor_context.addr.clone(), None);
+        let flush = Flush::new(self.addr.read().clone().unwrap(), None);
         let id = flush.id.clone();
         let (tx, rx) = oneshot::channel();
         self.pending_flushes.write().insert(id.clone(), tx);
