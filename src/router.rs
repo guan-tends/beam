@@ -1,5 +1,5 @@
 use crate::actor::{Actor, ActorContext, Addr};
-use crate::message::{Get, Message, Put};
+use crate::message::{Flush, Get, Message, Put};
 use crate::utils::{BoundedHashMap, BoundedHashSet};
 use crate::Config;
 use async_trait::async_trait;
@@ -60,6 +60,7 @@ impl Actor for Router {
         match msg {
             Message::Put(put) => self.handle_put(put),
             Message::Get(get) => self.handle_get(get),
+            Message::Flush(flush) => self.handle_flush(flush),
             Message::Hi { from, peer_id: _ } => {
                 self.known_peers.insert(from);
             }
@@ -314,6 +315,22 @@ impl Router {
                 }
             }
         };
+    }
+
+    fn handle_flush(&mut self, flush: Flush) {
+        // Forward flush to all storage adapters (they can fsync)
+        let mut sent = HashSet::new();
+        for addr in self.storage_adapters.iter() {
+            if flush.from == *addr {
+                continue;
+            }
+            if sent.contains(addr) {
+                continue;
+            }
+            sent.insert(addr.clone());
+            let _ = addr.send(Message::Flush(flush.clone()));
+        }
+        debug!("forwarded flush to {} storage adapters", sent.len());
     }
 
     fn is_message_seen(&mut self, id: &String) -> bool {

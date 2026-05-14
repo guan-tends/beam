@@ -129,10 +129,28 @@ impl Put {
 }
 
 #[derive(Clone, Debug)]
+pub struct Flush {
+    pub id: String,
+    pub from: Addr,
+    pub node_id: Option<String>,
+}
+
+impl Flush {
+    pub fn new(from: Addr, node_id: Option<String>) -> Self {
+        Self {
+            id: random_string(8),
+            from,
+            node_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum Message {
     // TODO: NetworkMessage and InternalMessage
     Get(Get),
     Put(Put),
+    Flush(Flush),
     Hi { from: Addr, peer_id: String },
 }
 
@@ -141,6 +159,7 @@ impl Message {
         match self {
             Message::Get(get) => get.to_string(),
             Message::Put(mut put) => put.to_string(),
+            Message::Flush(flush) => json!({"dam": "flush","#": flush.id}).to_string(),
             Message::Hi { from: _, peer_id } => json!({"dam": "hi","#": peer_id}).to_string(),
         }
     }
@@ -149,6 +168,7 @@ impl Message {
         match self {
             Message::Get(get) => get.id.clone(),
             Message::Put(put) => put.id.clone(),
+            Message::Flush(flush) => flush.id.clone(),
             Message::Hi { from: _, peer_id } => peer_id.to_string(),
         }
     }
@@ -157,6 +177,7 @@ impl Message {
         match self {
             Message::Get(get) => get.from == *addr,
             Message::Put(put) => put.from == *addr,
+            Message::Flush(flush) => flush.from == *addr,
             Message::Hi { from, peer_id: _ } => *from == *addr,
         }
     }
@@ -165,6 +186,7 @@ impl Message {
         match self {
             Message::Get(get) => get.from.clone(),
             Message::Put(put) => put.from.clone(),
+            Message::Flush(flush) => flush.from.clone(),
             Message::Hi {
                 from: _,
                 peer_id: _,
