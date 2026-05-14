@@ -1,5 +1,5 @@
 use crate::actor::{Actor, ActorContext, Addr};
-use crate::message::{Get, Message, Put};
+use crate::message::{Flush, Get, Message, Put};
 use crate::router::Router;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use std::time::{SystemTime, Duration}; // TODO get time from ActorContext
-use tokio::sync::broadcast; // TODO replace with generics: Sender and Receiver traits?
+use tokio::sync::{broadcast, oneshot};
+use std::collections::HashMap; // TODO replace with generics: Sender and Receiver traits?
 
 static BROADCAST_CHANNEL_SIZE: usize = 10;
 
@@ -54,6 +55,7 @@ pub struct Node {
     actor_context: Box<ActorContext>,
     addr: Arc<RwLock<Option<Addr>>>,
     router: Arc<RwLock<Option<Addr>>>,
+    pending_flushes: Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
 }
 
 #[async_trait]
@@ -119,6 +121,7 @@ impl Node {
             map_sender: broadcast::channel::<(String, Value)>(BROADCAST_CHANNEL_SIZE).0,
             addr: Arc::new(RwLock::new(None)),
             router: Arc::new(RwLock::new(None)),
+            pending_flushes: Arc::new(RwLock::new(HashMap::new())),
             actor_context: Box::new(actor_context),
         };
 
@@ -136,6 +139,13 @@ impl Node {
     }
 
     fn handle_put(&mut self, put: Put) {
+        // Intercept flush acks before processing as normal data
+        if let Some(response_id) = &put.in_response_to {
+            if let Some(sender) = self.pending_flushes.write().remove(response_id) {
+                let _ = sender.send(());
+                return;
+            }
+        }
         // TODO accept puts only from our memory/sled adapter, which is supposed to serve the latest version.
         // Or store latest NodeData in Node? Would eat up memory though.
         for (node_id, node_data) in put.updated_nodes {
@@ -148,6 +158,32 @@ impl Node {
                         .map_sender
                         .send((child.to_string(), child_data.value.clone()));
                 }
+            }
+        }
+    }
+
+    pub async fn flush_storage(&mut self, timeout: Option<Duration>) -> Result<(), String> {
+        let router_addr = match &*self.router.read() {
+            Some(addr) => addr.clone(),
+            None => return Err("router not initialized".to_string()),
+        };
+        let flush = Flush::new(self.actor_context.addr.clone(), None);
+        let id = flush.id.clone();
+        let (tx, rx) = oneshot::channel();
+        self.pending_flushes.write().insert(id.clone(), tx);
+
+        if let Err(_e) = router_addr.send(Message::Flush(flush)) {
+            self.pending_flushes.write().remove(&id);
+            return Err("failed to send flush to router".to_string());
+        }
+
+        let dur = timeout.unwrap_or(Duration::from_secs(30));
+        match tokio::time::timeout(dur, rx).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err("flush ack channel closed".to_string()),
+            Err(_) => {
+                self.pending_flushes.write().remove(&id);
+                Err("flush timed out".to_string())
             }
         }
     }
@@ -169,6 +205,7 @@ impl Node {
             map_sender: broadcast::channel::<(String, Value)>(BROADCAST_CHANNEL_SIZE).0,
             uid: Arc::new(RwLock::new(new_child_uid)),
             router: self.router.clone(),
+            pending_flushes: Arc::new(RwLock::new(HashMap::new())),
             addr: Arc::new(RwLock::new(None)),
             actor_context: self.actor_context.clone(),
         };
