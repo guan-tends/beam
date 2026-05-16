@@ -11,7 +11,7 @@ use std::convert::TryInto;
 /// Returns the verified message data if valid
 ///
 /// Takes signed data in format {m: message, s: signature} and a public key (x.y)
-pub async fn verify(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError> {
+pub fn verify_sync(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError> {
     let message = signed_data
         .get("m")
         .and_then(|v| v.as_str())
