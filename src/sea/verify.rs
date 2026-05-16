@@ -7,7 +7,7 @@ use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 use serde_json::Value;
 use std::convert::TryInto;
 
-/// Verify a signature
+/// Verify a signature synchronously
 /// Returns the verified message data if valid
 ///
 /// Takes signed data in format {m: message, s: signature} and a public key (x.y)
@@ -65,4 +65,14 @@ pub fn verify_sync(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError
     // Parse and return the message
     serde_json::from_str(message)
         .map_err(|e| SeaError::Crypto(format!("invalid JSON: {}", e)))
+}
+
+/// Verify a signature asynchronously (non-blocking via spawn_blocking)
+/// Preferred for new code that must not block the async executor.
+pub async fn verify_async(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError> {
+    let data = signed_data.clone();
+    let key = pub_key.to_string();
+    tokio::task::spawn_blocking(move || verify_sync(&data, &key))
+        .await
+        .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?
 }
