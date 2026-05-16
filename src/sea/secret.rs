@@ -1,6 +1,71 @@
 //! ECDH shared secret derivation
+//! Based on Gun.js sea/secret.js
+//! Derives a shared secret from ECDH key exchange
+
 use super::{KeyPair, SeaError};
 
-pub async fn secret(_their_epub: &str, _pair: &KeyPair) -> Result<String, SeaError> {
-    Ok(String::new())
+/// Derive shared secret from ECDH key exchange
+///
+/// Takes a public key (their_epub, x.y base64) and our key pair.
+/// Returns the derived secret key (base64 encoded x-coordinate).
+///
+/// The shared secret is the x-coordinate of the ECDH shared point.
+/// Alice.secret(Bob.epub) == Bob.secret(Alice.epub)
+pub async fn secret(their_epub: &str, pair: &KeyPair) -> Result<String, SeaError> {
+    // Parse their public key
+    let their_pub = parse_epub(their_epub)?;
+
+    // Get our encryption private key
+    let our_epriv = pair
+        .epriv_key
+        .as_ref()
+        .ok_or_else(|| SeaError::Crypto("missing epriv key".to_string()))?;
+
+    let our_priv_bytes = base64::decode_config(our_epriv, base64::STANDARD_NO_PAD)
+        .map_err(|_| SeaError::InvalidKey)?;
+
+    if our_priv_bytes.len() != 32 {
+        return Err(SeaError::InvalidKey);
+    }
+
+    let mut priv_array = [0u8; 32];
+    priv_array.copy_from_slice(&our_priv_bytes);
+
+    let our_secret = p256::SecretKey::from_bytes(&priv_array.into())
+        .map_err(|_| SeaError::InvalidKey)?;
+
+    // Derive shared secret using ECDH
+    let shared_secret = p256::ecdh::diffie_hellman(
+        our_secret.to_nonzero_scalar(),
+        their_pub.as_affine(),
+    );
+
+    // Extract the x-coordinate of the shared point as the secret
+    // This is what Gun.js does — uses the x coordinate
+    let shared_bytes = shared_secret.raw_secret_bytes();
+
+    // Return as base64 (matching Gun.js format)
+    Ok(base64::encode_config(&shared_bytes[..], base64::STANDARD_NO_PAD))
+}
+
+/// Parse an epub key (format: x.y base64) into a p256 PublicKey
+fn parse_epub(epub: &str) -> Result<p256::PublicKey, SeaError> {
+    let parts: Vec<&str> = epub.split('.').collect();
+    if parts.len() != 2 {
+        return Err(SeaError::InvalidKey);
+    }
+
+    let x = base64::decode_config(parts[0], base64::STANDARD_NO_PAD)
+        .map_err(|_| SeaError::InvalidKey)?;
+    let y = base64::decode_config(parts[1], base64::STANDARD_NO_PAD)
+        .map_err(|_| SeaError::InvalidKey)?;
+
+    // Reconstruct uncompressed public key (0x04 || x || y)
+    let mut pub_bytes = Vec::with_capacity(65);
+    pub_bytes.push(0x04u8);
+    pub_bytes.extend_from_slice(&x);
+    pub_bytes.extend_from_slice(&y);
+
+    // Import as public key
+    p256::PublicKey::from_sec1_bytes(&pub_bytes).map_err(|_| SeaError::InvalidKey)
 }
