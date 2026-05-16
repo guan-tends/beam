@@ -71,6 +71,20 @@ impl EncryptedFileSessionStorage {
         }
     }
 
+    /// Config-friendly constructor with explicit session directory (used by Mnemos CLI)
+    ///
+    /// The `session_dir` is the FULL path — no "beam/sessions" suffix is appended.
+    /// Pass `~/.config/beam/sessions` expanded to an absolute path.
+    pub fn with_session_dir(session_dir: PathBuf) -> Result<Self, SeaError> {
+        let mut inst = Self {
+            dir: session_dir,
+            expiry_seconds: Self::resolve_expiry(),
+            master_key: None,
+        };
+        let _ = inst.resolve_master_key();
+        Ok(inst)
+    }
+
     fn resolve_expiry() -> u64 {
         if let Ok(days) = std::env::var("BEAM_SEA_SESSION_EXPIRY_DAYS") {
             if let Ok(d) = days.parse::<u64>() {
