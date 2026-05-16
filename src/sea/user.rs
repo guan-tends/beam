@@ -158,68 +158,82 @@ impl User {
 // --- Passphrase-based AES-GCM helpers (no KeyPair needed) ---
 
 async fn encrypt_pass(data: &JsonValue, passphrase: &str) -> Result<JsonValue, SeaError> {
-    let msg = serde_json::to_string(data)
-        .map_err(|e| SeaError::Encryption(format!("serialization: {}", e)))?;
+    let data = data.clone();
+    let passphrase = passphrase.to_string();
 
-    let mut salt = [0u8; 9];
-    let mut nonce = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut salt);
-    rand::thread_rng().fill_bytes(&mut nonce);
+    tokio::task::spawn_blocking(move || {
+        let msg = serde_json::to_string(&data)
+            .map_err(|e| SeaError::Encryption(format!("serialization: {}", e)))?;
 
-    let aes_key = derive_key(passphrase, &salt)?;
+        let mut salt = [0u8; 9];
+        let mut nonce = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut salt);
+        rand::thread_rng().fill_bytes(&mut nonce);
 
-    let cipher = Aes256Gcm::new_from_slice(&aes_key)
-        .map_err(|e| SeaError::Encryption(format!("cipher: {}", e)))?;
+        let aes_key = derive_key_sync(&passphrase, &salt)?;
 
-    let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), msg.as_bytes())
-        .map_err(|e| SeaError::Encryption(format!("encrypt: {}", e)))?;
+        let cipher = Aes256Gcm::new_from_slice(&aes_key)
+            .map_err(|e| SeaError::Encryption(format!("cipher: {}", e)))?;
 
-    Ok(json!({
-        "ct": base64::encode_config(&ciphertext, base64::STANDARD_NO_PAD),
-        "iv": base64::encode_config(&nonce, base64::STANDARD_NO_PAD),
-        "s": base64::encode_config(&salt, base64::STANDARD_NO_PAD),
-    }))
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce), msg.as_bytes())
+            .map_err(|e| SeaError::Encryption(format!("encrypt: {}", e)))?;
+
+        Ok(json!({
+            "ct": base64::encode_config(&ciphertext, base64::STANDARD_NO_PAD),
+            "iv": base64::encode_config(&nonce, base64::STANDARD_NO_PAD),
+            "s": base64::encode_config(&salt, base64::STANDARD_NO_PAD),
+        }))
+    })
+    .await
+    .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?
 }
 
 async fn decrypt_pass(encrypted: &JsonValue, passphrase: &str) -> Result<JsonValue, SeaError> {
-    let ct = encrypted
-        .get("ct")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| SeaError::Decryption("missing ct".to_string()))?;
-    let iv = encrypted
-        .get("iv")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| SeaError::Decryption("missing iv".to_string()))?;
-    let s = encrypted
-        .get("s")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| SeaError::Decryption("missing s".to_string()))?;
+    let encrypted = encrypted.clone();
+    let passphrase = passphrase.to_string();
 
-    let ciphertext = base64::decode_config(ct, base64::STANDARD_NO_PAD)
-        .map_err(|_| SeaError::Decryption("bad ct".to_string()))?;
-    let nonce = base64::decode_config(iv, base64::STANDARD_NO_PAD)
-        .map_err(|_| SeaError::Decryption("bad iv".to_string()))?;
-    let salt = base64::decode_config(s, base64::STANDARD_NO_PAD)
-        .map_err(|_| SeaError::Decryption("bad s".to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let ct = encrypted
+            .get("ct")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| SeaError::Decryption("missing ct".to_string()))?;
+        let iv = encrypted
+            .get("iv")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| SeaError::Decryption("missing iv".to_string()))?;
+        let s = encrypted
+            .get("s")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| SeaError::Decryption("missing s".to_string()))?;
 
-    let aes_key = derive_key(passphrase, &salt)?;
+        let ciphertext = base64::decode_config(ct, base64::STANDARD_NO_PAD)
+            .map_err(|_| SeaError::Decryption("bad ct".to_string()))?;
+        let nonce = base64::decode_config(iv, base64::STANDARD_NO_PAD)
+            .map_err(|_| SeaError::Decryption("bad iv".to_string()))?;
+        let salt = base64::decode_config(s, base64::STANDARD_NO_PAD)
+            .map_err(|_| SeaError::Decryption("bad s".to_string()))?;
 
-    let cipher = Aes256Gcm::new_from_slice(&aes_key)
-        .map_err(|e| SeaError::Decryption(format!("cipher: {}", e)))?;
+        let aes_key = derive_key_sync(&passphrase, &salt)?;
 
-    let plaintext = cipher
-        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
-        .map_err(|_| SeaError::Decryption("bad passphrase or tampered".to_string()))?;
+        let cipher = Aes256Gcm::new_from_slice(&aes_key)
+            .map_err(|e| SeaError::Decryption(format!("cipher: {}", e)))?;
 
-    let text = String::from_utf8(plaintext)
-        .map_err(|_| SeaError::Decryption("bad utf8".to_string()))?;
+        let plaintext = cipher
+            .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+            .map_err(|_| SeaError::Decryption("bad passphrase or tampered".to_string()))?;
 
-    serde_json::from_str(&text)
-        .map_err(|e| SeaError::Decryption(format!("bad json: {}", e)))
+        let text = String::from_utf8(plaintext)
+            .map_err(|_| SeaError::Decryption("bad utf8".to_string()))?;
+
+        serde_json::from_str(&text)
+            .map_err(|e| SeaError::Decryption(format!("bad json: {}", e)))
+    })
+    .await
+    .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?
 }
 
-fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
+fn derive_key_sync(passphrase: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
     let mut key = vec![0u8; 32];
     pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), salt, 100_000, &mut key);
     Ok(key)
