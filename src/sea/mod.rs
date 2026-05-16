@@ -91,9 +91,14 @@ pub async fn sign(data: &JsonValue, pair: &KeyPair) -> Result<JsonValue, SeaErro
     sign::sign(data, pair).await
 }
 
-/// Verify a signature
+/// Verify a signature synchronously (for use from message.rs)
+pub fn verify_sync(signed_data: &JsonValue, pub_key: &str) -> Result<JsonValue, SeaError> {
+    verify::verify_sync(signed_data, pub_key)
+}
+
+/// Verify a signature (async wrapper for backwards compat)
 pub async fn verify(signed_data: &JsonValue, pub_key: &str) -> Result<JsonValue, SeaError> {
-    verify::verify(signed_data, pub_key).await
+    Ok(verify_sync(signed_data, pub_key)?)
 }
 
 /// Compute proof-of-work or content hash
