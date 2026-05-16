@@ -1,8 +1,8 @@
 #![allow(deprecated)]
-//! User authentication system
+//! User authentication and session management
 //! Provides create/auth/leave/recall using Rod's graph persistence
 
-use super::{generate_pair, work, KeyPair, SeaError, WorkOptions};
+use super::{generate_pair, work, KeyPair, SeaError, SessionState, SessionStorage, User, WorkOptions};
 use crate::{Node, Value as RodValue};
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -13,24 +13,9 @@ use sha2::Sha256;
 use rand::RngCore;
 use serde_json::{json, Value as JsonValue};
 
-/// Authenticated user with key pair and alias
-#[derive(Clone, Debug)]
-pub struct User {
-    pub pair: KeyPair,
-    pub alias: Option<String>,
-    pub is_authenticated: bool,
-}
-
-/// Session storage trait for recall() persistence
-pub trait SessionStorage: Send + Sync {
-    fn save(&self, alias: &str, pair: &KeyPair) -> Result<(), SeaError>;
-    fn load(&self, alias: &str) -> Result<Option<KeyPair>, SeaError>;
-    fn clear(&self, alias: &str) -> Result<(), SeaError>;
-}
-
 impl User {
-    /// Create a new user with alias and password
-    /// Stores encrypted key pair in Rod's graph at `~@alias`
+    /// Create a new user with alias and password.
+    /// Stores encrypted key pair in Rod's graph at `~@alias`.
     pub async fn create(alias: &str, pass: &str, db: &mut Node) -> Result<Self, SeaError> {
         let pair = generate_pair().await?;
 
@@ -62,14 +47,15 @@ impl User {
         let mut alias_node = db.get("~@").get(alias);
         alias_node.put(RodValue::Text(alias_payload.to_string()));
 
-        Ok(User {
+        let state = SessionState {
             pair,
             alias: Some(alias.to_string()),
             is_authenticated: true,
-        })
+        };
+        Ok(User::from_state(state))
     }
 
-    /// Authenticate existing user from Rod's graph
+    /// Authenticate existing user from Rod's graph.
     pub async fn auth(alias: &str, pass: &str, db: &mut Node) -> Result<Self, SeaError> {
         let mut alias_node = db.get("~@").get(alias);
         let value = alias_node
@@ -121,39 +107,51 @@ impl User {
                 .map(|s| s.to_string()),
         };
 
-        Ok(User {
+        let state = SessionState {
             pair,
             alias: Some(alias.to_string()),
             is_authenticated: true,
-        })
+        };
+        Ok(User::from_state(state))
     }
 
-    /// Create user directly from existing key pair
-    pub fn from_pair(pair: KeyPair) -> Self {
-        User {
+    /// Create user directly from existing key pair.
+    pub fn from_pair(pair: KeyPair, alias: Option<&str>) -> Self {
+        let state = SessionState {
             pair,
-            alias: None,
+            alias: alias.map(|s| s.to_string()),
             is_authenticated: true,
+        };
+        User::from_state(state)
+    }
+
+    /// Recall user from session storage.
+    pub async fn recall(alias: &str, storage: &dyn SessionStorage) -> Result<Self, SeaError> {
+        let pair = storage
+            .load(alias)
+            .await
+            .map_err(|e| SeaError::SessionStorage(format!("{}", e)))?;
+
+        if let Some(pair) = pair {
+            let state = SessionState {
+                pair,
+                alias: Some(alias.to_string()),
+                is_authenticated: true,
+            };
+            Ok(User::from_state(state))
+        } else {
+            Err(SeaError::AuthFailed)
         }
     }
 
-    /// Clear key pair from memory and mark unauthenticated
-    pub fn leave(&mut self) {
-        self.pair = KeyPair {
-            pub_key: String::new(),
-            priv_key: String::new(),
-            epub_key: None,
-            epriv_key: None,
-        };
-        self.is_authenticated = false;
-    }
-
-    /// Recall user from session storage (not yet implemented)
-    pub async fn recall(
-        _alias: &str,
-        _storage: &dyn SessionStorage,
-    ) -> Result<Self, SeaError> {
-        Err(SeaError::AuthFailed)
+    /// Save current session to storage.
+    pub async fn save_to(&self, storage: &dyn SessionStorage) -> Result<(), SeaError> {
+        let inner = self.inner.read().map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
+        if !inner.is_authenticated {
+            return Err(SeaError::NotAuthenticated);
+        }
+        let alias = inner.alias.as_ref().ok_or(SeaError::NotAuthenticated)?;
+        storage.save(alias, &inner.pair).await
     }
 }
 
@@ -234,7 +232,7 @@ pub struct UserBuilder<'a> {
 
 impl Node {
     /// Begin user creation or authentication on this node
-    pub fn user(&mut self) -> UserBuilder {
+    pub fn user(&mut self) -> UserBuilder<'_> {
         UserBuilder { node: self }
     }
 }
