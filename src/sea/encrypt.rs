@@ -25,7 +25,7 @@ pub async fn encrypt(
     pair: &KeyPair,
     their_epub: Option<&str>,
 ) -> Result<Value, SeaError> {
-    // Serialize data to string
+    // Serialize data to string (IO-bound, safe in async)
     let msg = serde_json::to_string(data)
         .map_err(|e| SeaError::Encryption(format!("serialization error: {}", e)))?;
 
@@ -35,44 +35,51 @@ pub async fn encrypt(
     rand::thread_rng().fill_bytes(&mut salt_bytes);
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
-    // Derive AES key
-    let aes_key = if let Some(their_pub) = their_epub {
-        // Shared encryption: ECDH → PBKDF2
-        let _our_epriv = pair
-            .epriv_key
-            .as_ref()
-            .ok_or_else(|| SeaError::Encryption("missing epriv key".to_string()))?;
+    // Clone data needed inside blocking closure
+    let pair = pair.clone();
+    let their_epub = their_epub.map(|s| s.to_string());
+    let salt_owned = salt_bytes.to_vec();
+    let nonce_owned = nonce_bytes.to_vec();
 
-        // Get shared secret via ECDH
-        let shared_secret = super::secret::secret(their_pub, pair).await?;
+    // Run PBKDF2 + AES-GCM in spawn_blocking to avoid blocking the async executor
+    let result = tokio::task::spawn_blocking(move || {
+        // Derive AES key
+        let aes_key = if let Some(ref their_pub) = their_epub {
+            // Shared encryption: ECDH → PBKDF2
+            let shared_secret = super::secret::secret_sync(their_pub, &pair)?;
+            derive_aes_key_sync(&shared_secret, &salt_owned)?
+        } else {
+            // Self encryption: epriv directly as PBKDF2 input
+            let epriv = pair
+                .epriv_key
+                .as_ref()
+                .ok_or_else(|| SeaError::Encryption("missing epriv key".to_string()))?;
+            derive_aes_key_sync(epriv, &salt_owned)?
+        };
 
-        derive_aes_key(&shared_secret, &salt_bytes).await?
-    } else {
-        // Self encryption: epriv directly as PBKDF2 input
-        let epriv = pair
-            .epriv_key
-            .as_ref()
-            .ok_or_else(|| SeaError::Encryption("missing epriv key".to_string()))?;
+        // Create AES-GCM cipher
+        let cipher = Aes256Gcm::new_from_slice(&aes_key)
+            .map_err(|e| SeaError::Encryption(format!("failed to create cipher: {}", e)))?;
 
-        derive_aes_key(epriv, &salt_bytes).await?
-    };
+        // Create nonce from IV
+        let nonce = Nonce::from_slice(&nonce_owned);
 
-    // Create AES-GCM cipher
-    let cipher = Aes256Gcm::new_from_slice(&aes_key)
-        .map_err(|e| SeaError::Encryption(format!("failed to create cipher: {}", e)))?;
+        // Encrypt
+        let ciphertext = cipher
+            .encrypt(nonce, msg.as_bytes())
+            .map_err(|e| SeaError::Encryption(format!("encryption failed: {}", e)))?;
 
-    // Create nonce from IV
-    let nonce = Nonce::from_slice(&nonce_bytes);
+        // Encode everything as base64
+        let ct_b64 = base64::encode_config(&ciphertext, base64::STANDARD_NO_PAD);
+        let iv_b64 = base64::encode_config(&nonce_owned, base64::STANDARD_NO_PAD);
+        let s_b64 = base64::encode_config(&salt_owned, base64::STANDARD_NO_PAD);
 
-    // Encrypt
-    let ciphertext = cipher
-        .encrypt(nonce, msg.as_bytes())
-        .map_err(|e| SeaError::Encryption(format!("encryption failed: {}", e)))?;
+        Ok::<(String, String, String), SeaError>((ct_b64, iv_b64, s_b64))
+    })
+    .await
+    .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?;
 
-    // Encode everything as base64
-    let ct_b64 = base64::encode_config(&ciphertext, base64::STANDARD_NO_PAD);
-    let iv_b64 = base64::encode_config(&nonce_bytes, base64::STANDARD_NO_PAD);
-    let s_b64 = base64::encode_config(&salt_bytes, base64::STANDARD_NO_PAD);
+    let (ct_b64, iv_b64, s_b64) = result?;
 
     // Return in Gun.js format
     Ok(serde_json::json!({
@@ -82,8 +89,8 @@ pub async fn encrypt(
     }))
 }
 
-/// Derive AES-256 key from secret material + salt via PBKDF2
-async fn derive_aes_key(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
+/// Derive AES-256 key from secret material + salt via PBKDF2 (synchronous)
+fn derive_aes_key_sync(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
     let secret_bytes = base64::decode_config(secret_b64, base64::STANDARD_NO_PAD)
         .unwrap_or_else(|_| secret_b64.as_bytes().to_vec());
 

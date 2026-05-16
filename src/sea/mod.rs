@@ -207,6 +207,19 @@ pub async fn verify(signed_data: &JsonValue, pub_key: &str) -> Result<JsonValue,
     Ok(verify_sync(signed_data, pub_key)?)
 }
 
+/// Verify a signature asynchronously (non-blocking wrapper via spawn_blocking)
+/// Preferred for new code that must not block the async executor.
+pub async fn verify_async(signed_data: &JsonValue, pub_key: &str) -> Result<JsonValue, SeaError> {
+    let data = signed_data.clone();
+    let key = pub_key.to_string();
+    tokio::task::spawn_blocking(move || verify_sync(&data, &key))
+        .await
+        .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?
+}
+
+/// Re-export synchronous secret derivation for use inside spawn_blocking closures
+pub use secret::secret_sync;
+
 /// Compute proof-of-work or content hash
 pub async fn work(
     data: &[u8],
@@ -394,5 +407,14 @@ mod tests {
         let user = node.user().auth("remember_user", "remember_pass").await.unwrap();
         user.save_to(&storage).await.unwrap();
         assert!(User::recall("remember_user", &storage).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_verify_async_roundtrip() {
+        let pair = generate_pair().await.unwrap();
+        let data = json!({"hello": "world"});
+        let signed = sign(&data, &pair).await.unwrap();
+        let verified = verify_async(&signed, &pair.pub_key).await.unwrap();
+        assert_eq!(verified, data);
     }
 }

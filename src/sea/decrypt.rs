@@ -45,31 +45,46 @@ pub async fn decrypt(
     let salt_bytes = base64::decode_config(s, base64::STANDARD_NO_PAD)
         .map_err(|_| SeaError::Decryption("invalid s base64".to_string()))?;
 
-    // Derive AES key
-    let aes_key = if let Some(their_pub) = their_epub {
-        // Shared decryption: ECDH → PBKDF2
-        let shared_secret = super::secret::secret(their_pub, pair).await?;
-        derive_aes_key(&shared_secret, &salt_bytes).await?
-    } else {
-        // Self decryption: epriv directly
-        let epriv = pair
-            .epriv_key
-            .as_ref()
-            .ok_or_else(|| SeaError::Decryption("missing epriv key".to_string()))?;
-        derive_aes_key(epriv, &salt_bytes).await?
-    };
+    // Clone data for spawn_blocking closure
+    let pair = pair.clone();
+    let their_epub = their_epub.map(|s| s.to_string());
+    let salt_owned = salt_bytes;
+    let nonce_owned = nonce_bytes;
 
-    // Create AES-GCM cipher
-    let cipher = Aes256Gcm::new_from_slice(&aes_key)
-        .map_err(|e| SeaError::Decryption(format!("failed to create cipher: {}", e)))?;
+    // Run PBKDF2 + AES-GCM in spawn_blocking
+    let plaintext = tokio::task::spawn_blocking(move || {
+        // Derive AES key
+        let aes_key = if let Some(ref their_pub) = their_epub {
+            // Shared decryption: ECDH → PBKDF2
+            let shared_secret = super::secret::secret_sync(their_pub, &pair)?;
+            derive_aes_key_sync(&shared_secret, &salt_owned)?
+        } else {
+            // Self decryption: epriv directly
+            let epriv = pair
+                .epriv_key
+                .as_ref()
+                .ok_or_else(|| SeaError::Decryption("missing epriv key".to_string()))?;
+            derive_aes_key_sync(epriv, &salt_owned)?
+        };
 
-    // Create nonce from IV
-    let nonce = Nonce::from_slice(&nonce_bytes);
+        // Create AES-GCM cipher
+        let cipher = Aes256Gcm::new_from_slice(&aes_key)
+            .map_err(|e| SeaError::Decryption(format!("failed to create cipher: {}", e)))?;
 
-    // Decrypt
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
-        .map_err(|_| SeaError::Decryption("decryption failed — tampered or wrong key".to_string()))?;
+        // Create nonce from IV
+        let nonce = Nonce::from_slice(&nonce_owned);
+
+        // Decrypt
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|_| SeaError::Decryption("decryption failed — tampered or wrong key".to_string()))?;
+
+        Ok::<Vec<u8>, SeaError>(plaintext)
+    })
+    .await
+    .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?;
+
+    let plaintext = plaintext?;
 
     // Parse JSON
     let plaintext_str = String::from_utf8(plaintext)
@@ -79,8 +94,8 @@ pub async fn decrypt(
         .map_err(|e| SeaError::Decryption(format!("invalid JSON in plaintext: {}", e)))
 }
 
-/// Derive AES-256 key from secret material + salt via PBKDF2
-async fn derive_aes_key(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
+/// Derive AES-256 key from secret material + salt via PBKDF2 (synchronous)
+fn derive_aes_key_sync(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
     let secret_bytes = base64::decode_config(secret_b64, base64::STANDARD_NO_PAD)
         .unwrap_or_else(|_| secret_b64.as_bytes().to_vec());
 
