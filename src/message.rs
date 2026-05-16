@@ -210,6 +210,22 @@ impl Message {
             let json: JsonValue =
                 serde_json::from_str(text).or(Err("Failed to parse signature as JSON"))?;
             let signature_obj = json.as_object().ok_or("signature json was not an object")?;
+
+            // Extract public key from node_id (e.g. "~pub_key.sin/child")
+            let key = &node_id.split("/").next().unwrap()[1..];
+
+            // NEW FORMAT: {m: message, s: signature}
+            if signature_obj.contains_key("m") && signature_obj.contains_key("s") {
+                match crate::sea::verify_sync(&json, key) {
+                    Ok(_) => continue,
+                    Err(e) => {
+                        error!("invalid new-format sig for {}: {:?}", node_id, e);
+                        return Err("could not verify new-format signature");
+                    }
+                }
+            }
+
+            // OLD FORMAT: {: signed_data, ~: signature}
             let signed_data = signature_obj
                 .get(":")
                 .ok_or("no signed data (:) in signature json")?;
@@ -230,9 +246,7 @@ impl Message {
             let signature64 = base64::decode(signature)
                 .or(Err("signature (~) in signature json was not base64"))?;
             let signature = base64::encode_config(signature64, base64::URL_SAFE_NO_PAD);
-            // TODO use jsonwebtoken underlying ring::signature functions directly, instead of having to re-encode
 
-            let key = &node_id.split("/").next().unwrap()[1..];
             let mut split = key.split(".");
             let x = split.next().unwrap().to_string();
             let y = split
@@ -245,7 +259,7 @@ impl Message {
                 .parse()
                 .or(Err("failed to parse JsonWebKey from string"))?;
 
-            let hash = digest(&SHA256, signed_obj.to_string().as_bytes()); // is verify already doing the hashing?
+            let hash = digest(&SHA256, signed_obj.to_string().as_bytes());
 
             match verify(
                 &signature,
