@@ -328,3 +328,17 @@ impl Node {
         self.actor_context.stop();
     }
 }
+
+/// Options for put operations (SEA cert support)
+#[derive(Clone, Debug, Default)]
+pub struct PutOptions {
+    /// Optional certificate for delegated writes
+    pub cert: Option<serde_json::Value>,
+}
+
+impl Node {
+    /// Set a Value with options (currently cert is no-op; reserved for future enforcement)
+    pub fn put_with_options(&mut self, value: Value, _options: PutOptions) {
+        self.put(value);
+    }
+}
