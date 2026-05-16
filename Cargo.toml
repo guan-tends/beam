@@ -53,3 +53,7 @@ criterion = { version = "0.3", features=["async_futures", "html_reports"] }
 [[bench]]
 name = "my_benchmark"
 harness = false
+
+[[bin]]
+name = "beam-sea-keygen"
+path = "src/bin/beam-sea-keygen.rs"

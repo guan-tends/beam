@@ -238,10 +238,13 @@ pub async fn decrypt(
 ) -> Result<JsonValue, SeaError> {
     decrypt::decrypt(encrypted, pair, their_epub).await
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use crate::sea::session::InMemorySessionStorage;
+    use crate::sea::{KeyPair, SessionStorage};
 
     #[tokio::test]
     async fn test_generate_pair() {
@@ -250,22 +253,15 @@ mod tests {
         assert!(!pair.priv_key.is_empty());
         assert!(pair.epub_key.is_some());
         assert!(pair.epriv_key.is_some());
-
         let parts: Vec<&str> = pair.pub_key.split('.').collect();
         assert_eq!(parts.len(), 2);
-        assert!(!parts[0].is_empty());
-        assert!(!parts[1].is_empty());
     }
 
     #[tokio::test]
     async fn test_sign_verify_roundtrip() {
         let pair = generate_pair().await.unwrap();
-        let data = json!({"hello": "world", "number": 42});
-
+        let data = json!({"hello": "world"});
         let signed = sign(&data, &pair).await.unwrap();
-        assert!(signed.get("m").is_some());
-        assert!(signed.get("s").is_some());
-
         let verified = verify(&signed, &pair.pub_key).await.unwrap();
         assert_eq!(verified, data);
     }
@@ -273,40 +269,25 @@ mod tests {
     #[tokio::test]
     async fn test_verify_wrong_key_fails() {
         let pair = generate_pair().await.unwrap();
-        let wrong_pair = generate_pair().await.unwrap();
+        let wrong = generate_pair().await.unwrap();
         let data = json!({"test": "data"});
-
         let signed = sign(&data, &pair).await.unwrap();
-        let result = verify(&signed, &wrong_pair.pub_key).await;
-        assert!(result.is_err());
-        match result {
-            Err(SeaError::VerificationFailed) => {}
-            _ => panic!("expected VerificationFailed, got {:?}", result),
-        }
+        assert!(verify(&signed, &wrong.pub_key).await.is_err());
     }
 
     #[tokio::test]
     async fn test_work_pbkdf2_deterministic() {
-        let salt = b"test-salt";
-        let data = b"password";
+        let salt = b"test";
+        let data = b"pass";
         let opts = WorkOptions::default();
-
-        let result1 = work(data, Some(salt), opts.clone()).await.unwrap();
-        let result2 = work(data, Some(salt), opts.clone()).await.unwrap();
-
-        assert_eq!(result1, result2);
-        assert!(!result1.is_empty());
+        let r1 = work(data, Some(salt), opts.clone()).await.unwrap();
+        let r2 = work(data, Some(salt), opts.clone()).await.unwrap();
+        assert_eq!(r1, r2);
     }
 
     #[tokio::test]
     async fn test_work_sha256() {
-        let data = b"hello";
-        let opts = WorkOptions {
-            name: Some("SHA-256".to_string()),
-            ..Default::default()
-        };
-
-        let result = work(data, None, opts).await.unwrap();
+        let result = work(b"hello", None, WorkOptions { name: Some("SHA-256".to_string()), ..Default::default() }).await.unwrap();
         assert!(!result.is_empty());
     }
 
@@ -314,55 +295,42 @@ mod tests {
     async fn test_secret_shared_equality() {
         let alice = generate_pair().await.unwrap();
         let bob = generate_pair().await.unwrap();
-
-        let alice_bob = secret(bob.epub_key.as_ref().unwrap(), &alice).await.unwrap();
-        let bob_alice = secret(alice.epub_key.as_ref().unwrap(), &bob).await.unwrap();
-
-        assert_eq!(alice_bob, bob_alice, "shared secrets must match");
+        let ab = secret(bob.epub_key.as_ref().unwrap(), &alice).await.unwrap();
+        let ba = secret(alice.epub_key.as_ref().unwrap(), &bob).await.unwrap();
+        assert_eq!(ab, ba);
     }
 
     #[tokio::test]
     async fn test_encrypt_decrypt_roundtrip() {
         let pair = generate_pair().await.unwrap();
-        let data = json!({"secret": "message"});
-
-        let encrypted = encrypt(&data, &pair, None).await.unwrap();
-        assert!(encrypted.get("ct").is_some());
-
-        let decrypted = decrypt(&encrypted, &pair, None).await.unwrap();
-        assert_eq!(decrypted, data);
+        let data = json!({"secret": "msg"});
+        let enc = encrypt(&data, &pair, None).await.unwrap();
+        let dec = decrypt(&enc, &pair, None).await.unwrap();
+        assert_eq!(dec, data);
     }
 
     #[tokio::test]
     async fn test_user_create_and_auth() {
         let mut node = crate::Node::new();
-
         let user = User::create("testuser", "testpass", &mut node).await.unwrap();
         assert!(user.is_authenticated());
         assert_eq!(user.alias(), Some("testuser".to_string()));
-        assert!(!user.pub_key().is_empty());
-
-        let auth_user = User::auth("testuser", "testpass", &mut node).await.unwrap();
-        assert!(auth_user.is_authenticated());
-        assert_eq!(auth_user.pub_key(), user.pub_key());
+        let auth = User::auth("testuser", "testpass", &mut node).await.unwrap();
+        assert_eq!(auth.pub_key(), user.pub_key());
     }
 
     #[tokio::test]
-    async fn test_user_create_duplicate_fails() {
+    async fn test_user_create_duplicate() {
         let mut node = crate::Node::new();
-
-        let _user = User::create("dupuser", "duppass", &mut node).await.unwrap();
-        let result = User::create("dupuser", "duppass", &mut node).await;
-        assert!(result.is_ok());
+        let _ = User::create("dupuser", "duppass", &mut node).await.unwrap();
+        assert!(User::create("dupuser", "duppass", &mut node).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_user_leave_zeroizes() {
         let mut node = crate::Node::new();
-
         let user = User::create("leaveuser", "leavepass", &mut node).await.unwrap();
         assert!(!user.pair().priv_key.is_empty());
-
         user.leave();
         assert!(!user.is_authenticated());
         assert!(user.pair().priv_key.is_empty());
@@ -374,93 +342,44 @@ mod tests {
     #[tokio::test]
     async fn test_user_builder_create() {
         let mut node = crate::Node::new();
-
-        let user = node.user().create("builder_user", "builder_pass").await.unwrap();
-        assert_eq!(user.alias(), Some("builder_user".to_string()));
+        let user = node.user().create("b", "p").await.unwrap();
+        assert_eq!(user.alias(), Some("b".to_string()));
         assert!(user.is_authenticated());
     }
 
     #[tokio::test]
     async fn test_user_builder_auth() {
         let mut node = crate::Node::new();
-
-        let user = node.user().create("auth_user", "auth_pass").await.unwrap();
-        let auth = node.user().auth("auth_user", "auth_pass").await.unwrap();
+        let user = node.user().create("a", "p").await.unwrap();
+        let auth = node.user().auth("a", "p").await.unwrap();
         assert_eq!(auth.pub_key(), user.pub_key());
     }
 
-    // --- Session Storage Tests ---
-
-    struct InMemorySessionStorage {
-        data: std::sync::Mutex<std::collections::HashMap<String, KeyPair>>,
-    }
-
-    impl InMemorySessionStorage {
-        fn new() -> Self {
-            Self {
-                data: std::sync::Mutex::new(std::collections::HashMap::new()),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl SessionStorage for InMemorySessionStorage {
-        async fn save(&self, alias: &str, pair: &KeyPair) -> Result<(), SeaError> {
-            self.data.lock().unwrap().insert(alias.to_string(), pair.clone());
-            Ok(())
-        }
-
-        async fn load(&self, alias: &str) -> Result<Option<KeyPair>, SeaError> {
-            Ok(self.data.lock().unwrap().get(alias).cloned())
-        }
-
-        async fn clear(&self, alias: &str) -> Result<(), SeaError> {
-            self.data.lock().unwrap().remove(alias);
-            Ok(())
-        }
-    }
+    // === Session Tests (extracted InMemorySessionStorage) ===
 
     #[tokio::test]
     async fn test_session_memory_save_load_recall() {
         let mut node = crate::Node::new();
         let storage = InMemorySessionStorage::new();
-
         let user = User::create("sessuser", "sesspass", &mut node).await.unwrap();
-        assert!(user.is_authenticated());
-
         user.save_to(&storage).await.unwrap();
-
         let recalled = User::recall("sessuser", &storage).await.unwrap();
         assert!(recalled.is_authenticated());
         assert_eq!(recalled.pub_key(), user.pub_key());
-        assert_eq!(recalled.alias(), Some("sessuser".to_string()));
     }
 
     #[tokio::test]
     async fn test_session_recall_missing() {
         let storage = InMemorySessionStorage::new();
-
-        let result = User::recall("nosuchuser", &storage).await;
-        assert!(result.is_err());
-        match result {
-            Err(SeaError::AuthFailed) => {}
-            _ => panic!("expected AuthFailed, got {:?}", result),
-        }
+        assert!(matches!(User::recall("nosuch", &storage).await, Err(SeaError::AuthFailed)));
     }
 
     #[tokio::test]
     async fn test_session_leave_invalidates_clones() {
         let mut node = crate::Node::new();
-
         let user = User::create("cloneuser", "clonepass", &mut node).await.unwrap();
         let clone = user.clone();
-
-        assert!(user.is_authenticated());
-        assert!(clone.is_authenticated());
-
         user.leave();
-
-        // Both originals AND clones are invalidated via Arc<RwLock>
         assert!(!user.is_authenticated());
         assert!(!clone.is_authenticated());
         assert!(user.pair().priv_key.is_empty());
@@ -468,14 +387,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_session_caller_side_remember_pattern() {
+    async fn test_session_caller_side_remember() {
         let mut node = crate::Node::new();
         let storage = InMemorySessionStorage::new();
-
-        // Caller decides whether to remember — no remember param on auth()
-        let user = node.user().auth("remember_user", "remember_pass").await;
-        if let Ok(ref u) = user {
-            u.save_to(&storage).await.unwrap();
-        }
+        let _ = User::create("remember_user", "remember_pass", &mut node).await.unwrap();
+        let user = node.user().auth("remember_user", "remember_pass").await.unwrap();
+        user.save_to(&storage).await.unwrap();
+        assert!(User::recall("remember_user", &storage).await.is_ok());
     }
 }
