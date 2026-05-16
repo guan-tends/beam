@@ -36,8 +36,11 @@ impl User {
 
         // Derive proof from alias + password
         let proof_input = format!("{}{}", alias, pass);
-        let proof = work(proof_input.as_bytes(), Some(alias.as_bytes()), WorkOptions::default()).await?;
+        // Generate random 9-byte salt per Gun.js convention
+        let mut salt_bytes = [0u8; 9];
+        rand::thread_rng().fill_bytes(&mut salt_bytes);
 
+        let proof = work(proof_input.as_bytes(), Some(&salt_bytes), WorkOptions::default()).await?;
         // Build key pair data to encrypt
         let auth_data = json!({
             "pub": pair.pub_key,
@@ -54,8 +57,8 @@ impl User {
             "pub": pair.pub_key,
             "epub": pair.epub_key,
             "auth": encrypted_auth,
+            "salt": base64::encode_config(&salt_bytes, base64::STANDARD_NO_PAD),
         });
-
         let mut alias_node = db.get("~@").get(alias);
         alias_node.put(RodValue::Text(alias_payload.to_string()));
 
@@ -86,9 +89,15 @@ impl User {
             .get("auth")
             .ok_or(SeaError::AuthFailed)?;
 
-        let proof_input = format!("{}{}", alias, pass);
-        let proof = work(proof_input.as_bytes(), Some(alias.as_bytes()), WorkOptions::default()).await?;
+        let salt_decoded = if let Some(salt_b64) = alias_data.get("salt").and_then(|v| v.as_str()) {
+            base64::decode_config(salt_b64, base64::STANDARD_NO_PAD)
+                .unwrap_or_else(|_| alias.as_bytes().to_vec())
+        } else {
+            alias.as_bytes().to_vec()
+        };
 
+        let proof_input = format!("{}{}", alias, pass);
+        let proof = work(proof_input.as_bytes(), Some(&salt_decoded), WorkOptions::default()).await?;
         let decrypted = decrypt_pass(encrypted_auth, &proof).await?;
 
         let pair = KeyPair {
