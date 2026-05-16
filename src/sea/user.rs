@@ -217,3 +217,27 @@ fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
     pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), salt, 100_000, &mut key);
     Ok(key)
 }
+
+/// Builder for creating or authenticating users from a Node
+pub struct UserBuilder<'a> {
+    node: &'a mut Node,
+}
+
+impl Node {
+    /// Begin user creation or authentication on this node
+    pub fn user(&mut self) -> UserBuilder {
+        UserBuilder { node: self }
+    }
+}
+
+impl<'a> UserBuilder<'a> {
+    /// Create a new user with alias and password
+    pub async fn create(self, alias: &str, pass: &str) -> Result<User, SeaError> {
+        User::create(alias, pass, self.node).await
+    }
+
+    /// Authenticate an existing user with alias and password
+    pub async fn auth(self, alias: &str, pass: &str) -> Result<User, SeaError> {
+        User::auth(alias, pass, self.node).await
+    }
+}

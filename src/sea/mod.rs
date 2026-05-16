@@ -354,4 +354,17 @@ mod tests {
         assert_eq!(alice_auth.pair.pub_key, alice.pair.pub_key);
         assert_eq!(bob_auth.pair.pub_key, bob.pair.pub_key);
     }
+
+    #[tokio::test]
+    async fn test_user_builder_create_auth() {
+        use crate::Node;
+        let mut db = Node::new();
+
+        let user = db.user().create("builder_user", "builder_pass").await.unwrap();
+        assert_eq!(user.alias, Some("builder_user".to_string()));
+        assert!(user.is_authenticated);
+
+        let auth = db.user().auth("builder_user", "builder_pass").await.unwrap();
+        assert_eq!(auth.pair.pub_key, user.pair.pub_key);
+    }
 }
