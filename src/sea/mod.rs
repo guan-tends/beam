@@ -3,6 +3,7 @@
 //! Provides encryption, authentication, and authorization capabilities
 
 pub mod pair;
+pub mod session;
 pub mod sign;
 pub mod verify;
 pub mod work;
