@@ -12,6 +12,19 @@ use super::{KeyPair, SeaError};
 /// The shared secret is the x-coordinate of the ECDH shared point.
 /// Alice.secret(Bob.epub) == Bob.secret(Alice.epub)
 pub async fn secret(their_epub: &str, pair: &KeyPair) -> Result<String, SeaError> {
+    // ECDH is fast but the caller expects async; run in blocking task for consistency
+    let their = their_epub.to_string();
+    let pair = pair.clone();
+    tokio::task::spawn_blocking(move || secret_sync(&their, &pair))
+        .await
+        .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?
+}
+
+/// Derive shared secret from ECDH key exchange (synchronous version)
+///
+/// Takes a public key (their_epub, x.y base64) and our key pair.
+/// Returns the derived secret key (base64 encoded x-coordinate).
+pub fn secret_sync(their_epub: &str, pair: &KeyPair) -> Result<String, SeaError> {
     // Parse their public key
     let their_pub = parse_epub(their_epub)?;
 
