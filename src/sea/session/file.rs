@@ -18,20 +18,19 @@ use serde_json::{json, Value as JsonValue};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Encrypted session file format
 #[derive(Serialize, Deserialize)]
 struct SessionFile {
-    ct: String,        // base64 ciphertext
-    iv: String,        // base64 nonce
-    s: String,         // base64 salt (for future key rotation support)
+    ct: String,
+    iv: String,
+    s: String,
     alias: String,
-    expires_at: u64,   // Unix timestamp
+    expires_at: u64,
 }
 
-/// Production session storage backed by encrypted files on disk.
 pub struct EncryptedFileSessionStorage {
     dir: PathBuf,
     expiry_seconds: u64,
+    master_key: Option<Vec<u8>>,
 }
 
 impl EncryptedFileSessionStorage {
@@ -44,7 +43,26 @@ impl EncryptedFileSessionStorage {
         Ok(Self {
             dir,
             expiry_seconds: Self::resolve_expiry(),
+            master_key: None,
         })
+    }
+
+    /// Test-friendly constructor with explicit key (bypasses env)
+    pub fn with_dir_and_key(dir: PathBuf, key: Vec<u8>) -> Self {
+        Self {
+            dir: dir.join("beam").join("sessions"),
+            expiry_seconds: Self::resolve_expiry(),
+            master_key: Some(key),
+        }
+    }
+
+    /// Test-friendly constructor with explicit expiry (seconds)
+    pub fn with_dir_key_expiry(dir: PathBuf, key: Vec<u8>, expiry_secs: u64) -> Self {
+        Self {
+            dir: dir.join("beam").join("sessions"),
+            expiry_seconds: expiry_secs,
+            master_key: Some(key),
+        }
     }
 
     fn resolve_expiry() -> u64 {
@@ -53,7 +71,7 @@ impl EncryptedFileSessionStorage {
                 return d * 86400;
             }
         }
-        30 * 86400 // default 30 days
+        30 * 86400
     }
 
     fn file_path(&self, alias: &str) -> PathBuf {
@@ -67,7 +85,10 @@ impl EncryptedFileSessionStorage {
             .as_secs()
     }
 
-    fn load_master_key() -> Result<Vec<u8>, SeaError> {
+    fn load_master_key(&self) -> Result<Vec<u8>, SeaError> {
+        if let Some(ref key) = self.master_key {
+            return Ok(key.clone());
+        }
         let b64 = std::env::var("BEAM_SEA_SESSION_KEY")
             .map_err(|_| SeaError::SessionStorage("BEAM_SEA_SESSION_KEY not set".to_string()))?;
         let key = base64::decode_config(&b64, base64::STANDARD)
@@ -84,7 +105,7 @@ impl EncryptedFileSessionStorage {
 #[async_trait]
 impl SessionStorage for EncryptedFileSessionStorage {
     async fn save(&self, alias: &str, pair: &KeyPair) -> Result<(), SeaError> {
-        let key = Self::load_master_key()?;
+        let key = self.load_master_key()?;
         if self.dir.parent().is_some() {
             tokio::fs::create_dir_all(&self.dir).await
                 .map_err(|e| SeaError::SessionStorage(format!("mkdir: {}", e)))?;
@@ -134,15 +155,15 @@ impl SessionStorage for EncryptedFileSessionStorage {
     }
 
     async fn load(&self, alias: &str) -> Result<Option<KeyPair>, SeaError> {
-        let key = match Self::load_master_key() {
+        let key = match self.load_master_key() {
             Ok(k) => k,
-            Err(_) => return Ok(None), // env missing = safe silent failure
+            Err(_) => return Ok(None),
         };
 
         let path = self.file_path(alias);
         let json = match tokio::fs::read_to_string(path).await {
             Ok(s) => s,
-            Err(_) => return Ok(None), // no session file
+            Err(_) => return Ok(None),
         };
 
         let session_file: SessionFile = serde_json::from_str(&json)
@@ -150,7 +171,7 @@ impl SessionStorage for EncryptedFileSessionStorage {
 
         if session_file.expires_at < Self::now() {
             let _ = tokio::fs::remove_file(self.file_path(alias)).await;
-            return Ok(None); // expired, file cleaned up
+            return Ok(None);
         }
 
         let ciphertext = base64::decode_config(&session_file.ct, base64::STANDARD_NO_PAD)
@@ -182,5 +203,119 @@ impl SessionStorage for EncryptedFileSessionStorage {
     async fn clear(&self, alias: &str) -> Result<(), SeaError> {
         let _ = tokio::fs::remove_file(self.file_path(alias)).await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sea::{KeyPair, SessionStorage};
+
+    static TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn test_dir() -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        let n = TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        dir.push(format!("beam-test-{}-{}", std::process::id(), n));
+        std::fs::remove_dir_all(&dir).ok();
+        dir
+    }
+
+    fn test_key() -> Vec<u8> {
+        vec![0x42u8; 32]
+    }
+
+    fn clear_test_env() {
+        std::env::remove_var("BEAM_SEA_SESSION_KEY");
+        std::env::remove_var("BEAM_SEA_SESSION_EXPIRY_DAYS");
+    }
+
+    #[tokio::test]
+    async fn test_file_roundtrip_save_load_recall() {
+        clear_test_env();
+        let dir = test_dir();
+        let storage = EncryptedFileSessionStorage::with_dir_and_key(dir.clone(), test_key());
+
+        let pair = KeyPair {
+            pub_key: "test.pub".to_string(),
+            priv_key: "test.priv".to_string(),
+            epub_key: Some("test.epub".to_string()),
+            epriv_key: Some("test.epriv".to_string()),
+        };
+
+        storage.save("alice", &pair).await.unwrap();
+
+        let loaded = storage.load("alice").await.unwrap();
+        assert!(loaded.is_some(), "file should exist after save");
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.pub_key, pair.pub_key);
+        assert_eq!(loaded.priv_key, pair.priv_key);
+        assert_eq!(loaded.epub_key, pair.epub_key);
+        assert_eq!(loaded.epriv_key, pair.epriv_key);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_file_missing_env_returns_none() {
+        clear_test_env();
+        let dir = test_dir();
+        // Construct without key AND without env — safe fallback
+        let storage = EncryptedFileSessionStorage::with_dir_and_key(dir.clone(), vec![]);
+
+        let result = storage.load("alice").await.unwrap();
+        assert!(result.is_none(), "missing key should return None, not error");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_file_expiry_reaping() {
+        clear_test_env();
+        let dir = test_dir();
+        // 0-second expiry = instant expiration
+        let storage = EncryptedFileSessionStorage::with_dir_key_expiry(dir.clone(), test_key(), 0);
+
+        let pair = KeyPair {
+            pub_key: "exp.pub".to_string(),
+            priv_key: "exp.priv".to_string(),
+            epub_key: None,
+            epriv_key: None,
+        };
+
+        storage.save("expired_user", &pair).await.unwrap();
+
+        // Sleep to ensure time passes past expires_at
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let loaded = storage.load("expired_user").await.unwrap();
+        assert!(loaded.is_none(), "expired session should be reaped on load");
+
+        let file_path = dir.join("beam").join("sessions").join("expired_user.json");
+        assert!(!file_path.exists(), "expired session file should be deleted");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_file_clear_removes_session() {
+        clear_test_env();
+        let dir = test_dir();
+        let storage = EncryptedFileSessionStorage::with_dir_and_key(dir.clone(), test_key());
+
+        let pair = KeyPair {
+            pub_key: "clear.pub".to_string(),
+            priv_key: "clear.priv".to_string(),
+            epub_key: None,
+            epriv_key: None,
+        };
+
+        storage.save("clear_user", &pair).await.unwrap();
+        assert!(storage.load("clear_user").await.unwrap().is_some());
+
+        storage.clear("clear_user").await.unwrap();
+        assert!(storage.load("clear_user").await.unwrap().is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
