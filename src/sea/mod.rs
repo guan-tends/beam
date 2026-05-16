@@ -267,4 +267,86 @@ mod tests {
             _ => panic!("expected Decryption error, got {:?}", result),
         }
     }
+
+    // --- User System Tests ---
+
+    #[tokio::test]
+    async fn test_user_create_auth_roundtrip() {
+        use crate::Node;
+        let mut db = Node::new();
+
+        let user = crate::sea::user::User::create("testuser", "testpass", &mut db).await.unwrap();
+        assert!(user.is_authenticated);
+        assert_eq!(user.alias, Some("testuser".to_string()));
+        assert!(!user.pair.pub_key.is_empty());
+
+        let auth_user = crate::sea::user::User::auth("testuser", "testpass", &mut db).await.unwrap();
+        assert!(auth_user.is_authenticated);
+        assert_eq!(auth_user.pair.pub_key, user.pair.pub_key);
+        assert_eq!(auth_user.pair.priv_key, user.pair.priv_key);
+        assert_eq!(auth_user.pair.epub_key, user.pair.epub_key);
+        assert_eq!(auth_user.pair.epriv_key, user.pair.epriv_key);
+    }
+
+    #[tokio::test]
+    async fn test_user_auth_wrong_password() {
+        use crate::Node;
+        let mut db = Node::new();
+
+        crate::sea::user::User::create("alice", "correctpass", &mut db).await.unwrap();
+
+        let result = crate::sea::user::User::auth("alice", "wrongpass", &mut db).await;
+        assert!(result.is_err());
+        match result {
+            Err(SeaError::AuthFailed) => {}
+            Err(SeaError::Decryption(_)) => {}
+            _ => panic!("expected auth/decrypt error, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_user_auth_nonexistent() {
+        use crate::Node;
+        let mut db = Node::new();
+
+        let result = crate::sea::user::User::auth("nobody", "anypass", &mut db).await;
+        assert!(result.is_err());
+        match result {
+            Err(SeaError::AuthFailed) => {}
+            _ => panic!("expected AuthFailed, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_user_leave_zeroizes() {
+        use crate::Node;
+        let mut db = Node::new();
+
+        let mut user = crate::sea::user::User::create("leaver", "pass123", &mut db).await.unwrap();
+        assert!(!user.pair.priv_key.is_empty());
+
+        user.leave();
+        assert!(!user.is_authenticated);
+        assert!(user.pair.priv_key.is_empty());
+        assert!(user.pair.pub_key.is_empty());
+        assert!(user.pair.epriv_key.is_none());
+        assert!(user.pair.epub_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_user_multiple_users() {
+        use crate::Node;
+        let mut db = Node::new();
+
+        let alice = crate::sea::user::User::create("alice", "alicepass", &mut db).await.unwrap();
+        let bob = crate::sea::user::User::create("bob", "bobpass", &mut db).await.unwrap();
+
+        assert_ne!(alice.pair.pub_key, bob.pair.pub_key);
+
+        let alice_auth = crate::sea::user::User::auth("alice", "alicepass", &mut db).await.unwrap();
+        let bob_auth = crate::sea::user::User::auth("bob", "bobpass", &mut db).await.unwrap();
+
+        assert_eq!(alice_auth.pair.pub_key, alice.pair.pub_key);
+        assert_eq!(bob_auth.pair.pub_key, bob.pair.pub_key);
+    }
 }
