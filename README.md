@@ -124,6 +124,42 @@ async fn main() {
 }
 ```
 
+### User API Reference
+
+`rod::sea::User` is the authenticated user handle. It wraps `Arc<RwLock<SessionState>>` so all clones share the same session — `leave()` on any clone invalidates all of them.
+
+| Method | Async | Description |
+|--------|-------|-------------|
+| `User::create(alias, pass, node)` | ✅ | Generates P-256 keypair, encrypts auth data, stores at `~@{alias}` in Rod |
+| `User::auth(alias, pass, node)` | ✅ | Derives proof from alias+password, decrypts stored auth, returns User |
+| `User::recall(alias, storage)` | ✅ | Loads cached keypair from session storage (no network, no password) |
+| `User::from_pair(pair, alias?)` | ❌ | Constructs User directly from an existing `KeyPair` |
+| `user.save_to(storage)` | ✅ | Encrypts and persists current keypair to session storage |
+| `user.pub_key()` | ❌ | Clone of signing pubkey string (`~`-prefixed base64) |
+| `user.pair()` | ❌ | Clone of full `KeyPair` struct (pub, priv, epub, epriv) |
+| `user.alias()` | ❌ | `Some(alias)` or `None` |
+| `user.is_authenticated()` | ❌ | `true` until `leave()` called |
+| `user.leave()` | ❌ | Zeroizes keys and marks unauthenticated (all clones die) |
+
+**Builder-style (via `Node`):**
+```rust
+// Create:  db.user().create("alice", "pass").await
+// Auth:    db.user().auth("alice", "pass").await
+```
+
+### Crypto Primitives
+
+| Function | Async | Description |
+|----------|-------|-------------|
+| `rod::sea::generate_pair()` | ✅ | Fresh P-256 signing + encryption keypair |
+| `rod::sea::sign(data, pair)` | ✅ | ECDSA-P256-SHA256 sign a JSON value |
+| `rod::sea::verify(signed, pub_key)` | ✅ | Verify ECDSA signature (sync wrapper) |
+| `rod::sea::verify_async(signed, pub_key)` | ✅ | Verify without blocking async executor |
+| `rod::sea::encrypt(data, pair, their_epub?)` | ✅ | AES-GCM encrypt (self-encrypt if `their_epub` is `None`) |
+| `rod::sea::decrypt(encrypted, pair, their_epub?)` | ✅ | AES-GCM decrypt |
+| `rod::sea::secret(their_epub, pair)` | ✅ | ECDH shared secret derivation |
+| `rod::sea::work(data, salt?, opts)` | ✅ | PBKDF2 (100K iters, SHA-256) or SHA-256 hash |
+
 ### Session Persistence (Recall)
 
 Unlike Gun.js SEA's plaintext `sessionStorage`, BEAM encrypts session files with AES-256-GCM using a master key from your environment:
@@ -233,6 +269,7 @@ rod::sea::User          ← Arc<RwLock<SessionState>> ← shared invalidation
        └── leave() ──→ zeroize priv/epriv keys → is_authenticated = false
 
 SessionStorage trait:
-  ├── InMemorySessionStorage      (ephemeral, test-safe)
-  └── EncryptedFileSessionStorage (production, AES-256-GCM)
+  ├── InMemorySessionStorage         (ephemeral, test-safe)
+  ├── EncryptedFileSessionStorage    (production, AES-256-GCM, default path)
+  └── EncryptedFileSessionStorage::with_session_dir(path)  (production, explicit path)
 ```
