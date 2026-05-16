@@ -40,6 +40,10 @@ ring = "0.16.20"
 jsonwebtoken = "8.1.0"
 jsonwebkey = { version = "0.3.5", features=["jwt-convert"] }
 base64 = "0.13.0"
+p256 = { version = "0.13", features = ["ecdh"] }
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 criterion = { version = "0.3", features=["async_futures", "html_reports"] }
