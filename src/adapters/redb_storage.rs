@@ -35,8 +35,8 @@ macro_rules! unwrap_or_return {
 ///   value = bincode(BTreeMap<String, NodeData>)
 ///
 /// Read operations are sync within the actor task.
-/// Write operations (Put, Flush) run inside `spawn_blocking` so that
-/// fsync-bound commits do not stall the async runtime.
+/// Put commits inline for ACID ordering (fsync on local redb is fast).
+/// Flush writes a meta marker and acks for barrier semantics.
 pub struct RedbStorage {
     db: Arc<Database>,
     path: String,
@@ -204,13 +204,10 @@ impl Actor for RedbStorage {
         match message {
             Message::Get(get) => self.handle_get(get, ctx),
             Message::Put(put) => {
-                let self_clone = self.clone();
-                let _ = task::spawn_blocking(move || {
-                    if let Err(e) = self_clone.handle_put_internal(put) {
-                        error!("redb put commit failed: {:?}", e);
-                    }
-                })
-                .await;
+                // Inline commit: redb is local embedded storage; fsync is fast
+                if let Err(e) = self.handle_put_internal(put) {
+                    error!("redb put commit failed: {:?}", e);
+                }
             }
             Message::Flush(flush) => {
                 let self_clone = self.clone();
