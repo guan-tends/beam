@@ -336,8 +336,8 @@ mod tests {
     }
 
     fn clear_test_env() {
-        std::env::remove_var("BEAM_SEA_SESSION_KEY");
-        std::env::remove_var("BEAM_SEA_SESSION_EXPIRY_DAYS");
+        unsafe { std::env::remove_var("BEAM_SEA_SESSION_KEY"); }
+        unsafe { std::env::remove_var("BEAM_SEA_SESSION_EXPIRY_DAYS"); }
     }
 
     #[tokio::test]

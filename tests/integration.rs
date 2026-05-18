@@ -405,4 +405,68 @@ mod tests {
         // compare with db.js: var i = 100000, j = i, s = +new Date; while(--i){ db.get('a'+i).get('lol').put(i+'yo') } console.log(j / ((+new Date - s) / 1000), 'ops/sec');
     }
      */
+
+
+    #[tokio::test]
+    async fn redb_storage_persists() {
+        let _ = env_logger::try_init();
+        use rod::adapters::RedbStorage;
+        use std::time::Duration;
+        use tokio::time::sleep;
+
+        let temp_path = std::env::temp_dir().join("rod-redb-test.ron");
+        let _ = std::fs::remove_file(&temp_path);
+
+        let config = Config::default();
+
+        // Phase 1: write
+        {
+            let mut db = Node::new_with_config(
+                config.clone(),
+                vec![Box::new(RedbStorage::new_with_config(
+                    config.clone(),
+                    temp_path.to_string_lossy().as_ref(),
+                    None,
+                ))],
+                vec![],
+            );
+
+            db.get("Feanor").put("Noldor".into());
+            sleep(Duration::from_millis(500)).await;
+            db.stop();
+            sleep(Duration::from_millis(1000)).await;
+        }
+
+        // Phase 2: read — only redb, no memory
+        {
+            let mut db2 = Node::new_with_config(
+                config.clone(),
+                vec![Box::new(RedbStorage::new_with_config(
+                    config.clone(),
+                    temp_path.to_string_lossy().as_ref(),
+                    None,
+                ))],
+                vec![],
+            );
+
+            // map() on root replays existing children from storage
+            // (data stored at root node "" with "Feanor" as child key)
+            let mut sub = db2.map();
+
+            let result = tokio::time::timeout(Duration::from_secs(3), sub.recv()).await;
+            let (key, value) = result.expect("timeout waiting for map replay")
+                .expect("broadcast recv error");
+
+            assert_eq!(key, "Feanor"); // child key from root
+            if let Value::Text(s) = value {
+                assert_eq!(&s, "Noldor");
+            } else {
+                panic!("Expected Value::Text, got {:?}", value);
+            }
+
+            db2.stop();
+        }
+
+        let _ = std::fs::remove_file(&temp_path);
+    }
 }
