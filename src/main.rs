@@ -3,7 +3,7 @@ use clap::{App, Arg, SubCommand};
 use ctrlc;
 use rod::actor::Actor;
 use rod::adapters::{
-    MemoryStorage, Multicast, OutgoingWebsocketManager, SledStorage, WsServer, WsServerConfig,
+    MemoryStorage, Multicast, OutgoingWebsocketManager, RedbStorage, SledStorage, WsServer, WsServerConfig,
 };
 use rod::{Config, Node};
 
@@ -104,6 +104,24 @@ async fn main() {
                         .takes_value(true),
                 )
                 .arg(
+                    Arg::with_name("redb-storage")
+                        .long("redb-storage")
+                        .env("REDB_STORAGE")
+                        .value_name("BOOL")
+                        .help("redb storage (disk+mem)")
+                        .default_value("false")
+                        .takes_value(true),
+                )
+                .arg(
+                    Arg::with_name("redb-path")
+                        .long("redb-path")
+                        .env("REDB_PATH")
+                        .value_name("PATH")
+                        .help("Path to the redb database file")
+                        .default_value("rod.redb")
+                        .takes_value(true),
+                )
+                .arg(
                     Arg::with_name("allow-public-space")
                         .long("allow-public-space")
                         .env("ALLOW_PUBLIC_SPACE")
@@ -172,6 +190,14 @@ async fn main() {
                 config.clone(),
                 sled::Config::default().path("sled_db"),
                 sled_max_size,
+            )));
+        }
+        if matches.value_of("redb-storage").unwrap() == "true" {
+            let redb_path = matches.value_of("redb-path").unwrap().to_string();
+            storage_adapters.push(Box::new(RedbStorage::new_with_config(
+                config.clone(),
+                redb_path.as_str(),
+                None,
             )));
         }
         if matches.value_of("memory-storage").unwrap() == "true" {
