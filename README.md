@@ -1,5 +1,7 @@
 # Rod
 
+> **BEAM Maintained Fork** — v0.2.4 | Rust 2024 | MSRV 1.85
+
 Rust Object Database.
 
 The decentralized social networking application [Iris-messenger](https://github.com/irislib/iris-messenger) syncs over Rod peers by default.
@@ -12,7 +14,12 @@ Install [Rust](https://doc.rust-lang.org/book/ch01-01-installation.html) first.
 
 ```
 cargo install rod
-rod start
+rod start --redb-storage --redb-path my-node.redb
+```
+
+With memory (ephemeral, for testing):
+```
+rod start --memory-storage
 ```
 
 ### Library
@@ -40,23 +47,54 @@ async fn main() {
 }
 ```
 
+With disk-backed (`RedbStorage`) and flush for durability:
+```rust
+use rod::{Node, Config, Value};
+use rod::adapters::RedbStorage;
+
+#[tokio::main]
+async fn main() {
+    let config = Config::default();
+    let redb = RedbStorage::new_with_config(config.clone(), "rod.redb");
+    let mut db = Node::new_with_config(config, vec![Box::new(redb)], vec![]);
+
+    db.get("greeting").put("Hello World!".into());
+    db.flush_storage(Some(Duration::from_secs(5))).await.unwrap();
+    
+    if let Value::Text(str) = db.get("greeting").once(None).await.unwrap() {
+        println!("{}", &str);
+    }
+    db.stop();
+}
+```
+
 ## Status
 
-15/5/2022:
+**BEAM Maintained Fork** (2026-05-18): This is a maintained fork for the Mnemos agent memory system. Key divergences from upstream: redb replaces sled as default storage, flush protocol guarantees durability, edition 2024 / rust-version 1.85.
 
-- [x] Basic 
-- [x] CLI for running the server
+Original status (15/5/2022):
+
+- [x] Basic graph primitives (get/put/on/map/set)
+- [x] CLI for running the server (`rod start`)
 - [x] Incoming websockets
-- [x] Outgoing websockets (env PEERS=wss://some-server-url.herokuapp.com/ws)
-- [x] Multicast (currently size limited to 65KB — large photos in messages will not sync over it)
+- [x] Outgoing websockets (`PEERS=wss://...`)
+- [x] Multicast (65KB size limit)
 - [x] In-memory storage
-- [x] TLS support (env CERT_PATH and KEY_PATH)
+- [x] **Disk storage via [redb](https://github.com/cberner/redb)** (ACID, MVCC, default)
+- [x] Disk storage via [sled.rs](https://sled.rs) (legacy, deprecated)
+- [x] TLS support (`CERT_PATH`, `KEY_PATH`)
 - [x] Advanced deduplication of network messages
-- [x] Publish & subscribe (network messages only relayed to relevant peers)
-- [x] Disk storage ([sled.rs](https://sled.rs))
-- [x] Hash verification for content-addressed data (`db.get('#').get(data_hash).put(data)`)
-- [x] Signature verification of user data (`db.get('~' + pubkey).get('profile') ...`)
-- [ ] Encryption & decryption (usually not needed on the server, but used on the client side in js, like [iris](https://github.com/iris-lib/iris-messenger) private messaging)
+- [x] Publish & subscribe
+- [x] Hash verification (`#` namespace)
+- [x] Signature verification (`~` namespace)
+- [x] **Flush protocol** — `db.flush_storage()` guarantees fsync durability
+- [x] **BEAM SEA** — Encryption, session storage, keypair management
+- [ ] Encryption for P2P message relay (not yet; client-side only)
+
+### Requirements
+
+- Rust ≥ 1.85 (edition 2024)
+- `BEAM_SEA_SESSION_KEY` for production session encryption
 
 ### Issues
 
