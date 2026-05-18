@@ -469,4 +469,36 @@ mod tests {
 
         let _ = std::fs::remove_file(&temp_path);
     }
+
+
+    #[tokio::test]
+    async fn redb_storage_flush_returns_ok() {
+        use rod::adapters::RedbStorage;
+        use std::time::Duration;
+        use tokio::time::sleep;
+
+        let temp_path = std::env::temp_dir().join("rod-redb-flush.ron");
+        let _ = std::fs::remove_file(&temp_path);
+
+        let config = Config::default();
+        let mut db = Node::new_with_config(
+            config.clone(),
+            vec![Box::new(RedbStorage::new_with_config(
+                config.clone(),
+                temp_path.to_string_lossy().as_ref(),
+                None,
+            ))],
+            vec![],
+        );
+
+        db.get("FlushTest").put("pre_flush".into());
+        sleep(Duration::from_millis(200)).await;
+
+        // flush_storage awaits the ack from RedbStorage
+        let result = db.flush_storage(Some(Duration::from_secs(3))).await;
+        assert!(result.is_ok(), "flush_storage returned {:?}", result);
+
+        db.stop();
+        let _ = std::fs::remove_file(&temp_path);
+    }
 }
