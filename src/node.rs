@@ -148,15 +148,20 @@ impl Node {
         }
         // TODO accept puts only from our memory/sled adapter, which is supposed to serve the latest version.
         // Or store latest NodeData in Node? Would eat up memory though.
+        let is_replay = put.in_response_to.is_some();
         for (node_id, node_data) in put.updated_nodes {
             if node_id == *self.uid.read() {
                 for (child, child_data) in node_data {
+                    if child.starts_with("__rod_") { continue; }
                     if let Some(child) = self.children.read().get(&child) {
                         let _ = child.on_sender.send(child_data.value.clone());
                     }
                     let _ = self
                         .map_sender
                         .send((child.to_string(), child_data.value.clone()));
+                }
+                if is_replay {
+                    let _ = self.map_sender.send(("__rod_replay_complete__".to_string(), Value::Null));
                 }
             }
         }
