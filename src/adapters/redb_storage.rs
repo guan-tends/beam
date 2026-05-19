@@ -4,14 +4,13 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::actor::{Actor, ActorContext};
-use crate::message::{Flush, Get, Message, Put};
+use crate::message::{Get, Message, Put};
 use crate::types::*;
 use crate::Config;
 
 use async_trait::async_trait;
 use log::{debug, error};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
-use tokio::task;
 
 const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
 const ROD_META: TableDefinition<&str, u64> = TableDefinition::new("rod_meta_v1");
@@ -89,6 +88,12 @@ impl RedbStorage {
             }
             Ok(None) => {
                 debug!("redb get: no data for node_id={}", get.node_id);
+                // Empty set is still a valid replay — send sentinel so `.map()` listeners don't hang.
+                let mut reply_with_nodes = BTreeMap::new();
+                reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
+                let mut put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
+                put.to_string();
+                let _ = get.from.send(Message::Put(put));
                 return;
             }
             Err(e) => {
@@ -174,19 +179,6 @@ impl RedbStorage {
         Ok(())
     }
 
-    fn handle_flush_internal(&self, _flush: Flush) -> Result<(), redb::Error> {
-        let wtxn = self.db.begin_write()?;
-        {
-            let mut meta_table = wtxn.open_table(ROD_META)?;
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            meta_table.insert("_last_flush", now)?;
-        }
-        wtxn.commit()?;
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -210,34 +202,30 @@ impl Actor for RedbStorage {
                 }
             }
             Message::Flush(flush) => {
-                let self_clone = self.clone();
                 let flush_id = flush.id.clone();
                 let from_addr = flush.from.clone();
                 let ctx_addr = ctx.addr.clone();
-                let _ = task::spawn_blocking(move || {
-                    if let Err(e) = self_clone.handle_flush_internal(flush) {
-                        error!("redb flush commit failed: {:?}", e);
-                        return;
-                    }
 
-                    let mut ack_children = BTreeMap::new();
-                    ack_children.insert(
-                        "_flushed".to_string(),
-                        NodeData {
-                            value: Value::Text("true".to_string()),
-                            updated_at: SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as f64,
-                        },
-                    );
-                    let mut ack_nodes = BTreeMap::new();
-                    ack_nodes.insert("_ack".to_string(), ack_children);
-                    let mut put = Put::new(ack_nodes, Some(flush_id), ctx_addr.clone());
-                    put.to_string();
-                    let _ = from_addr.send(Message::Put(put));
-                })
-                .await;
+                // For embedded redb, put() already commits inline (wtxn.commit).
+                // Flush has no additional durability work.  Send the ack
+                // immediately so the caller never hangs waiting for a barrier
+                // that had nothing to wait on.
+                let mut ack_children = BTreeMap::new();
+                ack_children.insert(
+                    "_flushed".to_string(),
+                    NodeData {
+                        value: Value::Text("true".to_string()),
+                        updated_at: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64,
+                    },
+                );
+                let mut ack_nodes = BTreeMap::new();
+                ack_nodes.insert("_ack".to_string(), ack_children);
+                let mut put = Put::new(ack_nodes, Some(flush_id), ctx_addr.clone());
+                put.to_string();
+                let _ = from_addr.send(Message::Put(put));
             }
             _ => {}
         }

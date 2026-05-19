@@ -48,6 +48,11 @@ impl MemoryStorage {
             let _ = get.from.send(Message::Put(put));
         } else {
             debug!("have not {}", get.node_id);
+            // Empty set: still a valid replay. Emit sentinel so `.map()` doesn't hang.
+            let mut reply_with_nodes = BTreeMap::new();
+            reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
+            let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
+            let _ = get.from.send(Message::Put(put));
         }
     }
 
@@ -88,6 +93,23 @@ impl Actor for MemoryStorage {
         match message {
             Message::Get(get) => self.handle_get(get, ctx),
             Message::Put(put) => self.handle_put(put, ctx),
+            Message::Flush(flush) => {
+                // Memory storage has no disk state; flush is a no-op.
+                // Ack the barrier so callers never hang.
+                let mut ack = BTreeMap::new();
+                ack.insert("_flushed".to_string(), NodeData {
+                    value: Value::Text("true".to_string()),
+                    updated_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as f64,
+                });
+                let mut nodes = BTreeMap::new();
+                nodes.insert("_ack".to_string(), ack);
+                let mut put = Put::new(nodes, Some(flush.id), ctx.addr.clone());
+                put.to_string();
+                let _ = flush.from.send(Message::Put(put));
+            }
             _ => {}
         }
     }
