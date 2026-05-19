@@ -48,6 +48,11 @@ impl MemoryStorage {
             let _ = get.from.send(Message::Put(put));
         } else {
             debug!("have not {}", get.node_id);
+            // Empty set: still a valid replay. Emit sentinel so `.map()` doesn't hang.
+            let mut reply_with_nodes = BTreeMap::new();
+            reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
+            let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
+            let _ = get.from.send(Message::Put(put));
         }
     }
 

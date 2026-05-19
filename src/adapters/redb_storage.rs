@@ -88,6 +88,12 @@ impl RedbStorage {
             }
             Ok(None) => {
                 debug!("redb get: no data for node_id={}", get.node_id);
+                // Empty set is still a valid replay — send sentinel so `.map()` listeners don't hang.
+                let mut reply_with_nodes = BTreeMap::new();
+                reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
+                let mut put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
+                put.to_string();
+                let _ = get.from.send(Message::Put(put));
                 return;
             }
             Err(e) => {
