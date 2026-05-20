@@ -13,8 +13,6 @@ use std::time::{SystemTime, Duration}; // TODO get time from ActorContext
 use tokio::sync::{broadcast, oneshot};
 use std::collections::HashMap; // TODO replace with generics: Sender and Receiver traits?
 
-static BROADCAST_CHANNEL_SIZE: usize = 10;
-
 // TODO proper automatic tests
 // Node { node: Arc<RwLock<NodeInner>> } instead of Arc<RwLock> for each member? compare performance
 // TODO connections don't seem to be closed / timeouted properly when client has disconnected
@@ -30,6 +28,10 @@ pub struct Config {
     pub my_pub: Option<String>,
     /// Show node stats at /stats?
     pub stats: bool,
+    /// Buffer size for broadcast channels used by `on()` and `map()`.
+    /// Defaults to 4096. Increase for high-throughput scenarios; decrease
+    /// to save memory per active subscription.
+    pub broadcast_buffer_size: usize,
 }
 
 impl Default for Config {
@@ -38,6 +40,7 @@ impl Default for Config {
             allow_public_space: true,
             stats: true,
             my_pub: None,
+            broadcast_buffer_size: 4096,
         }
     }
 }
@@ -50,6 +53,7 @@ pub struct Node {
     path: Vec<String>,
     children: Arc<RwLock<BTreeMap<String, Node>>>,
     parent: Arc<RwLock<Option<(String, Node)>>>,
+    broadcast_buffer_size: usize,
     on_sender: broadcast::Sender<Value>,
     map_sender: broadcast::Sender<(String, Value)>,
     actor_context: Box<ActorContext>,
@@ -117,8 +121,9 @@ impl Node {
             uid: Arc::new(RwLock::new("".to_string())),
             children: Arc::new(RwLock::new(BTreeMap::new())),
             parent: Arc::new(RwLock::new(None)),
-            on_sender: broadcast::channel::<Value>(BROADCAST_CHANNEL_SIZE).0,
-            map_sender: broadcast::channel::<(String, Value)>(BROADCAST_CHANNEL_SIZE).0,
+            broadcast_buffer_size: config.broadcast_buffer_size,
+            on_sender: broadcast::channel::<Value>(config.broadcast_buffer_size).0,
+            map_sender: broadcast::channel::<(String, Value)>(config.broadcast_buffer_size).0,
             addr: Arc::new(RwLock::new(None)),
             router: Arc::new(RwLock::new(None)),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
@@ -206,8 +211,9 @@ impl Node {
                 self.uid.read().clone(),
                 self.clone(),
             )))),
-            on_sender: broadcast::channel::<Value>(BROADCAST_CHANNEL_SIZE).0,
-            map_sender: broadcast::channel::<(String, Value)>(BROADCAST_CHANNEL_SIZE).0,
+            broadcast_buffer_size: self.broadcast_buffer_size,
+            on_sender: broadcast::channel::<Value>(self.broadcast_buffer_size).0,
+            map_sender: broadcast::channel::<(String, Value)>(self.broadcast_buffer_size).0,
             uid: Arc::new(RwLock::new(new_child_uid)),
             router: self.router.clone(),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
