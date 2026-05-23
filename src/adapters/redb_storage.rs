@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::actor::{Actor, ActorContext};
-use crate::message::{Get, Message, Put};
+use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
 use crate::Config;
 
@@ -126,59 +126,74 @@ impl RedbStorage {
         }
     }
 
-    fn handle_put_internal(&self, put: Put) -> Result<(), redb::Error> {
-        let wtxn = self.db.begin_write()?;
-        {
-            let mut node_table = wtxn.open_table(ROD_NODES)?;
-            let mut meta_table = wtxn.open_table(ROD_META)?;
+    fn apply_put_to_tables(
+        &self,
+        wtxn: &mut redb::WriteTransaction,
+        put: Put,
+    ) -> Result<(), redb::Error> {
+        let mut node_table = wtxn.open_table(ROD_NODES)?;
+        let mut meta_table = wtxn.open_table(ROD_META)?;
 
-            for (node_id, update_data) in put.updated_nodes.into_iter().rev() {
-                if !node_id.is_empty() && node_id.starts_with('_') {
-                    continue;
-                }
+        for (node_id, update_data) in put.updated_nodes.into_iter().rev() {
+            if !node_id.is_empty() && node_id.starts_with('_') {
+                continue;
+            }
 
-                let mut children_for_node: BTreeMap<String, NodeData> =
-                    match node_table.get(&*node_id)? {
-                        Some(access_guard) => {
-                            let bytes = access_guard.value();
-                            bincode::deserialize(bytes).unwrap_or_default()
-                        }
-                        None => BTreeMap::new(),
-                    };
-
-                for (child_id, child_data) in update_data {
-                    let should_write = match children_for_node.get(&child_id) {
-                        Some(existing) if existing.updated_at > child_data.updated_at => false,
-                        _ => true,
-                    };
-
-                    if should_write {
-                        children_for_node.insert(child_id, child_data);
+            let mut children_for_node: BTreeMap<String, NodeData> =
+                match node_table.get(&*node_id)? {
+                    Some(access_guard) => {
+                        let bytes = access_guard.value();
+                        bincode::deserialize(bytes).unwrap_or_default()
                     }
-                }
+                    None => BTreeMap::new(),
+                };
 
-                if children_for_node.is_empty() {
-                    node_table.remove(&*node_id)?;
-                } else {
-                    let bytes = bincode::serialize(&children_for_node)
-                        .map_err(|e| redb::Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("bincode serialize: {:?}", e),
-                        )))?;
-                    node_table.insert(&*node_id, bytes.as_slice())?;
+            for (child_id, child_data) in update_data {
+                let should_write = match children_for_node.get(&child_id) {
+                    Some(existing) if existing.updated_at > child_data.updated_at => false,
+                    _ => true,
+                };
+
+                if should_write {
+                    children_for_node.insert(child_id, child_data);
                 }
             }
 
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            meta_table.insert("_last_write", now)?;
+            if children_for_node.is_empty() {
+                node_table.remove(&*node_id)?;
+            } else {
+                let bytes = bincode::serialize(&children_for_node)
+                    .map_err(|e| redb::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("bincode serialize: {:?}", e),
+                    )))?;
+                node_table.insert(&*node_id, bytes.as_slice())?;
+            }
         }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        meta_table.insert("_last_write", now)?;
+        Ok(())
+    }
+
+    fn handle_put_internal(&self, put: Put) -> Result<(), redb::Error> {
+        let mut wtxn = self.db.begin_write()?;
+        self.apply_put_to_tables(&mut wtxn, put)?;
         wtxn.commit()?;
         Ok(())
     }
 
+    fn handle_batch_put(&self, batch: BatchPut) -> Result<(), redb::Error> {
+        let mut wtxn = self.db.begin_write()?;
+        for put in batch.puts {
+            self.apply_put_to_tables(&mut wtxn, put)?;
+        }
+        wtxn.commit()?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -199,6 +214,11 @@ impl Actor for RedbStorage {
                 // Inline commit: redb is local embedded storage; fsync is fast
                 if let Err(e) = self.handle_put_internal(put) {
                     error!("redb put commit failed: {:?}", e);
+                }
+            }
+            Message::BatchPut(batch) => {
+                if let Err(e) = self.handle_batch_put(batch) {
+                    error!("redb batch_put commit failed: {:?}", e);
                 }
             }
             Message::Flush(flush) => {
