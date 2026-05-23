@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.5] — 2026-05-23 — SEA.certify Capability Certificates
+
+### Added
+
+- `rod::sea::certify(certificants, policies?, authority)` — sign capability certificates in Gun.js-compatible `{m, s}` format
+- `rod::sea::verify_certificate(signed, authority_pubkey)` — verify certificate signature and optional expiry (`e` field, ms since epoch)
+- `rod::sea::is_pubkey_certified(payload, pubkey)` — check if a pubkey appears in the certificate's certificants list (`c` field)
+- New `certify.rs` module with full documentation and 3 unit tests
+
+### Details
+
+Certificate payload shape (Gun.js compatible):
+```json
+{
+  "c": ["pubkey1", "pubkey2"],
+  "e": 1716460800000,
+  "r": ".*",
+  "w": "skills/",
+  "rb": "",
+  "wb": ""
+}
+```
+Fields `e`, `r`, `w`, `rb`, `wb` are optional. Re-exports in `sea/mod.rs` alongside existing encrypt/decrypt/sign/verify APIs.
+
 All notable changes to the Rod Rust Gun Protocol implementation (BEAM maintained fork).
 
 ## [0.2.4] — 2026-05-18 — Redb Storage Adapter & Flush Protocol

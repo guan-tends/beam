@@ -91,6 +91,32 @@ Original status (15/5/2022):
 - [x] **BEAM SEA** — Encryption, session storage, keypair management
 - [ ] Encryption for P2P message relay (not yet; client-side only)
 
+### SEA.certify — Capability Certificates
+
+SEA now supports capability certificates for delegated authorization.
+An authority signs a certificate naming specific certificants and optional
+policies (read, write, expiry). Others verify the certificate against the
+authority's public key before trusting the delegation.
+
+```rust
+use rod::sea::{certify, verify_certificate, generate_pair};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() {
+    let authority = generate_pair().await.unwrap();
+    let alice = generate_pair().await.unwrap();
+
+    let policies = Some(json!({"e": 9999999999999.0, "r": ".*", "w": "skills/"}));
+    let certificants = vec![alice.pub_key.clone()];
+    let signed = certify(&certificants, policies.as_ref(), &authority).await.unwrap();
+
+    // Verifier side
+    let payload = verify_certificate(&signed, &authority.pub_key).unwrap();
+    assert!(payload["c"].as_array().unwrap().contains(&alice.pub_key.into());
+}
+```
+
 ### Requirements
 
 - Rust ≥ 1.85 (edition 2024)
