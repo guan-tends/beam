@@ -10,6 +10,7 @@ pub mod work;
 pub mod secret;
 pub mod encrypt;
 pub mod decrypt;
+pub mod certify;
 pub mod user;
 
 use serde_json::Value as JsonValue;
@@ -252,6 +253,30 @@ pub async fn decrypt(
     decrypt::decrypt(encrypted, pair, their_epub).await
 }
 
+// ─── Capability certificate re-exports ───
+
+/// Build and sign a capability certificate authorizing certificants.
+pub async fn certify(
+    certificants: &[String],
+    policies: Option<&JsonValue>,
+    authority: &KeyPair,
+) -> Result<JsonValue, SeaError> {
+    certify::certify(authority, certificants, policies).await
+}
+
+/// Verify a signed certificate against authority pubkey (sync).
+pub fn verify_certificate(
+    signed_cert: &JsonValue,
+    authority_pubkey: &str,
+) -> Result<JsonValue, SeaError> {
+    certify::verify_certificate(signed_cert, authority_pubkey)
+}
+
+/// Check if a pubkey appears in certificate's certificants list.
+pub fn is_pubkey_certified(payload: &JsonValue, pubkey: &str) -> bool {
+    certify::is_certified(payload, pubkey)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +441,48 @@ mod tests {
         let signed = sign(&data, &pair).await.unwrap();
         let verified = verify_async(&signed, &pair.pub_key).await.unwrap();
         assert_eq!(verified, data);
+    }
+
+    // ─── SEA.certify tests ───
+
+    #[tokio::test]
+    async fn test_certify_and_verify() {
+        let authority = generate_pair().await.unwrap();
+        let alice = generate_pair().await.unwrap();
+        let bob = generate_pair().await.unwrap();
+
+        let certificants = vec![alice.pub_key.clone(), bob.pub_key.clone()];
+        let policies = Some(json!({"e": 9999999999999.0_f64, "r": ".*", "w": "skills/"}));
+        let signed = certify(&certificants, policies.as_ref(), &authority).await.unwrap();
+
+        // Verify with correct authority
+        let payload = verify_certificate(&signed, &authority.pub_key).unwrap();
+        assert!(is_pubkey_certified(&payload, &alice.pub_key));
+        assert!(is_pubkey_certified(&payload, &bob.pub_key));
+        assert!(!is_pubkey_certified(&payload, "someRandomKey"));
+        assert_eq!(payload["r"].as_str(), Some(".*"));
+        assert_eq!(payload["w"].as_str(), Some("skills/"));
+    }
+
+    #[tokio::test]
+    async fn test_certify_expired_fails() {
+        let authority = generate_pair().await.unwrap();
+        let alice = generate_pair().await.unwrap();
+
+        // Expiry in the past (1970)
+        let policies = Some(json!({"e": 1000.0_f64}));
+        let signed = certify(&[alice.pub_key.clone()], policies.as_ref(), &authority).await.unwrap();
+
+        assert!(verify_certificate(&signed, &authority.pub_key).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_certify_wrong_authority_fails() {
+        let authority = generate_pair().await.unwrap();
+        let wrong = generate_pair().await.unwrap();
+        let alice = generate_pair().await.unwrap();
+
+        let signed = certify(&[alice.pub_key], None, &authority).await.unwrap();
+        assert!(verify_certificate(&signed, &wrong.pub_key).is_err());
     }
 }
