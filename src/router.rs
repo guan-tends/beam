@@ -59,6 +59,11 @@ impl Actor for Router {
         debug!("incoming message {}", msg.clone().to_string());
         match msg {
             Message::Put(put) => self.handle_put(put),
+            Message::BatchPut(batch) => {
+                for put in batch.puts {
+                    self.handle_put(put);
+                }
+            }
             Message::Get(get) => self.handle_get(get),
             Message::Flush(flush) => self.handle_flush(flush),
             Message::Hi { from, peer_id: _ } => {

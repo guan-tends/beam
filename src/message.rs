@@ -129,6 +129,35 @@ impl Put {
 }
 
 #[derive(Clone, Debug)]
+pub struct BatchPut {
+    pub id: String,
+    pub puts: Vec<Put>,
+    pub from: Addr,
+}
+
+impl BatchPut {
+    pub fn new(puts: Vec<Put>, from: Addr) -> Self {
+        Self {
+            id: random_string(8),
+            puts,
+            from,
+        }
+    }
+
+    /// Convert to a JSON array of individual Put messages.
+    /// BatchPut is an internal optimization; on the wire it
+    /// materializes as the constituent puts.
+    pub fn to_string(&mut self) -> String {
+        let parts: Vec<String> = self
+            .puts
+            .iter_mut()
+            .map(|put| put.to_string())
+            .collect();
+        format!("[{}]", parts.join(","))
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Flush {
     pub id: String,
     pub from: Addr,
@@ -150,6 +179,7 @@ pub enum Message {
     // TODO: NetworkMessage and InternalMessage
     Get(Get),
     Put(Put),
+    BatchPut(BatchPut),
     Flush(Flush),
     Hi { from: Addr, peer_id: String },
 }
@@ -159,6 +189,7 @@ impl Message {
         match self {
             Message::Get(get) => get.to_string(),
             Message::Put(mut put) => put.to_string(),
+            Message::BatchPut(mut batch) => batch.to_string(),
             Message::Flush(flush) => json!({"dam": "flush","#": flush.id}).to_string(),
             Message::Hi { from: _, peer_id } => json!({"dam": "hi","#": peer_id}).to_string(),
         }
@@ -168,6 +199,7 @@ impl Message {
         match self {
             Message::Get(get) => get.id.clone(),
             Message::Put(put) => put.id.clone(),
+            Message::BatchPut(batch) => batch.id.clone(),
             Message::Flush(flush) => flush.id.clone(),
             Message::Hi { from: _, peer_id } => peer_id.to_string(),
         }
@@ -177,6 +209,7 @@ impl Message {
         match self {
             Message::Get(get) => get.from == *addr,
             Message::Put(put) => put.from == *addr,
+            Message::BatchPut(batch) => batch.from == *addr,
             Message::Flush(flush) => flush.from == *addr,
             Message::Hi { from, peer_id: _ } => *from == *addr,
         }
@@ -186,6 +219,7 @@ impl Message {
         match self {
             Message::Get(get) => get.from.clone(),
             Message::Put(put) => put.from.clone(),
+            Message::BatchPut(batch) => batch.from.clone(),
             Message::Flush(flush) => flush.from.clone(),
             Message::Hi {
                 from: _,
