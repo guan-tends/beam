@@ -2,7 +2,7 @@
 //! User authentication and session management
 //! Provides create/auth/leave/recall using Rod's graph persistence
 
-use super::{generate_pair, work, KeyPair, SeaError, SessionState, SessionStorage, User, WorkOptions};
+use super::{certify, decrypt, decrypt_symmetric, encrypt, encrypt_symmetric, generate_pair, is_pubkey_certified, secret, verify_certificate, work, KeyPair, SeaError, SessionState, SessionStorage, User, WorkOptions};
 use crate::{Node, Value as RodValue};
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -261,4 +261,164 @@ impl<'a> UserBuilder<'a> {
     pub async fn auth(self, alias: &str, pass: &str) -> Result<User, SeaError> {
         User::auth(alias, pass, self.node).await
     }
+}
+
+// ─── Social primitives: trust, grant, verify ───
+
+/// Encode a path string for safe use as a graph key.
+/// Replaces `/` with `__` to avoid segment collision in Rod's key-path graph.
+fn encode_path(path: &str) -> String {
+    path.replace('/', "__")
+}
+
+impl User {
+    /// Delegate write trust to a recipient for an optional path.
+    /// Stores a capability certificate at `~auth/{pub}/trust/{path}`.
+    pub async fn trust(
+        &self,
+        recipient_pubkey: &str,
+        path: Option<&str>,
+        db: &mut Node,
+    ) -> Result<(), SeaError> {
+        let inner = self.inner.read()
+            .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
+        if !inner.is_authenticated {
+            return Err(SeaError::NotAuthenticated);
+        }
+
+        let certificants = vec![recipient_pubkey.to_string()];
+        let policies = path.map(|p| json!({"w": p}));
+        let signed = certify(&certificants, policies.as_ref(), &inner.pair).await?;
+
+        let path_key = path.map(encode_path).unwrap_or_else(|| "global".to_string());
+        let mut trust_node = db.get("~auth")
+            .get(&inner.pair.pub_key)
+            .get("trust")
+            .get(&path_key);
+        trust_node.put(RodValue::Text(signed.to_string()));
+
+        Ok(())
+    }
+
+    /// Grant a recipient access to decrypt data at a path.
+    /// Stores an ECDH-encrypted secret at `~auth/{pub}/grant/{path}/{recipient}`.
+    pub async fn grant(
+        &self,
+        recipient_pubkey: &str,
+        recipient_epub: &str,
+        data_path: &str,
+        db: &mut Node,
+    ) -> Result<(), SeaError> {
+        let inner = self.inner.read()
+            .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
+        if !inner.is_authenticated {
+            return Err(SeaError::NotAuthenticated);
+        }
+        let pair = &inner.pair;
+        let path_key = encode_path(data_path);
+
+        // 1. Retrieve or create a 16-byte random secret for this data path
+        let sec = {
+            let mut secret_node = db.get("~auth")
+                .get(&pair.pub_key)
+                .get("secrets")
+                .get(&path_key);
+            match secret_node.once(None).await {
+                Some(RodValue::Text(enc_text)) => {
+                    let enc: JsonValue = serde_json::from_str(&enc_text)
+                        .map_err(|e| SeaError::Decryption(format!("bad secret json: {}", e)))?;
+                    decrypt(&enc, pair, None).await?
+                        .as_str()
+                        .ok_or_else(|| SeaError::Decryption("secret not string".into()))?
+                        .to_string()
+                }
+                _ => {
+                    let mut bytes = [0u8; 16];
+                    rand::thread_rng().fill_bytes(&mut bytes);
+                    let new_sec = base64::encode_config(&bytes, base64::STANDARD_NO_PAD);
+                    let enc = encrypt(&json!(new_sec), pair, None).await?;
+                    secret_node.put(RodValue::Text(enc.to_string()));
+                    new_sec
+                }
+            }
+        };
+
+        // 2. ECDH shared secret with recipient
+        let dh = secret(recipient_epub, pair).await?;
+        let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD)
+            .map_err(|_| SeaError::Crypto("bad dh".into()))?;
+
+        // 3. Encrypt data secret with shared secret
+        let enc_for_recipient = encrypt_symmetric(&json!(sec), &dh_bytes).await?;
+
+        // 4. Store grant
+        let mut grant_node = db.get("~auth")
+            .get(&pair.pub_key)
+            .get("grant")
+            .get(&path_key)
+            .get(recipient_pubkey);
+        grant_node.put(RodValue::Text(enc_for_recipient.to_string()));
+
+        Ok(())
+    }
+}
+
+/// Verify a trust certificate from the graph.
+/// Returns true if `writer_pubkey` is certified by `authority_pubkey` for the given path.
+pub async fn verify_trust(
+    authority_pubkey: &str,
+    writer_pubkey: &str,
+    path: Option<&str>,
+    db: &mut Node,
+) -> Result<bool, SeaError> {
+    let path_key = path.map(encode_path).unwrap_or_else(|| "global".to_string());
+    let mut trust_node = db.get("~auth")
+        .get(authority_pubkey)
+        .get("trust")
+        .get(&path_key);
+
+    let cert_text = match trust_node.once(None).await {
+        Some(RodValue::Text(t)) => t,
+        _ => return Ok(false),
+    };
+
+    let cert: JsonValue = serde_json::from_str(&cert_text)
+        .map_err(|_| SeaError::VerificationFailed)?;
+
+    let payload = verify_certificate(&cert, authority_pubkey)
+        .map_err(|_| SeaError::VerificationFailed)?;
+
+    Ok(is_pubkey_certified(&payload, writer_pubkey))
+}
+
+/// Accept a grant and return the shared decryption secret for a data path.
+pub async fn accept_grant(
+    data_path: &str,
+    owner_pubkey: &str,
+    owner_epub: &str,
+    pair: &KeyPair,
+    db: &mut Node,
+) -> Result<String, SeaError> {
+    let path_key = encode_path(data_path);
+    let mut grant_node = db.get("~auth")
+        .get(owner_pubkey)
+        .get("grant")
+        .get(&path_key)
+        .get(&pair.pub_key);
+
+    let enc_text = grant_node.once(None).await
+        .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None })
+        .ok_or_else(|| SeaError::Decryption("no grant found".into()))?;
+
+    let enc_json: JsonValue = serde_json::from_str(&enc_text)
+        .map_err(|e| SeaError::Decryption(format!("bad grant json: {}", e)))?;
+
+    let dh = secret(owner_epub, pair).await?;
+    let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD)
+        .map_err(|_| SeaError::Decryption("bad dh".into()))?;
+
+    let sec_json = decrypt_symmetric(&enc_json, &dh_bytes).await?;
+    let sec = sec_json.as_str()
+        .ok_or_else(|| SeaError::Decryption("secret not string".into()))?;
+    Ok(sec.to_string())
 }
