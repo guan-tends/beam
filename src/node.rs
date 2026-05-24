@@ -1,5 +1,5 @@
 use crate::actor::{Actor, ActorContext, Addr};
-use crate::message::{Flush, Get, Message, Put};
+use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::router::Router;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
@@ -331,6 +331,54 @@ impl Node {
         let put = Put::new(updated_nodes, None, my_addr);
         if let Some(router) = &*self.router.read() {
             let _ = router.send(Message::Put(put));
+        }
+    }
+
+    /// Write multiple values in a single storage transaction.
+    ///
+    /// Each operation is a `(path, value)` pair where `path` is a vector of
+    /// keys from the caller's Node down to the leaf. The caller should
+    /// invoke this on the **root** Node.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rod::Node;
+    /// let mut root = Node::new();
+    /// root.batch_put(vec![
+    ///     (vec!["users", "alice"], "hi".into()),
+    ///     (vec!["users", "bob"], "hey".into()),
+    /// ]);
+    /// ```
+    pub fn batch_put(&mut self, ops: Vec<(Vec<String>, Value)>) {
+        let updated_at: f64 = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as f64;
+
+        let mut puts = Vec::with_capacity(ops.len());
+        for (path, value) in ops {
+            // Traverse from self to leaf, lazily creating children.
+            let mut leaf = self.clone();
+            for key in &path {
+                leaf = leaf.get(key);
+            }
+
+            // Notify local on() subscribers at the leaf (mirrors Node::put).
+            let _ = leaf.on_sender.send(value.clone());
+
+            let mut updated_nodes = BTreeMap::new();
+            leaf.add_parent_nodes(&mut updated_nodes, value, updated_at);
+
+            let my_addr = self.addr.read().clone().unwrap();
+            let put = Put::new(updated_nodes, None, my_addr);
+            puts.push(put);
+        }
+
+        let my_addr = self.addr.read().clone().unwrap();
+        let batch = BatchPut::new(puts, my_addr);
+        if let Some(router) = &*self.router.read() {
+            let _ = router.send(Message::BatchPut(batch));
         }
     }
 
