@@ -128,17 +128,6 @@ impl Drop for SessionState {
     }
 }
 
-
-
-/// Identity metadata for an authenticated user.
-/// Mirrors Gun.js `user.is` semantics.
-#[derive(Clone, Debug)]
-pub struct Identity {
-    pub alias: String,
-    pub pub_key: String,
-    pub epub_key: Option<String>,
-}
-
 /// Authenticated user with shared session state
 /// Clones share the same underlying session — leave() invalidates all holders.
 #[derive(Clone)]
@@ -179,21 +168,6 @@ impl User {
     pub fn is_authenticated(&self) -> bool {
         self.inner.read().unwrap().is_authenticated
     }
-
-    /// Return the user's identity if authenticated.
-    /// Mirrors Gun.js `user.is` — returns alias, pub, epub or None.
-    pub fn is(&self) -> Option<Identity> {
-        let inner = self.inner.read().ok()?;
-        if !inner.is_authenticated {
-            return None;
-        }
-        Some(Identity {
-            alias: inner.alias.clone()?,
-            pub_key: inner.pair.pub_key.clone(),
-            epub_key: inner.pair.epub_key.clone(),
-        })
-    }
-
 
     /// Clear key pair from memory and mark unauthenticated (all clones invalidated)
     pub fn leave(&self) {
