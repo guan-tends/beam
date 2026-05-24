@@ -99,3 +99,56 @@ fn derive_aes_key_sync(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaErro
 
     Ok(key)
 }
+
+/// Encrypt data using a raw symmetric key (AES-256-GCM, no ECDH/PBKDF2)
+///
+/// # Requirements
+/// * `key` must be exactly 32 bytes (AES-256 key size)
+///
+/// # Returns
+/// `{ct: ciphertext_b64, iv: nonce_b64}` — salt (`s`) is omitted because PBKDF2 is not used.
+///
+/// Use this when the key material is already derived via ECDH or another KDF.
+pub async fn encrypt_symmetric(data: &Value, key: &[u8]) -> Result<Value, SeaError> {
+    if key.len() != 32 {
+        return Err(SeaError::Encryption(format!(
+            "encrypt_symmetric: key must be 32 bytes, got {}",
+            key.len()
+        )));
+    }
+
+    let msg = serde_json::to_string(data)
+        .map_err(|e| SeaError::Encryption(format!("serialization error: {}", e)))?;
+
+    // Generate random nonce (12 bytes for AES-GCM)
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+    let key_owned = key.to_vec();
+    let nonce_owned = nonce_bytes.to_vec();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let cipher = Aes256Gcm::new_from_slice(&key_owned)
+            .map_err(|e| SeaError::Encryption(format!("failed to create cipher: {}", e)))?;
+
+        let nonce = Nonce::from_slice(&nonce_owned);
+
+        let ciphertext = cipher
+            .encrypt(nonce, msg.as_bytes())
+            .map_err(|e| SeaError::Encryption(format!("symmetric encryption failed: {}", e)))?;
+
+        let ct_b64 = base64::encode_config(&ciphertext, base64::STANDARD_NO_PAD);
+        let iv_b64 = base64::encode_config(&nonce_owned, base64::STANDARD_NO_PAD);
+
+        Ok::<(String, String), SeaError>((ct_b64, iv_b64))
+    })
+    .await
+    .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?;
+
+    let (ct_b64, iv_b64) = result?;
+
+    Ok(serde_json::json!({
+        "ct": ct_b64,
+        "iv": iv_b64
+    }))
+}
