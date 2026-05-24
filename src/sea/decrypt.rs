@@ -104,3 +104,61 @@ fn derive_aes_key_sync(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaErro
 
     Ok(key)
 }
+
+/// Decrypt data using a raw symmetric key (AES-256-GCM, no ECDH/PBKDF2)
+///
+/// # Requirements
+/// * `key` must be exactly 32 bytes (AES-256 key size)
+/// * `encrypted` must be in `{ct, iv}` format (no `s` field, as no PBKDF2 was used)
+///
+/// Use this when the key material is already derived via ECDH or another KDF.
+pub async fn decrypt_symmetric(encrypted: &Value, key: &[u8]) -> Result<Value, SeaError> {
+    if key.len() != 32 {
+        return Err(SeaError::Decryption(format!(
+            "decrypt_symmetric: key must be 32 bytes, got {}",
+            key.len()
+        )));
+    }
+
+    let ct = encrypted
+        .get("ct")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| SeaError::Decryption("missing ct".to_string()))?;
+
+    let iv = encrypted
+        .get("iv")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| SeaError::Decryption("missing iv".to_string()))?;
+
+    let ciphertext = base64::decode_config(ct, base64::STANDARD_NO_PAD)
+        .map_err(|_| SeaError::Decryption("invalid ct base64".to_string()))?;
+
+    let nonce_bytes = base64::decode_config(iv, base64::STANDARD_NO_PAD)
+        .map_err(|_| SeaError::Decryption("invalid iv base64".to_string()))?;
+
+    let key_owned = key.to_vec();
+    let nonce_owned = nonce_bytes;
+
+    let plaintext = tokio::task::spawn_blocking(move || {
+        let cipher = Aes256Gcm::new_from_slice(&key_owned)
+            .map_err(|e| SeaError::Decryption(format!("failed to create cipher: {}", e)))?;
+
+        let nonce = Nonce::from_slice(&nonce_owned);
+
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|_| SeaError::Decryption("symmetric decryption failed — tampered or wrong key".to_string()))?;
+
+        Ok::<Vec<u8>, SeaError>(plaintext)
+    })
+    .await
+    .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?;
+
+    let plaintext = plaintext?;
+
+    let plaintext_str = String::from_utf8(plaintext)
+        .map_err(|_| SeaError::Decryption("invalid UTF-8 in plaintext".to_string()))?;
+
+    serde_json::from_str(&plaintext_str)
+        .map_err(|e| SeaError::Decryption(format!("invalid JSON in plaintext: {}", e)))
+}
