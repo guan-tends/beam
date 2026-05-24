@@ -3,7 +3,7 @@ use clap::{App, Arg, SubCommand};
 use ctrlc;
 use rod::actor::Actor;
 use rod::adapters::{
-    MemoryStorage, Multicast, OutgoingWebsocketManager, RedbStorage, SledStorage, WsServer, WsServerConfig,
+    MemoryStorage, Multicast, OutgoingWebsocketManager, RedbStorage, WsServer, WsServerConfig,
 };
 use rod::{Config, Node};
 
@@ -86,30 +86,14 @@ async fn main() {
                         .default_value("false")
                         .takes_value(true),
                 )
-                .arg(
-                    Arg::with_name("sled-storage")
-                        .long("sled-storage")
-                        .env("SLED_STORAGE")
-                        .value_name("BOOL")
-                        .help("Sled storage (disk+mem)")
-                        .default_value("true")
-                        .takes_value(true),
-                )
-                .arg(
-                    Arg::with_name("sled-max-size")
-                        .long("sled-max-size")
-                        .env("SLED_MAX_SIZE")
-                        .value_name("BYTES")
-                        .help("Data in excess of this will be evicted based on priority")
-                        .takes_value(true),
-                )
+
                 .arg(
                     Arg::with_name("redb-storage")
                         .long("redb-storage")
                         .env("REDB_STORAGE")
                         .value_name("BOOL")
                         .help("redb storage (disk+mem)")
-                        .default_value("false")
+                        .default_value("true")
                         .takes_value(true),
                 )
                 .arg(
@@ -153,10 +137,7 @@ async fn main() {
 
         let websocket_server_port: u16 = matches.value_of("port").unwrap().parse::<u16>().unwrap();
 
-        let sled_max_size: Option<u64> = match matches.value_of("sled-max-size") {
-            Some(v) => Some(v.parse::<u64>().unwrap()),
-            _ => None,
-        };
+
 
         let mut network_adapters: Vec<Box<dyn Actor>> = Vec::new();
         let mut storage_adapters: Vec<Box<dyn Actor>> = Vec::new();
@@ -185,14 +166,7 @@ async fn main() {
                 },
             )));
         }
-        if matches.value_of("sled-storage").unwrap() != "false" {
-            storage_adapters.push(Box::new(SledStorage::new_with_config(
-                config.clone(),
-                sled::Config::default().path("sled_db"),
-                sled_max_size,
-            )));
-        }
-        if matches.value_of("redb-storage").unwrap() == "true" {
+        if matches.value_of("redb-storage").unwrap() != "false" {
             let redb_path = matches.value_of("redb-path").unwrap().to_string();
             storage_adapters.push(Box::new(RedbStorage::new_with_config(
                 config.clone(),

@@ -317,43 +317,6 @@ mod tests {
         peer2.stop();
     }
     */
-
-    #[tokio::test]
-    async fn sled_storage() {
-        let path = std::path::Path::new("./cargo_test_sled_db");
-        std::fs::remove_dir_all(path).ok();
-        {
-            let config = Config {
-                my_pub: Some("asdf".to_string()),
-                ..Config::default()
-            };
-            let sled = SledStorage::new_with_config(
-                config.clone(),
-                sled::Config::default().path(path),
-                None,
-            );
-            let mut db = Node::new_with_config(config.clone(), vec![Box::new(sled)], vec![]);
-
-            let mut name = db.get("~asdf").get("name");
-            name.put("Ainu".into());
-
-            for i in 0..1000 {
-                db.get("something")
-                    .get(&i.to_string())
-                    .put("I just want to fill your disk.".into());
-            }
-
-            sleep(Duration::from_millis(10000)).await;
-            let mut sub = name.on();
-            if let Value::Text(str) = sub.recv().await.unwrap() {
-                assert_eq!(&str, "Ainu"); // stuff by our public key should remain
-            }
-
-            db.stop();
-        }
-        std::fs::remove_dir_all(path).ok();
-    }
-
 /*
     #[tokio::test]
     async fn sync_over_multicast() {
