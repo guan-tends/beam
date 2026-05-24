@@ -1,7 +1,7 @@
 use criterion::async_executor::FuturesExecutor;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rod::actor::Addr;
-use rod::adapters::{MemoryStorage, OutgoingWebsocketManager, SledStorage, WsServer};
+use rod::adapters::{MemoryStorage, OutgoingWebsocketManager, RedbStorage, WsServer};
 use rod::message::Message;
 use rod::{Config, Node};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,36 +34,6 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("fewer samples");
     group.sample_size(10);
-
-    group.bench_function("sled_storage get-put", |b| {
-        let path = std::path::Path::new("./benchmark_db");
-        std::fs::remove_dir_all(path).ok();
-        rt.block_on(async {
-            sleep(Duration::from_millis(100)).await;
-            let config = Config::default();
-            let sled = SledStorage::new_with_config(
-                config.clone(),
-                sled::Config::default().path(path),
-                None,
-            );
-            let mut db = Node::new_with_config(config.clone(), vec![Box::new(sled)], vec![]);
-            let counter: AtomicUsize = AtomicUsize::new(0);
-            b.to_async(FuturesExecutor).iter(|| {
-                let mut db = db.clone();
-                let key = counter.fetch_add(1, Ordering::Relaxed).to_string();
-                async move {
-                    let mut node = db.get("a").get(&key);
-                    node.put("hello".into());
-                    let mut sub = node.on();
-                    sub.recv().await.ok();
-                }
-            });
-            db.stop(); // should this be awaitable?
-            sleep(Duration::from_millis(100)).await;
-        });
-        // https://bheisler.github.io/criterion.rs/book/user_guide/timing_loops.html
-        std::fs::remove_dir_all(path).ok();
-    });
 
     group.bench_function("websocket get-put", |b| {
         rt.block_on(async {

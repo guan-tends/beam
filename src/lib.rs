@@ -4,7 +4,7 @@ pub mod adapters;
 pub mod message; // pub for benchmarking
 mod node;
 mod router;
-mod types;
+pub mod types;
 mod utils;
 pub mod sea;
 pub use node::{Config, Node};

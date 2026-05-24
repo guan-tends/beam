@@ -1,3 +1,4 @@
+use redb::{ReadableDatabase, ReadableTableMetadata};
 use redb::{Database, ReadableTable, TableDefinition};
 
 const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
