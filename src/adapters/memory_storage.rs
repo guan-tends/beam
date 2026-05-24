@@ -110,6 +110,11 @@ impl Actor for MemoryStorage {
                 put.to_string();
                 let _ = flush.from.send(Message::Put(put));
             }
+            Message::BatchPut(batch) => {
+                for put in batch.puts {
+                    self.handle_put(put, ctx);
+                }
+            }
             _ => {}
         }
     }
