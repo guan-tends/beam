@@ -1,5 +1,5 @@
 use crate::actor::{Actor, ActorContext, Addr};
-use crate::message::{Flush, Get, Message, Put};
+use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::utils::{BoundedHashMap, BoundedHashSet};
 use crate::Config;
 use async_trait::async_trait;
@@ -60,9 +60,7 @@ impl Actor for Router {
         match msg {
             Message::Put(put) => self.handle_put(put),
             Message::BatchPut(batch) => {
-                for put in batch.puts {
-                    self.handle_put(put);
-                }
+                self.handle_batch_put(batch);
             }
             Message::Get(get) => self.handle_get(get),
             Message::Flush(flush) => self.handle_flush(flush),
@@ -244,7 +242,7 @@ impl Router {
                 }
             }
             _ => {
-                // Save to storage
+                // Forward to storage adapter(s)
                 for addr in self.storage_adapters.iter() {
                     if put.from == *addr {
                         continue;
@@ -252,74 +250,111 @@ impl Router {
                     let _ = addr.send(Message::Put(put.clone()));
                     debug!("sent to adapter {}", addr);
                 }
+                // Network relay is handled by handle_put_relay for batching
+                self.handle_put_relay(&put);
+            }
+        };
+    }
 
-                let mut already_sent_to = HashSet::new();
+    /// Relay a Put to server peers and subscribers.
+    /// Storage is NOT touched — this is pure network fan-out.
+    fn handle_put_relay(&mut self, put: &Put) {
+        let mut already_sent_to = HashSet::new();
 
-                // Send to server peers
-                for addr in self.server_peers.iter() {
+        // Send to server peers
+        for addr in self.server_peers.iter() {
+            if put.from == *addr {
+                continue;
+            }
+            let _ = addr.send(Message::Put(put.clone()));
+            already_sent_to.insert(addr.clone());
+        }
+
+        // Relay to subscribers
+        let mut sent_to = 0;
+        for node_id in put.clone().updated_nodes.keys() {
+            let topic = node_id.split("/").next().unwrap_or("");
+            if let Some(topic_subscribers) = self.subscribers_by_topic.get_mut(topic) {
+                topic_subscribers.retain(|addr| {
+                    // send & remove closed addresses
                     if put.from == *addr {
-                        continue;
+                        return true;
                     }
-                    let _ = addr.send(Message::Put(put.clone()));
+                    if already_sent_to.contains(addr) {
+                        return true;
+                    }
                     already_sent_to.insert(addr.clone());
-                }
-
-                // Relay to subscribers
-                let mut sent_to = 0;
-                for node_id in put.clone().updated_nodes.keys() {
-                    let topic = node_id.split("/").next().unwrap_or("");
-                    if let Some(topic_subscribers) = self.subscribers_by_topic.get_mut(topic) {
-                        topic_subscribers.retain(|addr| {
-                            // send & remove closed addresses
-                            if put.from == *addr {
-                                return true;
-                            }
-                            if already_sent_to.contains(addr) {
-                                return true;
-                            }
-                            already_sent_to.insert(addr.clone());
-                            match addr.send(Message::Put(put.clone())) {
-                                Ok(_) => {
-                                    sent_to += 1;
-                                    true
-                                }
-                                _ => false,
-                            }
-                        })
+                    match addr.send(Message::Put(put.clone())) {
+                        Ok(_) => {
+                            sent_to += 1;
+                            true
+                        }
+                        _ => false,
                     }
+                })
+            }
+        }
+        debug!("sent put to {} subscribers", already_sent_to.len());
+        if already_sent_to.len() < 4 {
+            let mut rng = thread_rng();
+            let mut errored = HashSet::new();
+            while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
+                sent_to += 1;
+                if sent_to >= 4 {
+                    break;
                 }
-                debug!("sent put to {} subscribers", already_sent_to.len());
-                if already_sent_to.len() < 4 {
-                    let mut rng = thread_rng();
-                    let mut errored = HashSet::new();
-                    while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
-                        sent_to += 1;
-                        if sent_to >= 4 {
-                            break;
-                        }
-                        // TODO: seems like the following is necessary, but it causes a test to fail
-                        if already_sent_to.contains(addr) {
-                            continue;
-                        }
-                        already_sent_to.insert(addr.clone());
-                        if put.from == *addr {
-                            continue;
-                        }
-                        match addr.send(Message::Put(put.clone())) {
-                            Ok(_) => {
-                                debug!("sent put to random dude");
-                            }
-                            _ => {
-                                errored.insert(addr.clone());
-                            }
-                        }
+                // TODO: seems like the following is necessary, but it causes a test to fail
+                if already_sent_to.contains(addr) {
+                    continue;
+                }
+                already_sent_to.insert(addr.clone());
+                if put.from == *addr {
+                    continue;
+                }
+                match addr.send(Message::Put(put.clone())) {
+                    Ok(_) => {
+                        debug!("sent put to random dude");
                     }
-                    for addr in errored {
-                        self.known_peers.remove(&addr);
+                    _ => {
+                        errored.insert(addr.clone());
                     }
                 }
             }
-        };
+            for addr in errored {
+                self.known_peers.remove(&addr);
+            }
+        }
+    }
+
+    /// Forward a BatchPut to storage adapters (single transaction),
+    /// then relay each constituent Put individually.
+    fn handle_batch_put(&mut self, batch: BatchPut) {
+        // Forward BatchPut to storage — preserves single-transaction semantics
+        for addr in self.storage_adapters.iter() {
+            if batch.from == *addr {
+                continue;
+            }
+            let _ = addr.send(Message::BatchPut(batch.clone()));
+        }
+
+        // Relay each constituent put individually (with deduplication)
+        for put in batch.puts {
+            if self.is_message_seen(&put.id) {
+                continue;
+            }
+            // ACK responses within a batch are unusual but handled defensively
+            if let Some(in_response_to) = &put.in_response_to {
+                if let Some(seen_get_message) = self.seen_get_messages.get_mut(in_response_to) {
+                    if put.checksum == seen_get_message.last_reply_checksum {
+                        continue;
+                    }
+                    seen_get_message.last_reply_checksum = put.checksum.clone();
+                    let _ = seen_get_message.from.send(Message::Put(put));
+                }
+                continue;
+            }
+            self.handle_put_relay(&put);
+        }
     }
 
     fn handle_flush(&mut self, flush: Flush) {
