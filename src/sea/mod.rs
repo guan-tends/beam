@@ -279,6 +279,18 @@ pub async fn decrypt(
     decrypt::decrypt(encrypted, pair, their_epub).await
 }
 
+
+// ─── Symmetric cipher re-exports (no ECDH/PBKDF2) ───
+
+/// Encrypt data using a raw 32-byte AES-256 key.
+pub async fn encrypt_symmetric(data: &JsonValue, key: &[u8]) -> Result<JsonValue, SeaError> {
+    encrypt::encrypt_symmetric(data, key).await
+}
+
+/// Decrypt data using a raw 32-byte AES-256 key.
+pub async fn decrypt_symmetric(encrypted: &JsonValue, key: &[u8]) -> Result<JsonValue, SeaError> {
+    decrypt::decrypt_symmetric(encrypted, key).await
+}
 // ─── Capability certificate re-exports ───
 
 /// Build and sign a capability certificate authorizing certificants.
