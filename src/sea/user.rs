@@ -326,7 +326,10 @@ impl User {
                     let outer: JsonValue = serde_json::from_str(&enc_text)
                         .map_err(|e| SeaError::Decryption(format!("bad secret json: {}", e)))?;
                     let enc = if outer.get("m").is_some() && outer.get("s").is_some() {
-                        outer["m"].clone()
+                        let msg = outer["m"].as_str()
+                            .ok_or_else(|| SeaError::Decryption("m not string".into()))?;
+                        serde_json::from_str(msg)
+                            .map_err(|e| SeaError::Decryption(format!("bad m: {}", e)))?
                     } else {
                         outer
                     };
@@ -371,6 +374,38 @@ impl User {
             .get(&path_key)
             .get(&pair.pub_key);
         owner_grant_node.put(signed_owner);
+
+        Ok(())
+    }
+
+    /// Encrypt and store data under a self-derived symmetric key.
+    /// Only this user can decrypt it — the key comes from ECDH(self.pub, self.priv).
+    /// Stored at `~{pub}/secret/{path_key}` as a signed payload.
+    pub async fn secret(&self, data: &JsonValue, path: &str, db: &mut Node) -> Result<(), SeaError> {
+        let inner = self.inner.read()
+            .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
+        if !inner.is_authenticated {
+            return Err(SeaError::NotAuthenticated);
+        }
+        let pair = &inner.pair;
+        let path_key = encode_path(path);
+        let user_root = format!("~{}", pair.pub_key);
+
+        // Derive self-symmetric key: ECDH with own ephemeral public key
+        let epub = pair.epub_key.as_ref()
+            .ok_or_else(|| SeaError::Crypto("no epub".into()))?;
+        let dh = secret(epub, pair).await?;
+        let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD)
+            .map_err(|_| SeaError::Crypto("bad dh".into()))?;
+
+        // Encrypt and sign
+        let enc = encrypt_symmetric(data, &dh_bytes).await?;
+        let signed = sign_value(&enc, pair).await?;
+
+        let mut secret_node = db.get(&user_root)
+            .get("secret")
+            .get(&path_key);
+        secret_node.put(signed);
 
         Ok(())
     }
@@ -424,7 +459,10 @@ pub async fn accept_grant(
     let outer: JsonValue = serde_json::from_str(&enc_text)
         .map_err(|e| SeaError::Decryption(format!("bad grant json: {}", e)))?;
     let enc_json = if outer.get("m").is_some() && outer.get("s").is_some() {
-        outer["m"].clone()
+        let msg = outer["m"].as_str()
+            .ok_or_else(|| SeaError::Decryption("m not string".into()))?;
+        serde_json::from_str(msg)
+            .map_err(|e| SeaError::Decryption(format!("bad m: {}", e)))?
     } else {
         outer
     };
