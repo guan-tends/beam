@@ -2,7 +2,7 @@
 //! User authentication and session management
 //! Provides create/auth/leave/recall using Rod's graph persistence
 
-use super::{certify, decrypt, decrypt_symmetric, encrypt, encrypt_symmetric, generate_pair, is_pubkey_certified, secret, verify_certificate, work, KeyPair, SeaError, SessionState, SessionStorage, User, WorkOptions};
+use super::{certify, decrypt, decrypt_symmetric, encrypt, encrypt_symmetric, generate_pair, is_pubkey_certified, secret, sign_value, verify_certificate, work, KeyPair, SeaError, SessionState, SessionStorage, User, WorkOptions};
 use crate::{Node, Value as RodValue};
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -273,7 +273,7 @@ fn encode_path(path: &str) -> String {
 
 impl User {
     /// Delegate write trust to a recipient for an optional path.
-    /// Stores a capability certificate at `~auth/{pub}/trust/{path}`.
+    /// Stores a capability certificate at `~{pub}/trust/{path}`.
     pub async fn trust(
         &self,
         recipient_pubkey: &str,
@@ -291,8 +291,7 @@ impl User {
         let signed = certify(&certificants, policies.as_ref(), &inner.pair).await?;
 
         let path_key = path.map(encode_path).unwrap_or_else(|| "global".to_string());
-        let mut trust_node = db.get("~auth")
-            .get(&inner.pair.pub_key)
+        let mut trust_node = db.get(&format!("~{}", inner.pair.pub_key))
             .get("trust")
             .get(&path_key);
         trust_node.put(RodValue::Text(signed.to_string()));
@@ -301,7 +300,7 @@ impl User {
     }
 
     /// Grant a recipient access to decrypt data at a path.
-    /// Stores an ECDH-encrypted secret at `~auth/{pub}/grant/{path}/{recipient}`.
+    /// Stores signed ECDH-encrypted copies at `~{pub}/grant/{path}/{recipient}` and `~{pub}/grant/{path}/{my_pub}`.
     pub async fn grant(
         &self,
         recipient_pubkey: &str,
@@ -319,14 +318,18 @@ impl User {
 
         // 1. Retrieve or create a 16-byte random secret for this data path
         let sec = {
-            let mut secret_node = db.get("~auth")
-                .get(&pair.pub_key)
+            let mut secret_node = db.get(&format!("~{}", pair.pub_key))
                 .get("secrets")
                 .get(&path_key);
             match secret_node.once(None).await {
                 Some(RodValue::Text(enc_text)) => {
-                    let enc: JsonValue = serde_json::from_str(&enc_text)
+                    let outer: JsonValue = serde_json::from_str(&enc_text)
                         .map_err(|e| SeaError::Decryption(format!("bad secret json: {}", e)))?;
+                    let enc = if outer.get("m").is_some() && outer.get("s").is_some() {
+                        outer["m"].clone()
+                    } else {
+                        outer
+                    };
                     decrypt(&enc, pair, None).await?
                         .as_str()
                         .ok_or_else(|| SeaError::Decryption("secret not string".into()))?
@@ -337,7 +340,8 @@ impl User {
                     rand::thread_rng().fill_bytes(&mut bytes);
                     let new_sec = base64::encode_config(&bytes, base64::STANDARD_NO_PAD);
                     let enc = encrypt(&json!(new_sec), pair, None).await?;
-                    secret_node.put(RodValue::Text(enc.to_string()));
+                    let signed = sign_value(&enc, pair).await?;
+                    secret_node.put(signed);
                     new_sec
                 }
             }
@@ -350,14 +354,23 @@ impl User {
 
         // 3. Encrypt data secret with shared secret
         let enc_for_recipient = encrypt_symmetric(&json!(sec), &dh_bytes).await?;
+        let signed_recipient = sign_value(&enc_for_recipient, pair).await?;
 
-        // 4. Store grant
-        let mut grant_node = db.get("~auth")
-            .get(&pair.pub_key)
+        // 4a. Store recipient copy
+        let mut grant_node = db.get(&format!("~{}", pair.pub_key))
             .get("grant")
             .get(&path_key)
             .get(recipient_pubkey);
-        grant_node.put(RodValue::Text(enc_for_recipient.to_string()));
+        grant_node.put(signed_recipient);
+
+        // 4b. Store owner backup (self-encrypted)
+        let enc_for_owner = encrypt(&json!(sec), pair, None).await?;
+        let signed_owner = sign_value(&enc_for_owner, pair).await?;
+        let mut owner_grant_node = db.get(&format!("~{}", pair.pub_key))
+            .get("grant")
+            .get(&path_key)
+            .get(&pair.pub_key);
+        owner_grant_node.put(signed_owner);
 
         Ok(())
     }
@@ -372,8 +385,7 @@ pub async fn verify_trust(
     db: &mut Node,
 ) -> Result<bool, SeaError> {
     let path_key = path.map(encode_path).unwrap_or_else(|| "global".to_string());
-    let mut trust_node = db.get("~auth")
-        .get(authority_pubkey)
+    let mut trust_node = db.get(&format!("~{}", authority_pubkey))
         .get("trust")
         .get(&path_key);
 
@@ -400,8 +412,7 @@ pub async fn accept_grant(
     db: &mut Node,
 ) -> Result<String, SeaError> {
     let path_key = encode_path(data_path);
-    let mut grant_node = db.get("~auth")
-        .get(owner_pubkey)
+    let mut grant_node = db.get(&format!("~{}", owner_pubkey))
         .get("grant")
         .get(&path_key)
         .get(&pair.pub_key);
@@ -410,8 +421,13 @@ pub async fn accept_grant(
         .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None })
         .ok_or_else(|| SeaError::Decryption("no grant found".into()))?;
 
-    let enc_json: JsonValue = serde_json::from_str(&enc_text)
+    let outer: JsonValue = serde_json::from_str(&enc_text)
         .map_err(|e| SeaError::Decryption(format!("bad grant json: {}", e)))?;
+    let enc_json = if outer.get("m").is_some() && outer.get("s").is_some() {
+        outer["m"].clone()
+    } else {
+        outer
+    };
 
     let dh = secret(owner_epub, pair).await?;
     let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD)

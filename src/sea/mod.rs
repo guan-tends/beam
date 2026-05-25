@@ -18,6 +18,7 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use zeroize::Zeroize;
+use crate::types::Value as RodValue;
 
 /// Key pair for signing and encryption
 #[derive(Clone, Debug)]
@@ -313,6 +314,17 @@ pub fn verify_certificate(
 /// Check if a pubkey appears in certificate's certificants list.
 pub fn is_pubkey_certified(payload: &JsonValue, pubkey: &str) -> bool {
     certify::is_certified(payload, pubkey)
+}
+
+
+/// Sign JSON data and wrap as a Rod Value::Text for user-space puts.
+/// The returned value is a JSON-serialized {"m": message, "s": signature} string.
+/// Call this before db.put(value) when writing authenticated user data.
+pub async fn sign_value(data: &JsonValue, pair: &KeyPair) -> Result<RodValue, SeaError> {
+    let signed = sign(data, pair).await?;
+    let text = serde_json::to_string(&signed)
+        .map_err(|e| SeaError::Crypto(format!("serialize signed: {}", e)))?;
+    Ok(RodValue::Text(text))
 }
 
 #[cfg(test)]
