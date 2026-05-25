@@ -246,7 +246,13 @@ impl Message {
             let signature_obj = json.as_object().ok_or("signature json was not an object")?;
 
             // Extract public key from node_id (e.g. "~pub_key.sin/child")
-            let key = &node_id.split("/").next().unwrap()[1..];
+            let first_seg = node_id.split("/").next().unwrap();
+            let key = if first_seg.starts_with("~@") {
+                // Alias registry — unsigned public lookup, skip signature verification
+                return Ok(());
+            } else {
+                &first_seg[1..] // strip ~ prefix
+            };
 
             // NEW FORMAT: {m: message, s: signature}
             if signature_obj.contains_key("m") && signature_obj.contains_key("s") {
@@ -684,5 +690,28 @@ mod tests {
             false,
         );
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn alias_registry_accepted_unsigned() {
+        // ~@alias is the public alias registry — unsigned lookup data.
+        // verify_sig should skip validation and return Ok immediately.
+        let res = Message::try_from(r##"
+        {
+          "put": {
+            "~@alice": {
+              "_": {
+                "#": "~@alice",
+                ">": {
+                  "pub": 1716460800000
+                }
+              },
+              "pub": "{\"pub\":\"BjxYTmcODm__M52FmMX_grHcafW0WiHpJUtVRCgEsZY._QiIs4tK22hebiZjGovtp3cHo1pAfYxoRODS_jyudA8\",\"epub\":\"UtCpoyYTG7JJTitZVJhSpxXtD0eHE45iT2Zj--P_n-U.U2CjHOxXiF7Giyjr_V5Mb2VoyWnRJCyFqEuwObn3pdM\"}"
+            }
+          },
+          "#": "aliasmsg01"
+        }
+        "##, Addr::noop(), false);
+        assert!(res.is_ok(), "~@alias registry should be accepted without sig verification");
     }
 }
