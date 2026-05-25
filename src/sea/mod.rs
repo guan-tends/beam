@@ -649,4 +649,56 @@ mod tests {
         assert_eq!(decrypted, payload);
     }
 
+
+
+    #[tokio::test]
+    async fn test_secret_grant_accept_full_roundtrip() {
+        let mut node = crate::Node::new();
+
+        // 1. Alice creates user and stores a self-encrypted secret
+        let alice = User::create("roundtripAlice", "alicePass", &mut node).await.unwrap();
+        let alice_pair = alice.pair();
+        let secret_data = json!({"api_key": "sk-live-4242", "tier": "pro"});
+        alice.secret(&secret_data, "api/credentials", &mut node).await.unwrap();
+
+        // 2. Bob creates user
+        let bob = User::create("roundtripBob", "bobPass", &mut node).await.unwrap();
+        let bob_pair = bob.pair();
+
+        // 3. Alice trusts Bob for the same path
+        alice.trust(&bob_pair.pub_key, Some("api/credentials"), &mut node).await.unwrap();
+
+        // 4. Alice grants Bob a random shared secret (grant generates 16 bytes internally)
+        let bob_epub = bob_pair.epub_key.as_ref().expect("bob has epub");
+        alice.grant(&bob_pair.pub_key, bob_epub, "api/credentials", &mut node).await.unwrap();
+
+        // 5. Bob accepts the grant and recovers a shared secret
+        let alice_epub = alice_pair.epub_key.as_ref().expect("alice has epub");
+        let recovered = accept_grant("api/credentials", &alice_pair.pub_key, alice_epub, &bob_pair, &mut node).await.unwrap();
+        assert!(!recovered.is_empty(), "Bob should recover a non-empty secret");
+        assert_eq!(recovered.len(), 22, "grant generates 16 bytes => 22 chars base64 no-pad");
+
+        // 6. Alice's self-encrypted data is still intact and independent
+        let mut alice_secret = node
+            .get(&format!("~{}", alice_pair.pub_key))
+            .get("secret")
+            .get("api__credentials");
+
+        let self_enc = alice_secret.once(None).await
+            .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None });
+        assert!(self_enc.is_some(), "Alice's self-encrypted secret should still exist");
+
+        // Verify Bob's recovered secret !== Alice's self-encrypted data (different things)
+        let outer: JsonValue = serde_json::from_str(&self_enc.unwrap()).unwrap();
+        let msg = outer["m"].as_str().expect("m should be string");
+        let enc: JsonValue = serde_json::from_str(msg).unwrap();
+
+        let epub = alice_pair.epub_key.as_ref().unwrap();
+        let dh = secret(epub, &alice_pair).await.unwrap();
+        let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD).unwrap();
+
+        let decrypted = decrypt_symmetric(&enc, &dh_bytes).await.unwrap();
+        assert_eq!(decrypted, secret_data, "Alice's self-encrypted copy should match original");
+    }
+
 }
