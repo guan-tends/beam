@@ -247,6 +247,7 @@ pub async fn verify_async(signed_data: &JsonValue, pub_key: &str) -> Result<Json
 
 /// Re-export synchronous secret derivation for use inside spawn_blocking closures
 pub use secret::secret_sync;
+pub use user::{verify_trust, accept_grant};
 
 /// Compute proof-of-work or content hash
 pub async fn work(
@@ -535,4 +536,117 @@ mod tests {
         let signed = certify(&[alice.pub_key], None, &authority).await.unwrap();
         assert!(verify_certificate(&signed, &wrong.pub_key).is_err());
     }
+
+    #[tokio::test]
+    async fn test_trust_grant_accept_roundtrip() {
+        let mut node = crate::Node::new();
+
+        // Alice and Bob each create accounts
+        let alice_user = User::create("alice_int", "secretA", &mut node).await.unwrap();
+        let bob_user = User::create("bob_int", "secretB", &mut node).await.unwrap();
+
+        let alice_pair = alice_user.pair();
+        let bob_pair = bob_user.pair();
+
+        // Alice trusts Bob to write at path "test/data"
+        alice_user.trust(&bob_pair.pub_key, Some("test/data"), &mut node).await.unwrap();
+
+        // Alice grants Bob access to secret at "test/data"
+        alice_user.grant(
+            &bob_pair.pub_key,
+            bob_pair.epub_key.as_ref().unwrap(),
+            "test/data",
+            &mut node,
+        ).await.unwrap();
+
+        // Verify trust from Bob's perspective
+        let trusted = verify_trust(
+            &alice_pair.pub_key,
+            &bob_pair.pub_key,
+            Some("test/data"),
+            &mut node,
+        ).await.unwrap();
+        assert!(trusted, "Bob should be trusted by Alice for test/data");
+
+        // Bob accepts the grant and recovers the secret
+        let secret = accept_grant(
+            "test/data",
+            &alice_pair.pub_key,
+            alice_pair.epub_key.as_ref().unwrap(),
+            &bob_pair,
+            &mut node,
+        ).await.unwrap();
+
+        // Secret should be a non-empty base64 string
+        assert!(!secret.is_empty(), "secret should be recovered");
+    }
+
+    #[tokio::test]
+    async fn test_two_copy_grant_owner_can_recover() {
+        let mut node = crate::Node::new();
+
+        let alice_user = User::create("alice2", "passA", &mut node).await.unwrap();
+        let bob_user = User::create("bob2", "passB", &mut node).await.unwrap();
+
+        let alice_pair = alice_user.pair();
+        let bob_pair = bob_user.pair();
+
+        // Alice grants Bob
+        alice_user.grant(
+            &bob_pair.pub_key,
+            bob_pair.epub_key.as_ref().unwrap(),
+            "docs/shared",
+            &mut node,
+        ).await.unwrap();
+
+        // Alice (as owner) reads her own backup copy at ~{pub}/grant/{path}/{my_pub}
+        let mut owner_grant = node
+            .get(&format!("~{}", alice_pair.pub_key))
+            .get("grant")
+            .get("docs__shared")
+            .get(&alice_pair.pub_key);
+
+        let owner_text = owner_grant.once(None).await
+            .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None });
+
+        assert!(owner_text.is_some(), "owner backup copy should exist");
+
+        // Verify it's a signed payload {m,s}
+        let parsed: JsonValue = serde_json::from_str(&owner_text.unwrap()).unwrap();
+        assert!(parsed.get("m").is_some(), "backup should be signed payload with m");
+        assert!(parsed.get("s").is_some(), "backup should be signed payload with s");
+    }
+
+
+    #[tokio::test]
+    async fn test_user_secret_roundtrip() {
+        let mut node = crate::Node::new();
+        let user = User::create("secretAlice", "hunter42", &mut node).await.unwrap();
+        let pair = user.pair();
+
+        let payload = json!({"token": "abracadabra", "exp": 1234567890});
+        user.secret(&payload, "wallet/key", &mut node).await.unwrap();
+
+        let path_key = "wallet__key";
+        let mut secret_node = node
+            .get(&format!("~{}", pair.pub_key))
+            .get("secret")
+            .get(&path_key);
+
+        let stored = secret_node.once(None).await
+            .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None })
+            .expect("secret should be stored");
+
+        let outer: JsonValue = serde_json::from_str(&stored).unwrap();
+        let msg = outer["m"].as_str().expect("m should be string");
+        let enc: JsonValue = serde_json::from_str(msg).unwrap();
+
+        let epub = pair.epub_key.as_ref().unwrap();
+        let dh = secret(epub, &pair).await.unwrap();
+        let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD).unwrap();
+
+        let decrypted = decrypt_symmetric(&enc, &dh_bytes).await.unwrap();
+        assert_eq!(decrypted, payload);
+    }
+
 }
