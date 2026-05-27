@@ -1,6 +1,6 @@
 # Rod
 
-> **BEAM Maintained Fork** — v0.2.4 | Rust 2024 | MSRV 1.85
+> **BEAM Maintained Fork** — v0.2.5 | Rust 2024 | MSRV 1.85
 
 Rust Object Database.
 
