@@ -230,6 +230,16 @@ impl Router {
             return;
         }
 
+        // Gun.js DAM: ack + "##" + hash dedup for identical responses
+        if let (Some(ack), Some(hash)) = (&put.in_response_to, put.checksum) {
+            let checksum_key = format!("{}##{}", ack, hash);
+            if self.dup.check(&checksum_key) {
+                debug!("duplicate response checksum: {}", checksum_key);
+                return;
+            }
+            self.dup.track(&checksum_key);
+        }
+
         match &put.in_response_to {
             Some(in_response_to) => {
                 if let Some(seen_get_message) = self.seen_get_messages.get_mut(in_response_to) {
@@ -351,6 +361,15 @@ impl Router {
         for put in batch.puts {
             if self.is_message_seen(&put.id) {
                 continue;
+            }
+            // Gun.js DAM: ack + "##" + hash dedup for identical responses
+            if let (Some(ack), Some(hash)) = (&put.in_response_to, put.checksum) {
+                let checksum_key = format!("{}##{}", ack, hash);
+                if self.dup.check(&checksum_key) {
+                    debug!("batch: duplicate response checksum: {}", checksum_key);
+                    continue;
+                }
+                self.dup.track(&checksum_key);
             }
             // ACK responses within a batch are unusual but handled defensively
             if let Some(in_response_to) = &put.in_response_to {
