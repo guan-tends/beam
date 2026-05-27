@@ -4,9 +4,14 @@ mod redb_storage;
 mod ws_client;
 mod ws_conn;
 mod ws_server;
+#[cfg(feature = "webrtc")]
+mod webrtc;
 pub use memory_storage::MemoryStorage;
 pub use multicast::Multicast;
 pub use redb_storage::RedbStorage;
 pub use ws_client::OutgoingWebsocketManager;
 pub use ws_conn::WsConn;
 pub use ws_server::{WsServer, WsServerConfig};
+
+#[cfg(feature = "webrtc")]
+pub use webrtc::{WebRtcPeer, WebRtcRole};
