@@ -6,7 +6,7 @@ mod tests {
     use std::sync::Once;
     use std::time::Instant;
     use tokio::net::TcpStream;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{sleep, timeout, Duration};
 
     /// Poll a TCP port until it accepts connections or timeout elapses.
     /// Replaces blind sleep races with deterministic readiness.
@@ -84,6 +84,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(unreachable_code)]
     async fn connect_and_sync_over_websocket() {
         let config = Config::default();
         let mut peer1 = Node::new_with_config(
@@ -102,17 +103,28 @@ mod tests {
         let mut sub2 = peer2.get("alpha").get("name").on();
         peer1.get("alpha").get("name").put("Amandil".into());
         peer2.get("beta").get("name").put("Beregond".into());
-        match sub1.recv().await.unwrap() {
+
+        // Timeout: WebSocket handshake may race with actor pre_start.
+        // If mesh propagation fails, fail fast with clear message rather than hanging.
+        let recv_val = timeout(Duration::from_secs(30), sub1.recv())
+            .await
+            .expect("timeout waiting for Beregond — mesh propagation from peer2 failed")
+            .expect("sub1 channel closed");
+        match recv_val {
             Value::Text(str) => {
                 assert_eq!(&str, "Beregond");
             }
-            _ => panic!("Expected Value::Text"),
+            _ => panic!("Expected Value::Text, got {:?}", recv_val),
         }
-        match sub2.recv().await.unwrap() {
+        let recv_val = timeout(Duration::from_secs(30), sub2.recv())
+            .await
+            .expect("timeout waiting for Amandil — mesh propagation from peer1 failed")
+            .expect("sub2 channel closed");
+        match recv_val {
             Value::Text(str) => {
                 assert_eq!(&str, "Amandil");
             }
-            _ => panic!("Expected Value::Text"),
+            _ => panic!("Expected Value::Text, got {:?}", recv_val),
         }
         peer1.stop();
         peer2.stop();
@@ -205,17 +217,25 @@ mod tests {
         let mut sub2 = peer2.get("alpha").get("name").on();
         peer1.get("alpha").get("name").put("Amandil".into());
         peer2.get("beta").get("name").put("Beregond".into());
-        match sub1.recv().await.unwrap() {
+        let val = timeout(Duration::from_secs(30), sub1.recv())
+            .await
+            .expect("timeout waiting for sub1 — mesh propagation from peer2 failed")
+            .expect("sub1 channel closed");
+        match val {
             Value::Text(str) => {
                 assert_eq!(&str, "Beregond");
             }
-            _ => panic!("Expected Value::Text"),
+            _ => panic!("Expected Value::Text, got {:?}", val),
         }
-        match sub2.recv().await.unwrap() {
+        let val = timeout(Duration::from_secs(30), sub2.recv())
+            .await
+            .expect("timeout waiting for sub2 — mesh propagation from peer1 failed")
+            .expect("sub2 channel closed");
+        match val {
             Value::Text(str) => {
                 assert_eq!(&str, "Amandil");
             }
-            _ => panic!("Expected Value::Text"),
+            _ => panic!("Expected Value::Text, got {:?}", val),
         }
         peer1.stop();
         peer2.stop();
@@ -273,17 +293,25 @@ mod tests {
         sleep(Duration::from_millis(100)).await;
         peer1.get("alpha").get("name").put("Amandil".into());
         peer2.get("beta").get("name").put("Beregond".into());
-        match sub1.recv().await.unwrap() {
+        let val = timeout(Duration::from_secs(30), sub1.recv())
+            .await
+            .expect("timeout waiting for sub1 — mesh propagation from peer2 via relay failed")
+            .expect("sub1 channel closed");
+        match val {
             Value::Text(str) => {
                 assert_eq!(&str, "Beregond");
             }
-            _ => panic!("Expected Value::Text"),
+            _ => panic!("Expected Value::Text, got {:?}", val),
         }
-        match sub2.recv().await.unwrap() {
+        let val = timeout(Duration::from_secs(30), sub2.recv())
+            .await
+            .expect("timeout waiting for sub2 — mesh propagation from peer1 via relay failed")
+            .expect("sub2 channel closed");
+        match val {
             Value::Text(str) => {
                 assert_eq!(&str, "Amandil");
             }
-            _ => panic!("Expected Value::Text"),
+            _ => panic!("Expected Value::Text, got {:?}", val),
         }
 
         assert!(peer2.get("gamma").get("name").once(None).await.is_none());
