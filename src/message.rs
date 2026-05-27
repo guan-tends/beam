@@ -61,6 +61,8 @@ pub struct Put {
     pub updated_nodes: BTreeMap<String, Children>,
     pub checksum: Option<i32>,
     pub json_str: Option<String>,
+    /// DAM peer-hop list
+    pub peer_hop_list: Option<HashSet<String>>,
 }
 impl Put {
     pub fn new(
@@ -76,6 +78,7 @@ impl Put {
             updated_nodes,
             checksum: None,
             json_str: None,
+            peer_hop_list: None,
         }
     }
 
@@ -121,6 +124,13 @@ impl Put {
             }
         };
         json["##"] = json!(checksum);
+        if let Some(ref hops) = self.peer_hop_list {
+            if !hops.is_empty() {
+                let peers = hops.iter().cloned().collect::<Vec<_>>().join(",");
+                json["><"] = json!(peers);
+            }
+        }
+
 
         let s = json.to_string();
         self.json_str = Some(s.clone());
@@ -352,6 +362,16 @@ impl Message {
             },
             _ => None,
         };
+        let peer_hop_list: Option<HashSet<String>> = match json.get("><") {
+            Some(hops) => match hops.as_str() {
+                Some(s) => {
+                    let set: HashSet<String> = s.split(",").map(|x| x.to_string()).filter(|x| !x.is_empty()).collect();
+                    if set.is_empty() { None } else { Some(set) }
+                }
+                _ => None,
+            },
+            _ => None,
+        };
         let mut updated_nodes = BTreeMap::<String, Children>::new();
         for (node_id, node_data) in obj.iter() {
             let node_data = node_data
@@ -407,6 +427,7 @@ impl Message {
             updated_nodes,
             checksum,
             json_str: Some(json_str),
+            peer_hop_list,
         };
         Ok(Message::Put(put))
     }
