@@ -5,7 +5,10 @@ use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
 use crate::adapters::MemoryStorage;
 use async_trait::async_trait;
-use log::{debug, info};
+use log::{debug, info, warn};
+use futures_util::StreamExt;
+use tokio_tungstenite::connect_async;
+use url::Url;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -60,6 +63,7 @@ pub struct Node {
     addr: Arc<RwLock<Option<Addr>>>,
     router: Arc<RwLock<Option<Addr>>>,
     pending_flushes: Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
+    allow_public_space: bool,
 }
 
 #[async_trait]
@@ -127,6 +131,7 @@ impl Node {
             addr: Arc::new(RwLock::new(None)),
             router: Arc::new(RwLock::new(None)),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
+            allow_public_space: config.allow_public_space,
             actor_context: Box::new(actor_context),
         };
 
@@ -219,6 +224,7 @@ impl Node {
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
             addr: Arc::new(RwLock::new(None)),
             actor_context: self.actor_context.clone(),
+            allow_public_space: self.allow_public_space,
         };
         let addr = self.actor_context.start_actor(Box::new(node.clone()));
         *node.addr.write() = Some(addr);
@@ -260,6 +266,49 @@ impl Node {
         ).await.ok()?.expect("recv error??");
         Some(val)
     }
+
+    /// Connect to a remote peer at `url` via WebSocket with automatic reconnection.
+    /// Retries with exponential backoff (starting at 1s, max 60s).
+    /// The spawned WsConn actor auto-handshakes via Message::Hi on pre_start,
+    /// and Router::handle_adds_peer handles the Hi to register the peer.
+    pub fn connect_peer(&self, url: &str) {
+        let ctx = self.actor_context.clone();
+        let ctx_for_actor = ctx.clone();
+        let url = url.to_string();
+        let allow_public_space = self.allow_public_space;
+        ctx.child_task(async move {
+            let ctx = ctx_for_actor;
+            let mut backoff = Duration::from_secs(1);
+            let max_backoff = Duration::from_secs(60);
+            loop {
+                match connect_async(Url::parse(&url).expect("valid URL")).await {
+                    Ok((socket, _)) => {
+                        let (sender, receiver) = socket.split();
+                        let conn = crate::adapters::WsConn::new(
+                            sender,
+                            receiver,
+                            allow_public_space,
+                        );
+                        let addr = ctx.start_actor(Box::new(conn));
+                        info!("BEAM connected to peer {} (addr: {})", url, addr);
+                        backoff = Duration::from_secs(1);
+                        // Stay alive; WsConn runs until disconnect.
+                        // TODO: detect disconnect for faster reconnect loop.
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "BEAM connect to {} failed: {}. retry in {:?}",
+                            url, e, backoff
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(max_backoff);
+                    }
+                }
+            }
+        });
+    }
+
 
     // TODO: optionally specify which adapters to ask
     /// Return a child Node corresponding to the given key.
