@@ -6,6 +6,8 @@ mod node;
 mod router;
 pub mod types;
 mod utils;
+mod dup;
+pub use dup::Dup;
 pub mod sea;
 pub use node::{Config, Node};
 pub use types::Value;
