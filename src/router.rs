@@ -1,6 +1,7 @@
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
-use crate::utils::{BoundedHashMap, BoundedHashSet};
+use crate::utils::BoundedHashMap;
+use crate::Dup;
 use crate::Config;
 use async_trait::async_trait;
 use log::{debug, error, info};
@@ -23,7 +24,7 @@ pub struct Router {
     storage_adapter_actors: Vec<Box<dyn Actor>>,
     network_adapter_actors: Vec<Box<dyn Actor>>,
     server_peers: HashSet<Addr>, // temporary, so we can forward stuff to outgoing websocket peers (servers)
-    seen_messages: BoundedHashSet,
+    dup: Dup,
     seen_get_messages: BoundedHashMap<String, SeenGetMessage>,
     subscribers_by_topic: HashMap<String, HashSet<Addr>>,
     msg_counter: AtomicUsize,
@@ -85,7 +86,7 @@ impl Router {
             storage_adapter_actors,
             network_adapter_actors,
             server_peers: HashSet::new(),
-            seen_messages: BoundedHashSet::new(SEEN_MSGS_MAX_SIZE),
+            dup: Dup::default_gun(),
             seen_get_messages: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
             subscribers_by_topic: HashMap::new(),
             msg_counter: AtomicUsize::new(0),
@@ -229,14 +230,23 @@ impl Router {
             return;
         }
 
+        // Gun.js DAM: ack + "##" + hash dedup for identical responses
+        if let (Some(ack), Some(hash)) = (&put.in_response_to, put.checksum) {
+            let checksum_key = format!("{}##{}", ack, hash);
+            if self.dup.check(&checksum_key) {
+                debug!("duplicate response checksum: {}", checksum_key);
+                return;
+            }
+            self.dup.track(&checksum_key);
+        }
+
         match &put.in_response_to {
             Some(in_response_to) => {
                 if let Some(seen_get_message) = self.seen_get_messages.get_mut(in_response_to) {
-                    if put.checksum != None && put.checksum == seen_get_message.last_reply_checksum
-                    {
+                    if put.checksum != None && put.checksum == seen_get_message.last_reply_checksum {
                         debug!("same reply already sent");
                         return;
-                    } // failing these conditions, should we still send the ack to someone?
+                    }
                     seen_get_message.last_reply_checksum = put.checksum.clone();
                     let _ = seen_get_message.from.send(Message::Put(put));
                 }
@@ -259,14 +269,20 @@ impl Router {
     /// Relay a Put to server peers and subscribers.
     /// Storage is NOT touched — this is pure network fan-out.
     fn handle_put_relay(&mut self, put: &Put) {
+        // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
+        // The relay's only job is to fan out with anti-loop via peer_hop_list.
+        let mut hops = put.peer_hop_list.clone().unwrap_or_default();
+        hops.insert(put.from.to_string());
         let mut already_sent_to = HashSet::new();
 
         // Send to server peers
         for addr in self.server_peers.iter() {
-            if put.from == *addr {
+            if put.from == *addr || hops.contains(&addr.to_string()) {
                 continue;
             }
-            let _ = addr.send(Message::Put(put.clone()));
+            let mut put = put.clone();
+            put.peer_hop_list = Some(hops.clone());
+            let _ = addr.send(Message::Put(put));
             already_sent_to.insert(addr.clone());
         }
 
@@ -277,14 +293,16 @@ impl Router {
             if let Some(topic_subscribers) = self.subscribers_by_topic.get_mut(topic) {
                 topic_subscribers.retain(|addr| {
                     // send & remove closed addresses
-                    if put.from == *addr {
+                    if put.from == *addr || hops.contains(&addr.to_string()) {
                         return true;
                     }
                     if already_sent_to.contains(addr) {
                         return true;
                     }
                     already_sent_to.insert(addr.clone());
-                    match addr.send(Message::Put(put.clone())) {
+                    let mut put = put.clone();
+                    put.peer_hop_list = Some(hops.clone());
+                    match addr.send(Message::Put(put)) {
                         Ok(_) => {
                             sent_to += 1;
                             true
@@ -308,10 +326,12 @@ impl Router {
                     continue;
                 }
                 already_sent_to.insert(addr.clone());
-                if put.from == *addr {
+                if put.from == *addr || hops.contains(&addr.to_string()) {
                     continue;
                 }
-                match addr.send(Message::Put(put.clone())) {
+                let mut put = put.clone();
+                put.peer_hop_list = Some(hops.clone());
+                match addr.send(Message::Put(put)) {
                     Ok(_) => {
                         debug!("sent put to random dude");
                     }
@@ -341,6 +361,15 @@ impl Router {
         for put in batch.puts {
             if self.is_message_seen(&put.id) {
                 continue;
+            }
+            // Gun.js DAM: ack + "##" + hash dedup for identical responses
+            if let (Some(ack), Some(hash)) = (&put.in_response_to, put.checksum) {
+                let checksum_key = format!("{}##{}", ack, hash);
+                if self.dup.check(&checksum_key) {
+                    debug!("batch: duplicate response checksum: {}", checksum_key);
+                    continue;
+                }
+                self.dup.track(&checksum_key);
             }
             // ACK responses within a batch are unusual but handled defensively
             if let Some(in_response_to) = &put.in_response_to {
@@ -375,13 +404,11 @@ impl Router {
 
     fn is_message_seen(&mut self, id: &String) -> bool {
         self.msg_counter.fetch_add(1, Ordering::Relaxed);
-
-        if self.seen_messages.contains(id) {
+        if self.dup.check(id) {
             debug!("already seen message {}", id);
             return true;
         }
-        self.seen_messages.insert(id.clone());
-
-        return false;
+        self.dup.track(id);
+        false
     }
 }
