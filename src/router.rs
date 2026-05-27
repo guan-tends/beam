@@ -68,6 +68,10 @@ impl Actor for Router {
             Message::Hi { from, peer_id: _ } => {
                 self.known_peers.insert(from);
             }
+            Message::RtcSignal(_rtc) => {
+                // Handled by WebRtcPeer adapter, not Router
+                // WebRTC signals flow peer-to-peer over data channels
+            }
         };
     }
 }
