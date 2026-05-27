@@ -47,6 +47,11 @@ p256 = { version = "0.13", features = ["ecdh"] }
 aes-gcm = "0.10"
 pbkdf2 = "0.12"
 sha2 = "0.10"
+str0m = { version = "0.19", optional = true }
+
+[features]
+default = []
+webrtc = ["dep:str0m"]
 
 [dev-dependencies]
 criterion = { version = "0.3", features=["async_futures", "html_reports"] }
