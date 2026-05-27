@@ -4,7 +4,23 @@ mod tests {
     use rod::adapters::*;
     use rod::{Config, Node, Value};
     use std::sync::Once;
+    use std::time::Instant;
+    use tokio::net::TcpStream;
     use tokio::time::{sleep, Duration};
+
+    /// Poll a TCP port until it accepts connections or timeout elapses.
+    /// Replaces blind sleep races with deterministic readiness.
+    async fn wait_for_port(port: u16, timeout_ms: u64) {
+        let start = Instant::now();
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        while start.elapsed() < timeout {
+            match TcpStream::connect(format!("127.0.0.1:{}", port)).await {
+                Ok(_) => return,
+                Err(_) => sleep(Duration::from_millis(50)).await,
+            }
+        }
+        panic!("Port {} did not become ready within {}ms", port, timeout_ms);
+    }
 
     static INIT: Once = Once::new();
 
@@ -80,7 +96,8 @@ mod tests {
             vec!["ws://localhost:4944/ws".to_string()],
         );
         let mut peer2 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
-        sleep(Duration::from_millis(2000)).await;
+        wait_for_port(4944, 5000).await;
+        sleep(Duration::from_millis(1000)).await;
         let mut sub1 = peer1.get("beta").get("name").on();
         let mut sub2 = peer2.get("alpha").get("name").on();
         peer1.get("alpha").get("name").put("Amandil".into());
@@ -182,8 +199,8 @@ mod tests {
         );
         let mut peer2 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
 
-        sleep(Duration::from_millis(2000)).await;
-
+        wait_for_port(4948, 5000).await;
+        sleep(Duration::from_millis(1000)).await;
         let mut sub1 = peer1.get("beta").get("name").on();
         let mut sub2 = peer2.get("alpha").get("name").on();
         peer1.get("alpha").get("name").put("Amandil".into());
@@ -246,7 +263,10 @@ mod tests {
         );
         let mut peer2 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
 
-        sleep(Duration::from_millis(2000)).await;
+        wait_for_port(4950, 5000).await;
+        wait_for_port(4952, 5000).await;
+        // Small delay for client connections to establish
+        sleep(Duration::from_millis(1500)).await;
 
         let mut sub1 = peer1.get("beta").get("name").on();
         let mut sub2 = peer2.get("alpha").get("name").on();
