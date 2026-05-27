@@ -13,42 +13,6 @@ pub fn random_string(len: usize) -> String {
 /// When full, every insert pushes out the oldest entry in the set.
 ///
 /// Used to record last seen message IDs.
-pub struct BoundedHashSet {
-    set: HashSet<String>,
-    queue: VecDeque<String>,
-    max_entries: usize,
-}
-
-impl BoundedHashSet {
-    pub fn new(max_entries: usize) -> Self {
-        BoundedHashSet {
-            set: HashSet::new(),
-            queue: VecDeque::new(),
-            max_entries,
-        }
-    }
-
-    pub fn insert(&mut self, s: String) {
-        if self.set.contains(&s) {
-            return;
-        }
-        if self.queue.len() >= self.max_entries {
-            if let Some(removed) = self.queue.pop_back() {
-                self.set.remove(&removed);
-            }
-        }
-        self.queue.push_front(s.clone());
-        self.set.insert(s);
-    }
-
-    pub fn contains(&self, s: &str) -> bool {
-        return self.set.contains(s);
-    }
-}
-
-/// When full, every insert pushes out the oldest entry in the set.
-///
-/// Used to record last seen message IDs.
 pub struct BoundedHashMap<K, V> {
     map: HashMap<K, V>,
     queue: VecDeque<K>,
