@@ -35,16 +35,18 @@ enum WrtcCommand {
 pub struct WebRtcPeer {
     peer_id: String,
     role: WebRtcRole,
-    ice_servers: Vec<String>,
+    /// Mirrors Node Config.allow_public_space. Passed through to Message::try_from
+    /// for ChannelData inbound parsing.
+    allow_public_space: bool,
     tx: Option<mpsc::UnboundedSender<WrtcCommand>>,
 }
 
 impl WebRtcPeer {
-    pub fn new(peer_id: String, role: WebRtcRole) -> Self {
+    pub fn new(peer_id: String, role: WebRtcRole, allow_public_space: bool) -> Self {
         Self {
             peer_id,
             role,
-            ice_servers: vec!["stun:stun.l.google.com:19302".into()],
+            allow_public_space,
             tx: None,
         }
     }
@@ -89,6 +91,7 @@ impl Actor for WebRtcPeer {
         let router = ctx.router.clone();
         let own_addr = ctx.addr.clone();
         let peer_id = self.peer_id.clone();
+        let allow_public_space = self.allow_public_space;
 
         ctx.child_task(async move {
             let mut buf = vec![0u8; 2000];
@@ -124,7 +127,7 @@ impl Actor for WebRtcPeer {
                     }
                     Ok(Output::Event(Event::ChannelData(data))) => {
                         if let Ok(s) = std::str::from_utf8(&data.data) {
-                            match Message::try_from(s, own_addr.clone(), false) {
+                            match Message::try_from(s, own_addr.clone(), allow_public_space) {
                                 Ok(msgs) => for m in msgs { let _ = router.send(m); },
                                 Err(_) => debug!("bad json from DataChannel"),
                             }
@@ -256,6 +259,10 @@ impl Actor for WebRtcPeer {
 
     async fn stopping(&mut self, _ctx: &ActorContext) {
         info!("WebRtcPeer stopping for {}", self.peer_id);
+        // Signal the child task to shut down gracefully.
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(WrtcCommand::Stop);
+        }
     }
 }
 
