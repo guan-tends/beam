@@ -185,6 +185,40 @@ impl Flush {
 }
 
 #[derive(Clone, Debug)]
+pub struct RtcSignal {
+    pub id: String,
+    pub from: Addr,
+    pub to: Option<String>,
+    pub offer: Option<String>,
+    pub answer: Option<String>,
+    pub candidate: Option<String>,
+    pub json_str: Option<String>,
+}
+
+impl RtcSignal {
+    pub fn to_string(&self) -> String {
+        let mut json = json!({
+            "dam": "rtc",
+            "id": &self.id,
+            "#": &self.id,
+        });
+        if let Some(to) = &self.to {
+            json["to"] = json!(to.to_string());
+        }
+        if let Some(offer) = &self.offer {
+            json["offer"] = json!(offer);
+        }
+        if let Some(answer) = &self.answer {
+            json["answer"] = json!(answer);
+        }
+        if let Some(candidate) = &self.candidate {
+            json["candidate"] = json!(candidate);
+        }
+        json.to_string()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum Message {
     // TODO: NetworkMessage and InternalMessage
     Get(Get),
@@ -192,6 +226,7 @@ pub enum Message {
     BatchPut(BatchPut),
     Flush(Flush),
     Hi { from: Addr, peer_id: String },
+    RtcSignal(RtcSignal),
 }
 
 impl Message {
@@ -202,6 +237,7 @@ impl Message {
             Message::BatchPut(mut batch) => batch.to_string(),
             Message::Flush(flush) => json!({"dam": "flush","#": flush.id}).to_string(),
             Message::Hi { from: _, peer_id } => json!({"dam": "hi","#": peer_id}).to_string(),
+            Message::RtcSignal(rtc) => rtc.to_string(),
         }
     }
 
@@ -212,6 +248,7 @@ impl Message {
             Message::BatchPut(batch) => batch.id.clone(),
             Message::Flush(flush) => flush.id.clone(),
             Message::Hi { from: _, peer_id } => peer_id.to_string(),
+            Message::RtcSignal(rtc) => rtc.id.clone(),
         }
     }
 
@@ -222,6 +259,7 @@ impl Message {
             Message::BatchPut(batch) => batch.from == *addr,
             Message::Flush(flush) => flush.from == *addr,
             Message::Hi { from, peer_id: _ } => *from == *addr,
+            Message::RtcSignal(rtc) => rtc.from == *addr,
         }
     }
 
@@ -235,6 +273,7 @@ impl Message {
                 from: _,
                 peer_id: _,
             } => Addr::noop(),
+            Message::RtcSignal(rtc) => rtc.from.clone(),
         }
     }
 
@@ -509,11 +548,27 @@ impl Message {
             Self::from_put_obj(json, json_str, msg_id, from, allow_public_space)
         } else if obj.contains_key("get") {
             Self::from_get_obj(json, json_str, msg_id, from)
-        } else if let Some(_dam) = obj.get("dam") {
-            Ok(Message::Hi {
-                from,
-                peer_id: msg_id,
-            })
+        } else if let Some(dam) = obj.get("dam").and_then(|d| d.as_str()) {
+            if dam == "rtc" {
+                let to = obj.get("to").and_then(|t| t.as_str().map(|s| s.to_string()));
+                let offer = obj.get("offer").and_then(|o| o.as_str().map(|s| s.to_string()));
+                let answer = obj.get("answer").and_then(|a| a.as_str().map(|s| s.to_string()));
+                let candidate = obj.get("candidate").and_then(|c| c.as_str().map(|s| s.to_string()));
+                Ok(Message::RtcSignal(RtcSignal {
+                    id: msg_id,
+                    from,
+                    to,
+                    offer,
+                    answer,
+                    candidate,
+                    json_str: Some(json_str),
+                }))
+            } else {
+                Ok(Message::Hi {
+                    from,
+                    peer_id: msg_id,
+                })
+            }
         } else {
             Err("Unrecognized message")
         }
