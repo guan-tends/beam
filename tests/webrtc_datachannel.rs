@@ -1,3 +1,4 @@
+#![cfg(feature = "webrtc")]
 use std::net::UdpSocket;
 use std::thread;
 use std::time::{Duration, Instant};
