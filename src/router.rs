@@ -69,13 +69,26 @@ impl Actor for Router {
             Message::Hi { from, peer_id } => {
                 self.known_peers.insert(from.clone());
                 if !peer_id.is_empty() {
+                    if let Some(existing) = self.peer_addrs.get(&peer_id) {
+                        if existing != &from {
+                            error!("Router peer_id collision: '{}' already mapped to {:?}, rejecting {:?}. Each peer_id must be unique.", peer_id, existing, from);
+                            return;
+                        }
+                    }
                     self.peer_addrs.insert(peer_id, from);
                 }
             }
             Message::RtcSignal(rtc) => {
                 if let Some(to_peer_id) = &rtc.to {
                     if let Some(addr) = self.peer_addrs.get(to_peer_id) {
+                        // Local target found — deliver directly
                         let _ = addr.send(Message::RtcSignal(rtc));
+                    } else {
+                        // Local target not found — broadcast to mesh peers.
+                        // The recipient node's Router will route to its local target.
+                        for addr in self.known_peers.iter() {
+                            let _ = addr.send(Message::RtcSignal(rtc.clone()));
+                        }
                     }
                 }
             }
