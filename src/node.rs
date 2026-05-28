@@ -69,6 +69,7 @@ pub struct Node {
     router: Arc<RwLock<Option<Addr>>>,
     pending_flushes: Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
     allow_public_space: bool,
+    ice_servers: Vec<String>,
 }
 
 #[async_trait]
@@ -137,6 +138,7 @@ impl Node {
             router: Arc::new(RwLock::new(None)),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
             allow_public_space: config.allow_public_space,
+            ice_servers: config.ice_servers.clone(),
             actor_context: Box::new(actor_context),
         };
 
@@ -230,6 +232,7 @@ impl Node {
             addr: Arc::new(RwLock::new(None)),
             actor_context: self.actor_context.clone(),
             allow_public_space: self.allow_public_space,
+            ice_servers: self.ice_servers.clone(),
         };
         let addr = self.actor_context.start_actor(Box::new(node.clone()));
         *node.addr.write() = Some(addr);
@@ -311,6 +314,31 @@ impl Node {
                     }
                 }
             }
+        });
+    }
+
+    /// Connect to a remote peer via WebRTC data channel.
+    /// Signaling bootstraps over the existing WebSocket mesh via `Message::RtcSignal`.
+    /// Once the data channel opens, the peer is registered in `Router::known_peers`
+    /// just like a WebSocket peer, and Gun protocol messages flow over the P2P link.
+    ///
+    /// Requires the `webrtc` feature. Without it, this method is a no-op.
+    #[cfg(feature = "webrtc")]
+    pub fn connect_webrtc_peer(&self, peer_id: &str, role: crate::adapters::WebRtcRole) {
+        let peer_id = peer_id.to_string();
+        let ice_servers = self.ice_servers.clone();
+        let allow_public_space = self.allow_public_space;
+        let ctx = self.actor_context.clone();
+        let ctx_for_actor = ctx.clone();
+        ctx.child_task(async move {
+            let peer = crate::adapters::WebRtcPeer::new(
+                peer_id,
+                role,
+                allow_public_space,
+                ice_servers,
+            );
+            let addr = ctx_for_actor.start_actor(Box::new(peer));
+            info!("BEAM WebRtcPeer started (addr: {})", addr);
         });
     }
 
