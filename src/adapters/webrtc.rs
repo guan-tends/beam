@@ -152,7 +152,7 @@ impl Actor for WebRtcPeer {
         self.tx = Some(tx);
         let pending_offer = match self.role {
             WebRtcRole::Offerer => self.start_as_offerer(ctx, &mut rtc),
-            WebRtcRole::Answerer => None,
+            WebRtcRole::Answerer => { eprintln!("[WRTC] answerer waiting peer_id={} target={}", self.peer_id, self.target_peer_id); None },
         };
 
         let router = ctx.router.clone();
@@ -182,38 +182,54 @@ impl Actor for WebRtcPeer {
                             }
                         }
                         WrtcCommand::Signal(signal) => {
+                            eprintln!("[WRTC] WHILE Signal id={} to={:?} offer={} answer={}", signal.id, signal.to, signal.offer.is_some(), signal.answer.is_some());
                             if let Some(offer_str) = &signal.offer {
-                                if let Ok(offer) = serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
-                                    match rtc.sdp_api().accept_offer(offer) {
-                                        Ok(answer) => {
-                                            eprintln!("[WRTC] accept_offer OK, sending answer to {}", router_target);
-                                            let answer_str = serde_json::to_string(&answer).unwrap_or_default();
-                                            let reply = Message::RtcSignal(RtcSignal {
-                                                id: format!("wrtca{}", random_string(24)),
-                                                from: own_addr.clone(),
-                                                to: Some(router_target.clone()),
-                                                offer: None,
-                                                answer: Some(answer_str),
-                                                candidate: None,
-                                                json_str: None,
-                                            });
-                                            let _ = router.send(reply);
+                                eprintln!("[WRTC] WHILE offer_str len={}", offer_str.len());
+                                match serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
+                                    Ok(offer) => {
+                                        eprintln!("[WRTC] WHILE deserialize offer OK");
+                                        match rtc.sdp_api().accept_offer(offer) {
+                                            Ok(answer) => {
+                                                eprintln!("[WRTC] WHILE accept_offer OK, sending answer to {}", router_target);
+                                                let answer_str = serde_json::to_string(&answer).unwrap_or_default();
+                                                let reply = Message::RtcSignal(RtcSignal {
+                                                    id: format!("wrtca{}", random_string(24)),
+                                                    from: own_addr.clone(),
+                                                    to: Some(router_target.clone()),
+                                                    offer: None,
+                                                    answer: Some(answer_str),
+                                                    candidate: None,
+                                                    json_str: None,
+                                                });
+                                                eprintln!("[WRTC] WHILE answer reply id={} to={:?}", reply.get_id(), router_target);
+                                                let r = router.send(reply);
+                                                eprintln!("[WRTC] WHILE router.send result: is_ok={}", r.is_ok());
+                                            }
+                                            Err(e) => eprintln!("[WRTC] WHILE accept_offer FAILED: {:?}", e),
                                         }
-                                        Err(e) => error!("accept_offer: {:?}", e),
                                     }
+                                    Err(e) => eprintln!("[WRTC] WHILE deserialize offer FAILED: {:?}", e),
                                 }
                             }
                             if let Some(answer_str) = &signal.answer {
+                                eprintln!("[WRTC] WHILE answer_str len={}", answer_str.len());
                                 if let Some(pending_offer) = pending.take() {
-                                    if let Ok(answer) = serde_json::from_str::<SdpAnswer>(answer_str) {
-                                        eprintln!("[WRTC] accept_answer executing for {}", peer_id);
-                                        if let Err(e) = rtc.sdp_api().accept_answer(pending_offer, answer) {
-                                            error!("accept_answer: {:?}", e);
+                                    match serde_json::from_str::<SdpAnswer>(answer_str) {
+                                        Ok(answer) => {
+                                            eprintln!("[WRTC] WHILE deserialize answer OK for {}", peer_id);
+                                            match rtc.sdp_api().accept_answer(pending_offer, answer) {
+                                                Ok(()) => eprintln!("[WRTC] WHILE accept_answer OK for {}", peer_id),
+                                                Err(e) => eprintln!("[WRTC] WHILE accept_answer FAILED for {}: {:?}", peer_id, e),
+                                            }
                                         }
+                                        Err(e) => eprintln!("[WRTC] WHILE deserialize answer FAILED for {}: {:?}", peer_id, e),
                                     }
+                                } else {
+                                    eprintln!("[WRTC] WHILE no pending offer for answer {}", peer_id);
                                 }
                             }
                             if let Some(candidate_str) = &signal.candidate {
+                                eprintln!("[WRTC] WHILE candidate_str for {}", peer_id);
                                 if let Ok(candidate) = Candidate::from_sdp_string(candidate_str) {
                                     rtc.add_remote_candidate(candidate);
                                 }
@@ -270,17 +286,17 @@ impl Actor for WebRtcPeer {
                     Timeout,
                 }
 
-                let result = if timeout.is_zero() {
-                    tokio::select! {
-                        cmd = rx.recv() => LoopResult::Cmd(cmd),
-                        res = socket.recv_from(&mut buf) => LoopResult::Recv(res),
+                if timeout.is_zero() {
+                    if let Err(e) = rtc.handle_input(Input::Timeout(Instant::now())) {
+                        error!("timeout input: {:?}", e);
                     }
-                } else {
-                    tokio::select! {
-                        cmd = rx.recv() => LoopResult::Cmd(cmd),
-                        res = socket.recv_from(&mut buf) => LoopResult::Recv(res),
-                        _ = tokio::time::sleep(timeout) => LoopResult::Timeout,
-                    }
+                    continue;
+                }
+
+                let result = tokio::select! {
+                    cmd = rx.recv() => LoopResult::Cmd(cmd),
+                    res = socket.recv_from(&mut buf) => LoopResult::Recv(res),
+                    _ = tokio::time::sleep(timeout) => LoopResult::Timeout,
                 };
 
                 match result {
@@ -296,36 +312,54 @@ impl Actor for WebRtcPeer {
                         }
                     }
                     LoopResult::Cmd(Some(WrtcCommand::Signal(signal))) => {
+                        eprintln!("[WRTC] MATCH Signal id={} to={:?} offer={} answer={} peer={}", signal.id, signal.to, signal.offer.is_some(), signal.answer.is_some(), peer_id);
                         if let Some(offer_str) = &signal.offer {
-                            if let Ok(offer) = serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
-                                match rtc.sdp_api().accept_offer(offer) {
-                                    Ok(answer) => {
-                                        let answer_str = serde_json::to_string(&answer).unwrap_or_default();
-                                        let reply = Message::RtcSignal(RtcSignal {
-                                            id: format!("wrtca{}", random_string(24)),
-                                            from: own_addr.clone(),
-                                            to: Some(router_target.clone()),
-                                            offer: None,
-                                            answer: Some(answer_str),
-                                            candidate: None,
-                                            json_str: None,
-                                        });
-                                        let _ = router.send(reply);
+                            eprintln!("[WRTC] MATCH offer_str len={} peer={}", offer_str.len(), peer_id);
+                            match serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
+                                Ok(offer) => {
+                                    eprintln!("[WRTC] MATCH deserialize offer OK peer={}", peer_id);
+                                    match rtc.sdp_api().accept_offer(offer) {
+                                        Ok(answer) => {
+                                            eprintln!("[WRTC] MATCH accept_offer OK peer={}", peer_id);
+                                            let answer_str = serde_json::to_string(&answer).unwrap_or_default();
+                                            let reply = Message::RtcSignal(RtcSignal {
+                                                id: format!("wrtca{}", random_string(24)),
+                                                from: own_addr.clone(),
+                                                to: Some(router_target.clone()),
+                                                offer: None,
+                                                answer: Some(answer_str),
+                                                candidate: None,
+                                                json_str: None,
+                                            });
+                                            eprintln!("[WRTC] MATCH answer reply id={} to={:?} peer={}", reply.get_id(), router_target, peer_id);
+                                            let r = router.send(reply);
+                                            eprintln!("[WRTC] MATCH router.send result: is_ok={} peer={}", r.is_ok(), peer_id);
+                                        }
+                                        Err(e) => eprintln!("[WRTC] MATCH accept_offer FAILED peer={}: {:?}", peer_id, e),
                                     }
-                                    Err(e) => error!("accept_offer: {:?}", e),
                                 }
+                                Err(e) => eprintln!("[WRTC] MATCH deserialize offer FAILED peer={}: {:?}", peer_id, e),
                             }
                         }
                         if let Some(answer_str) = &signal.answer {
-                            if let Some(pending) = pending.take() {
-                                if let Ok(answer) = serde_json::from_str::<SdpAnswer>(answer_str) {
-                                    if let Err(e) = rtc.sdp_api().accept_answer(pending, answer) {
-                                        error!("accept_answer: {:?}", e);
+                            eprintln!("[WRTC] MATCH answer_str len={} peer={}", answer_str.len(), peer_id);
+                            if let Some(pending_offer) = pending.take() {
+                                match serde_json::from_str::<SdpAnswer>(answer_str) {
+                                    Ok(answer) => {
+                                        eprintln!("[WRTC] MATCH deserialize answer OK peer={}", peer_id);
+                                        match rtc.sdp_api().accept_answer(pending_offer, answer) {
+                                            Ok(()) => eprintln!("[WRTC] MATCH accept_answer OK peer={}", peer_id),
+                                            Err(e) => eprintln!("[WRTC] MATCH accept_answer FAILED peer={}: {:?}", peer_id, e),
+                                        }
                                     }
+                                    Err(e) => eprintln!("[WRTC] MATCH deserialize answer FAILED peer={}: {:?}", peer_id, e),
                                 }
+                            } else {
+                                eprintln!("[WRTC] MATCH no pending offer for answer peer={}", peer_id);
                             }
                         }
                         if let Some(candidate_str) = &signal.candidate {
+                            eprintln!("[WRTC] MATCH candidate_str peer={}", peer_id);
                             if let Ok(candidate) = Candidate::from_sdp_string(candidate_str) {
                                 rtc.add_remote_candidate(candidate);
                             }
