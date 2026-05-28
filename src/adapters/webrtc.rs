@@ -394,7 +394,7 @@ impl WebRtcPeer {
         let mut changes = rtc.sdp_api();
         let _cid = changes.add_channel("gun-mesh".to_string());
         let (offer, pending) = changes.apply()?;
-        let offer_str = offer.to_string();
+        let offer_str = serde_json::to_string(&offer).unwrap_or_default();
         let signal = Message::RtcSignal(RtcSignal {
             id: format!("wrtco{}", random_string(24)),
             from: ctx.addr.clone(),
