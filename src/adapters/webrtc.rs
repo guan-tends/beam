@@ -35,6 +35,7 @@ enum WrtcCommand {
 
 pub struct WebRtcPeer {
     peer_id: String,
+    target_peer_id: String,
     role: WebRtcRole,
     /// Mirrors Node Config.allow_public_space. Passed through to Message::try_from
     /// for ChannelData inbound parsing.
@@ -45,9 +46,10 @@ pub struct WebRtcPeer {
 }
 
 impl WebRtcPeer {
-    pub fn new(peer_id: String, role: WebRtcRole, allow_public_space: bool, ice_servers: Vec<String>) -> Self {
+    pub fn new(peer_id: String, target_peer_id: String, role: WebRtcRole, allow_public_space: bool, ice_servers: Vec<String>) -> Self {
         Self {
             peer_id,
+            target_peer_id,
             role,
             allow_public_space,
             ice_servers,
@@ -156,6 +158,7 @@ impl Actor for WebRtcPeer {
         let router = ctx.router.clone();
         let own_addr = ctx.addr.clone();
         let peer_id = self.peer_id.clone();
+        let router_target = self.target_peer_id.clone();
         let allow_public_space = self.allow_public_space;
 
         ctx.child_task(async move {
@@ -183,11 +186,12 @@ impl Actor for WebRtcPeer {
                                 if let Ok(offer) = serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
                                     match rtc.sdp_api().accept_offer(offer) {
                                         Ok(answer) => {
+                                            eprintln!("[WRTC] accept_offer OK, sending answer to {}", router_target);
                                             let answer_str = serde_json::to_string(&answer).unwrap_or_default();
                                             let reply = Message::RtcSignal(RtcSignal {
                                                 id: format!("wrtca{}", random_string(24)),
                                                 from: own_addr.clone(),
-                                                to: Some(peer_id.clone()),
+                                                to: Some(router_target.clone()),
                                                 offer: None,
                                                 answer: Some(answer_str),
                                                 candidate: None,
@@ -202,6 +206,7 @@ impl Actor for WebRtcPeer {
                             if let Some(answer_str) = &signal.answer {
                                 if let Some(pending_offer) = pending.take() {
                                     if let Ok(answer) = serde_json::from_str::<SdpAnswer>(answer_str) {
+                                        eprintln!("[WRTC] accept_answer executing for {}", peer_id);
                                         if let Err(e) = rtc.sdp_api().accept_answer(pending_offer, answer) {
                                             error!("accept_answer: {:?}", e);
                                         }
@@ -299,7 +304,7 @@ impl Actor for WebRtcPeer {
                                         let reply = Message::RtcSignal(RtcSignal {
                                             id: format!("wrtca{}", random_string(24)),
                                             from: own_addr.clone(),
-                                            to: Some(peer_id.clone()),
+                                            to: Some(router_target.clone()),
                                             offer: None,
                                             answer: Some(answer_str),
                                             candidate: None,
@@ -385,6 +390,7 @@ impl Actor for WebRtcPeer {
 
 impl WebRtcPeer {
     fn start_as_offerer(&self, ctx: &ActorContext, rtc: &mut Rtc) -> Option<str0m::change::SdpPendingOffer> {
+        eprintln!("[WRTC] start_as_offerer peer_id={} target={}", self.peer_id, self.target_peer_id);
         let mut changes = rtc.sdp_api();
         let _cid = changes.add_channel("gun-mesh".to_string());
         let (offer, pending) = changes.apply()?;
@@ -392,7 +398,7 @@ impl WebRtcPeer {
         let signal = Message::RtcSignal(RtcSignal {
             id: format!("wrtco{}", random_string(24)),
             from: ctx.addr.clone(),
-            to: Some(self.peer_id.clone()),
+            to: Some(self.target_peer_id.clone()),
             offer: Some(offer_str),
             answer: None,
             candidate: None,

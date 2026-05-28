@@ -325,8 +325,9 @@ impl Node {
     ///
     /// Requires the `webrtc` feature. Without it, this method is a no-op.
     #[cfg(feature = "webrtc")]
-    pub fn connect_webrtc_peer(&self, peer_id: &str, role: crate::adapters::WebRtcRole) {
+    pub fn connect_webrtc_peer(&self, peer_id: &str, target_peer_id: &str, role: crate::adapters::WebRtcRole) {
         let peer_id = peer_id.to_string();
+        let target_peer_id = target_peer_id.to_string();
         let ice_servers = self.ice_servers.clone();
         let allow_public_space = self.allow_public_space;
         let ctx = self.actor_context.clone();
@@ -334,6 +335,7 @@ impl Node {
         ctx.child_task(async move {
             let peer = crate::adapters::WebRtcPeer::new(
                 peer_id,
+                target_peer_id,
                 role,
                 allow_public_space,
                 ice_servers,
