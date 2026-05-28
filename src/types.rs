@@ -57,6 +57,10 @@ impl Value {
     }
 }
 
+// Valid values are a subset of JSON: null, binary, number (!Infinity), text,
+// or a soul relation. Arrays need special algorithms to handle concurrency,
+// so they are not supported directly.
+// Objects are valid ONLY as node references: {"#": soul}
 impl TryFrom<SerdeJsonValue> for Value {
     type Error = &'static str;
 
