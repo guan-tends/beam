@@ -2161,7 +2161,6 @@ dependencies = [
  "tokio-stream",
  "tokio-test",
  "tokio-tungstenite 0.17.1",
- "turn",
  "url",
  "warp",
  "zeroize",
@@ -3004,27 +3003,6 @@ dependencies = [
  "thiserror 1.0.30",
  "url",
  "utf-8",
-]
-
-[[package]]
-name = "turn"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6a8b8ac3543b2a8eb0b28c7ac3d5f2db6221e057f3b3ae47cf7637b1333a5c3"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "futures",
- "log",
- "md-5",
- "portable-atomic",
- "rand 0.9.4",
- "ring 0.17.14",
- "stun",
- "thiserror 1.0.30",
- "tokio",
- "tokio-util 0.7.2",
- "webrtc-util",
 ]
 
 [[package]]

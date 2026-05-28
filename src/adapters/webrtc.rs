@@ -54,11 +54,20 @@ impl WebRtcPeer {
         }
     }
 
+    /// Create a str0m `Rtc`, bind a UDP socket, and discover ICE candidates.
+    ///
+    /// 1. Binds a `std::net::UdpSocket` (blocking) to query STUN / TURN servers.
+    /// 2. Adds a `host` candidate from the local socket address.
+    /// 3. For each `stun:` URI, sends a Binding Request and adds a
+    ///    `server_reflexive` candidate on success.
+    /// 4. For each `turn:` URI, sends an Allocate Request and adds a
+    ///    `relayed` candidate on success.
+    /// 5. Hands the socket to `tokio::net::UdpSocket` for async I/O.
     async fn setup_rtc(ice_servers: &[String]) -> Option<(Rtc, Arc<UdpSocket>, SocketAddr)> {
         let mut rtc = Rtc::new(Instant::now());
 
-        // Bind a std socket first so we can do blocking STUN queries before
-        // handing it to the async runtime.
+        // Bind a std socket first so we can do blocking STUN/TURN queries
+        // before handing the socket to the async runtime.
         let std_socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
             Ok(s) => s,
             Err(e) => { error!("UDP bind failed: {}", e); return None; }
@@ -75,21 +84,38 @@ impl WebRtcPeer {
         };
         rtc.add_local_candidate(candidate);
 
-        // STUN discovery for server-reflexive candidates
-        use crate::stun::webrtc_stun::{parse_ice_server, stun_binding_request};
+        // STUN discovery for server-reflexive candidates.
+        // TURN allocation for relayed candidates when direct/reflexive paths
+        // are blocked by symmetric NAT or restrictive firewalls.
+        use crate::stun::webrtc_stun::{parse_ice_server, stun_binding_request, turn_allocate_request};
         for uri in ice_servers {
-            if let Some((scheme, stun_addr)) = parse_ice_server(uri) {
-                if scheme == "stun" || scheme == "stuns" {
-                    match stun_binding_request(&std_socket, stun_addr, Duration::from_secs(2)) {
-                        Some(reflexive_addr) => {
-                            info!("STUN discovered reflexive {} via {}", reflexive_addr, uri);
-                            match Candidate::server_reflexive(reflexive_addr, local_addr, "udp") {
-                                Ok(c) => { rtc.add_local_candidate(c); }
-                                Err(e) => warn!("server-reflexive candidate failed: {}", e),
+            if let Some((scheme, srv_addr)) = parse_ice_server(uri) {
+                match scheme.as_str() {
+                    "stun" | "stuns" => {
+                        match stun_binding_request(&std_socket, srv_addr, Duration::from_secs(2)) {
+                            Some(reflexive_addr) => {
+                                info!("STUN discovered reflexive {} via {}", reflexive_addr, uri);
+                                match Candidate::server_reflexive(reflexive_addr, local_addr, "udp") {
+                                    Ok(c) => { rtc.add_local_candidate(c); }
+                                    Err(e) => warn!("server-reflexive candidate failed: {}", e),
+                                }
                             }
+                            None => warn!("STUN query failed for {}", uri),
                         }
-                        None => warn!("STUN query failed for {}", uri),
                     }
+                    "turn" | "turns" => {
+                        match turn_allocate_request(&std_socket, srv_addr, Duration::from_secs(3)) {
+                            Some(relay_addr) => {
+                                info!("TURN allocated relay {} via {}", relay_addr, uri);
+                                match Candidate::relayed(relay_addr, local_addr, "udp") {
+                                    Ok(c) => { rtc.add_local_candidate(c); }
+                                    Err(e) => warn!("relayed candidate failed: {}", e),
+                                }
+                            }
+                            None => warn!("TURN allocation failed for {}", uri),
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
