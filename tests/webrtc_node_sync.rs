@@ -53,10 +53,11 @@ mod tests {
         // Subscribe on peer_a BEFORE WebRTC setup and put
         let mut sub = peer_a.get("sync").get("test").on();
 
-        // Bootstrap WebRTC: both sides create WebRtcPeer adapters.
+        // Bootstrap WebRTC: create answerer FIRST so it is ready when the offer arrives.
         // The offer signal flows over the websocket mesh to peer_b.
-        peer_a.connect_webrtc_peer("peer-a", "peer-b", rod::adapters::WebRtcRole::Offerer);
         peer_b.connect_webrtc_peer("peer-b", "peer-a", rod::adapters::WebRtcRole::Answerer);
+        sleep(Duration::from_millis(500)).await;
+        peer_a.connect_webrtc_peer("peer-a", "peer-b", rod::adapters::WebRtcRole::Offerer);
 
         // Allow ICE handshake + DTLS + SCTP + DataChannel to complete.
         // In a real network this is ~1-3s; loopback is faster.
