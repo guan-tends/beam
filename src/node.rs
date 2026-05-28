@@ -150,6 +150,7 @@ impl Node {
                                                                                         // MemoryStorage (or sled), which has a special role in maintaining our version of the current state?
                                                                                         // MemoryStorage can then communicate with router as needed.
         let router_addr = node.actor_context.start_router(router);
+        node.actor_context.router = router_addr.clone();
         *node.router.write() = Some(router_addr);
 
         node
