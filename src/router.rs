@@ -19,6 +19,7 @@ struct SeenGetMessage {
 pub struct Router {
     config: Config,
     known_peers: HashSet<Addr>, // ping them periodically to remove closed addrs? and sort by timestamp & prefer long-lasting conns
+    peer_addrs: HashMap<String, Addr>, // peer_id to adapter address mapping for RtcSignal forwarding
     storage_adapters: HashSet<Addr>,
     network_adapters: HashSet<Addr>,
     storage_adapter_actors: Vec<Box<dyn Actor>>,
@@ -65,12 +66,18 @@ impl Actor for Router {
             }
             Message::Get(get) => self.handle_get(get),
             Message::Flush(flush) => self.handle_flush(flush),
-            Message::Hi { from, peer_id: _ } => {
-                self.known_peers.insert(from);
+            Message::Hi { from, peer_id } => {
+                self.known_peers.insert(from.clone());
+                if !peer_id.is_empty() {
+                    self.peer_addrs.insert(peer_id, from);
+                }
             }
-            Message::RtcSignal(_rtc) => {
-                // Handled by WebRtcPeer adapter, not Router
-                // WebRTC signals flow peer-to-peer over data channels
+            Message::RtcSignal(rtc) => {
+                if let Some(to_peer_id) = &rtc.to {
+                    if let Some(addr) = self.peer_addrs.get(to_peer_id) {
+                        let _ = addr.send(Message::RtcSignal(rtc));
+                    }
+                }
             }
         };
     }
@@ -85,6 +92,7 @@ impl Router {
         Self {
             config,
             known_peers: HashSet::new(),
+            peer_addrs: HashMap::new(),
             storage_adapters: HashSet::new(),
             network_adapters: HashSet::new(),
             storage_adapter_actors,
