@@ -431,8 +431,8 @@ impl Node {
     /// use rod::Node;
     /// let mut root = Node::new();
     /// root.batch_put(vec![
-    ///     (vec!["users", "alice"], "hi".into()),
-    ///     (vec!["users", "bob"], "hey".into()),
+    ///     (vec!["users".to_string(), "alice".to_string()], "hi".into()),
+    ///     (vec!["users".to_string(), "bob".to_string()], "hey".into()),
     /// ]);
     /// ```
     pub fn batch_put(&mut self, ops: Vec<(Vec<String>, Value)>) {
