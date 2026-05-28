@@ -6,6 +6,8 @@ mod node;
 mod router;
 pub mod types;
 mod utils;
+#[cfg(feature = "webrtc")]
+mod stun;
 mod dup;
 pub use dup::Dup;
 pub mod sea;

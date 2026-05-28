@@ -13,7 +13,7 @@ use str0m::change::SdpAnswer;
 use str0m::channel::ChannelId;
 
 use crate::message::{Message, RtcSignal};
-use crate::actor::{Actor, ActorContext, Addr};
+use crate::actor::{Actor, ActorContext};
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
 
@@ -38,35 +38,68 @@ pub struct WebRtcPeer {
     /// Mirrors Node Config.allow_public_space. Passed through to Message::try_from
     /// for ChannelData inbound parsing.
     allow_public_space: bool,
+    /// ICE server URIs for STUN discovery and TURN relay.
+    ice_servers: Vec<String>,
     tx: Option<mpsc::UnboundedSender<WrtcCommand>>,
 }
 
 impl WebRtcPeer {
-    pub fn new(peer_id: String, role: WebRtcRole, allow_public_space: bool) -> Self {
+    pub fn new(peer_id: String, role: WebRtcRole, allow_public_space: bool, ice_servers: Vec<String>) -> Self {
         Self {
             peer_id,
             role,
             allow_public_space,
+            ice_servers,
             tx: None,
         }
     }
 
-    async fn setup_rtc() -> Option<(Rtc, Arc<UdpSocket>, SocketAddr)> {
+    async fn setup_rtc(ice_servers: &[String]) -> Option<(Rtc, Arc<UdpSocket>, SocketAddr)> {
         let mut rtc = Rtc::new(Instant::now());
-        let socket = match UdpSocket::bind("0.0.0.0:0").await {
+
+        // Bind a std socket first so we can do blocking STUN queries before
+        // handing it to the async runtime.
+        let std_socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
             Ok(s) => s,
             Err(e) => { error!("UDP bind failed: {}", e); return None; }
         };
-        let local_addr = match socket.local_addr() {
+        let local_addr = match std_socket.local_addr() {
             Ok(a) => a,
             Err(e) => { error!("UDP local_addr failed: {}", e); return None; }
         };
-        let socket = Arc::new(socket);
+
+        // Host candidate (always present)
         let candidate = match Candidate::host(local_addr, "udp") {
             Ok(c) => c,
-            Err(e) => { error!("ICE candidate failed: {}", e); return None; }
+            Err(e) => { error!("ICE host candidate failed: {}", e); return None; }
         };
         rtc.add_local_candidate(candidate);
+
+        // STUN discovery for server-reflexive candidates
+        use crate::stun::webrtc_stun::{parse_ice_server, stun_binding_request};
+        for uri in ice_servers {
+            if let Some((scheme, stun_addr)) = parse_ice_server(uri) {
+                if scheme == "stun" || scheme == "stuns" {
+                    match stun_binding_request(&std_socket, stun_addr, Duration::from_secs(2)) {
+                        Some(reflexive_addr) => {
+                            info!("STUN discovered reflexive {} via {}", reflexive_addr, uri);
+                            match Candidate::server_reflexive(reflexive_addr, local_addr, "udp") {
+                                Ok(c) => { rtc.add_local_candidate(c); }
+                                Err(e) => warn!("server-reflexive candidate failed: {}", e),
+                            }
+                        }
+                        None => warn!("STUN query failed for {}", uri),
+                    }
+                }
+            }
+        }
+
+        // Hand the socket over to tokio
+        let socket = match UdpSocket::from_std(std_socket) {
+            Ok(s) => Arc::new(s),
+            Err(e) => { error!("tokio UdpSocket from_std failed: {}", e); return None; }
+        };
+
         Some((rtc, socket, local_addr))
     }
 }
@@ -76,7 +109,7 @@ impl Actor for WebRtcPeer {
     async fn pre_start(&mut self, ctx: &ActorContext) {
         info!("WebRtcPeer {:?} for {}", self.role, self.peer_id);
 
-        let (mut rtc, socket, local_addr) = match Self::setup_rtc().await {
+        let (mut rtc, socket, local_addr) = match Self::setup_rtc(&self.ice_servers).await {
             Some(v) => v,
             None => return,
         };

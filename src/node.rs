@@ -35,6 +35,10 @@ pub struct Config {
     /// Defaults to 4096. Increase for high-throughput scenarios; decrease
     /// to save memory per active subscription.
     pub broadcast_buffer_size: usize,
+    /// STUN/TURN servers for WebRTC ICE negotiation.
+    /// Defaults to Google's public STUN server.
+    /// Only used when the `webrtc` feature is enabled.
+    pub ice_servers: Vec<String>,
 }
 
 impl Default for Config {
@@ -44,6 +48,7 @@ impl Default for Config {
             stats: true,
             my_pub: None,
             broadcast_buffer_size: 4096,
+            ice_servers: vec!["stun:stun.l.google.com:19302".to_string()],
         }
     }
 }
