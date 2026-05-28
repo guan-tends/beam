@@ -69,13 +69,27 @@ impl Actor for Router {
             Message::Hi { from, peer_id } => {
                 self.known_peers.insert(from.clone());
                 if !peer_id.is_empty() {
+                    if let Some(existing) = self.peer_addrs.get(&peer_id) {
+                        if existing != &from {
+                            error!("Router peer_id collision: '{}' already mapped to {:?}, rejecting {:?}. Each peer_id must be unique.", peer_id, existing, from);
+                            return;
+                        }
+                    }
                     self.peer_addrs.insert(peer_id, from);
                 }
             }
             Message::RtcSignal(rtc) => {
+                eprintln!("[ROUTER] RtcSignal id={} to={:?} peer_addrs_keys={:?}", rtc.id, rtc.to, self.peer_addrs.keys().collect::<Vec<_>>());
                 if let Some(to_peer_id) = &rtc.to {
                     if let Some(addr) = self.peer_addrs.get(to_peer_id) {
-                        let _ = addr.send(Message::RtcSignal(rtc));
+                        eprintln!("[ROUTER] RtcSignal DELIVERING to local addr for peer_id={}", to_peer_id);
+                        let r = addr.send(Message::RtcSignal(rtc));
+                        eprintln!("[ROUTER] RtcSignal send result={:?}", r);
+                    } else {
+                        eprintln!("[ROUTER] RtcSignal BROADCASTING to {} known_peers", self.known_peers.len());
+                        for addr in self.known_peers.iter() {
+                            let _ = addr.send(Message::RtcSignal(rtc.clone()));
+                        }
                     }
                 }
             }
