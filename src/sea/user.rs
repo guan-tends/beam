@@ -8,8 +8,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use pbkdf2::pbkdf2_hmac;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use rand::RngCore;
 use serde_json::{json, Value as JsonValue};
 
@@ -234,9 +233,15 @@ async fn decrypt_pass(encrypted: &JsonValue, passphrase: &str) -> Result<JsonVal
 }
 
 fn derive_key_sync(passphrase: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
-    let mut key = vec![0u8; 32];
-    pbkdf2_hmac::<Sha256>(passphrase.as_bytes(), salt, 100_000, &mut key);
-    Ok(key)
+    // Match Gun.js aeskey.js: SHA-256(key_string + salt_bytes.toString('utf8'))
+    // aeskey.js: const combo = key + (salt || shim.random(8)).toString('utf8');
+    //            const hash = shim.Buffer.from(await sha256hash(combo), 'binary')
+    // Node.js Buffer.toString('utf8') replaces invalid sequences with U+FFFD,
+    // matching Rust's String::from_utf8_lossy.
+    let salt_str = String::from_utf8_lossy(salt);
+    let combo = format!("{}{}", passphrase, salt_str);
+    let hash = Sha256::digest(combo.as_bytes());
+    Ok(hash.to_vec())
 }
 
 /// Builder for creating or authenticating users from a Node
