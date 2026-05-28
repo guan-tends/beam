@@ -13,6 +13,7 @@ use str0m::change::SdpAnswer;
 use str0m::channel::ChannelId;
 
 use crate::message::{Message, RtcSignal};
+use crate::utils::random_string;
 use crate::actor::{Actor, ActorContext};
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
@@ -244,7 +245,7 @@ impl Actor for WebRtcPeer {
                                     Ok(answer) => {
                                         let answer_str = serde_json::to_string(&answer).unwrap_or_default();
                                         let reply = Message::RtcSignal(RtcSignal {
-                                            id: format!("wrtc-answer-{}", peer_id),
+                                            id: format!("wrtca{}", random_string(24)),
                                             from: own_addr.clone(),
                                             to: Some(peer_id.clone()),
                                             offer: None,
@@ -337,7 +338,7 @@ impl WebRtcPeer {
         let (offer, pending) = changes.apply()?;
         let offer_str = offer.to_string();
         let signal = Message::RtcSignal(RtcSignal {
-            id: format!("wrtc-offer-{}", self.peer_id),
+            id: format!("wrtco{}", random_string(24)),
             from: ctx.addr.clone(),
             to: Some(self.peer_id.clone()),
             offer: Some(offer_str),
