@@ -79,13 +79,14 @@ impl Actor for Router {
                 }
             }
             Message::RtcSignal(rtc) => {
+                eprintln!("[ROUTER] RtcSignal id={} to={:?} peer_addrs_keys={:?}", rtc.id, rtc.to, self.peer_addrs.keys().collect::<Vec<_>>());
                 if let Some(to_peer_id) = &rtc.to {
                     if let Some(addr) = self.peer_addrs.get(to_peer_id) {
-                        // Local target found — deliver directly
-                        let _ = addr.send(Message::RtcSignal(rtc));
+                        eprintln!("[ROUTER] RtcSignal DELIVERING to local addr for peer_id={}", to_peer_id);
+                        let r = addr.send(Message::RtcSignal(rtc));
+                        eprintln!("[ROUTER] RtcSignal send result={:?}", r);
                     } else {
-                        // Local target not found — broadcast to mesh peers.
-                        // The recipient node's Router will route to its local target.
+                        eprintln!("[ROUTER] RtcSignal BROADCASTING to {} known_peers", self.known_peers.len());
                         for addr in self.known_peers.iter() {
                             let _ = addr.send(Message::RtcSignal(rtc.clone()));
                         }

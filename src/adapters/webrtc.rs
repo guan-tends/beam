@@ -43,6 +43,8 @@ pub struct WebRtcPeer {
     /// ICE server URIs for STUN discovery and TURN relay.
     ice_servers: Vec<String>,
     tx: Option<mpsc::UnboundedSender<WrtcCommand>>,
+    /// Local UDP socket address, shared with remote peer as an ICE candidate.
+    local_addr: Option<SocketAddr>,
 }
 
 impl WebRtcPeer {
@@ -54,6 +56,7 @@ impl WebRtcPeer {
             allow_public_space,
             ice_servers,
             tx: None,
+            local_addr: None,
         }
     }
 
@@ -148,11 +151,13 @@ impl Actor for WebRtcPeer {
             None => return,
         };
 
+        self.local_addr = Some(local_addr);
         let (tx, mut rx) = mpsc::unbounded_channel::<WrtcCommand>();
         self.tx = Some(tx);
+        let local_addr_for_signal = local_addr;
         let pending_offer = match self.role {
-            WebRtcRole::Offerer => self.start_as_offerer(ctx, &mut rtc),
-            WebRtcRole::Answerer => { eprintln!("[WRTC] answerer waiting peer_id={} target={}", self.peer_id, self.target_peer_id); None },
+            WebRtcRole::Offerer => self.start_as_offerer(ctx, &mut rtc, local_addr_for_signal),
+            WebRtcRole::Answerer => { debug!("[WRTC] answerer waiting peer_id={} target={}", self.peer_id, self.target_peer_id); None },
         };
 
         let router = ctx.router.clone();
@@ -168,10 +173,7 @@ impl Actor for WebRtcPeer {
             let mut pending: Option<str0m::change::SdpPendingOffer> = pending_offer;
 
             loop {
-
-                // Drain pending commands before str0m I/O to prevent starvation.
-                // ICE keepalive Transmits can dominate poll_output() and starve rx.recv()
-                // in tokio::select! by returning Transmit before select is ever reached.
+                // === 1. Process pending commands (non-blocking) ===
                 while let Ok(cmd) = rx.try_recv() {
                     match cmd {
                         WrtcCommand::Write(data) => {
@@ -182,54 +184,40 @@ impl Actor for WebRtcPeer {
                             }
                         }
                         WrtcCommand::Signal(signal) => {
-                            eprintln!("[WRTC] WHILE Signal id={} to={:?} offer={} answer={}", signal.id, signal.to, signal.offer.is_some(), signal.answer.is_some());
-                            if let Some(offer_str) = &signal.offer {
-                                eprintln!("[WRTC] WHILE offer_str len={}", offer_str.len());
-                                match serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
-                                    Ok(offer) => {
-                                        eprintln!("[WRTC] WHILE deserialize offer OK");
-                                        match rtc.sdp_api().accept_offer(offer) {
-                                            Ok(answer) => {
-                                                eprintln!("[WRTC] WHILE accept_offer OK, sending answer to {}", router_target);
-                                                let answer_str = serde_json::to_string(&answer).unwrap_or_default();
-                                                let reply = Message::RtcSignal(RtcSignal {
-                                                    id: format!("wrtca{}", random_string(24)),
-                                                    from: own_addr.clone(),
-                                                    to: Some(router_target.clone()),
-                                                    offer: None,
-                                                    answer: Some(answer_str),
-                                                    candidate: None,
-                                                    json_str: None,
-                                                });
-                                                eprintln!("[WRTC] WHILE answer reply id={} to={:?}", reply.get_id(), router_target);
-                                                let r = router.send(reply);
-                                                eprintln!("[WRTC] WHILE router.send result: is_ok={}", r.is_ok());
-                                            }
-                                            Err(e) => eprintln!("[WRTC] WHILE accept_offer FAILED: {:?}", e),
-                                        }
+                            // Add remote candidate from peer's local_addr BEFORE processing offer/answer
+                            if let Some(addr_str) = &signal.local_addr {
+                                if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+                                    if let Ok(candidate) = Candidate::host(addr, "udp") {
+                                        rtc.add_remote_candidate(candidate);
                                     }
-                                    Err(e) => eprintln!("[WRTC] WHILE deserialize offer FAILED: {:?}", e),
+                                }
+                            }
+                            if let Some(offer_str) = &signal.offer {
+                                if let Ok(offer) = serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
+                                    if let Ok(answer) = rtc.sdp_api().accept_offer(offer) {
+                                        let answer_str = serde_json::to_string(&answer).unwrap_or_default();
+                                        let reply = Message::RtcSignal(RtcSignal {
+                                            id: format!("wrtca{}", random_string(24)),
+                                            from: own_addr.clone(),
+                                            to: Some(router_target.clone()),
+                                            offer: None,
+                                            answer: Some(answer_str),
+                                            candidate: None,
+                                            local_addr: Some(local_addr.to_string()),
+                                            json_str: None,
+                                        });
+                                        let _ = router.send(reply);
+                                    }
                                 }
                             }
                             if let Some(answer_str) = &signal.answer {
-                                eprintln!("[WRTC] WHILE answer_str len={}", answer_str.len());
                                 if let Some(pending_offer) = pending.take() {
-                                    match serde_json::from_str::<SdpAnswer>(answer_str) {
-                                        Ok(answer) => {
-                                            eprintln!("[WRTC] WHILE deserialize answer OK for {}", peer_id);
-                                            match rtc.sdp_api().accept_answer(pending_offer, answer) {
-                                                Ok(()) => eprintln!("[WRTC] WHILE accept_answer OK for {}", peer_id),
-                                                Err(e) => eprintln!("[WRTC] WHILE accept_answer FAILED for {}: {:?}", peer_id, e),
-                                            }
-                                        }
-                                        Err(e) => eprintln!("[WRTC] WHILE deserialize answer FAILED for {}: {:?}", peer_id, e),
+                                    if let Ok(answer) = serde_json::from_str::<SdpAnswer>(answer_str) {
+                                        let _ = rtc.sdp_api().accept_answer(pending_offer, answer);
                                     }
-                                } else {
-                                    eprintln!("[WRTC] WHILE no pending offer for answer {}", peer_id);
                                 }
                             }
                             if let Some(candidate_str) = &signal.candidate {
-                                eprintln!("[WRTC] WHILE candidate_str for {}", peer_id);
                                 if let Ok(candidate) = Candidate::from_sdp_string(candidate_str) {
                                     rtc.add_remote_candidate(candidate);
                                 }
@@ -238,130 +226,122 @@ impl Actor for WebRtcPeer {
                         WrtcCommand::Stop => break,
                     }
                 }
-                let timeout = match rtc.poll_output() {
-                    Ok(Output::Timeout(t)) => {
-                        if t <= Instant::now() { Duration::ZERO }
-                        else { t - Instant::now() }
-                    }
-                    Ok(Output::Transmit(t)) => {
-                        eprintln!("[WRTC] Transmit {} bytes to {} peer={}", t.contents.len(), t.destination, peer_id);
-                        let _ = socket.send_to(&t.contents, t.destination).await;
-                        continue;
-                    }
-                    Ok(Output::Event(Event::IceConnectionStateChange(IceConnectionState::Connected))) => {
-                        eprintln!("[WRTC] ICE connected peer={}", peer_id);
-                        connected = true;
-                        continue;
-                    }
-                    Ok(Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected))) => {
-                        warn!("ICE disconnected for {}", peer_id);
-                        break;
-                    }
-                    Ok(Output::Event(Event::ChannelOpen(cid, label))) => {
-                        eprintln!("[WRTC] ChannelOpen cid={:?} label={} peer={}", cid, label, peer_id);
-                        channel_id = Some(cid);
-                        let hi = Message::Hi { from: own_addr.clone(), peer_id: peer_id.clone() };
-                        let _ = router.send(hi);
-                        continue;
-                    }
-                    Ok(Output::Event(Event::ChannelData(data))) => {
-                        if let Ok(s) = std::str::from_utf8(&data.data) {
-                            match Message::try_from(s, own_addr.clone(), allow_public_space) {
-                                Ok(msgs) => for m in msgs { let _ = router.send(m); },
-                                Err(_) => debug!("bad json from DataChannel"),
+
+                // === 2. Advance time (drives ICE/DTLS/SCTP state machines) ===
+                if let Err(e) = rtc.handle_input(Input::Timeout(Instant::now())) {
+                    error!("handle_input Timeout failed: {:?}", e);
+                }
+
+                // === 3. Drain ALL outputs until Timeout ===
+                let mut timeout = Instant::now() + Duration::from_millis(100);
+                loop {
+                    match rtc.poll_output() {
+                        Ok(Output::Transmit(t)) => {
+                            let _ = socket.send_to(&t.contents, t.destination).await;
+                        }
+                        Ok(Output::Event(Event::IceConnectionStateChange(IceConnectionState::Connected))) => {
+                            connected = true;
+                        }
+                        Ok(Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected))) => {
+                            break;
+                        }
+                        Ok(Output::Event(Event::ChannelOpen(cid, label))) => {
+                            channel_id = Some(cid);
+                            let hi = Message::Hi { from: own_addr.clone(), peer_id: peer_id.clone() };
+                            let _ = router.send(hi);
+                        }
+                        Ok(Output::Event(Event::ChannelData(data))) => {
+                            if let Ok(s) = std::str::from_utf8(&data.data) {
+                                match Message::try_from(s, own_addr.clone(), allow_public_space) {
+                                    Ok(msgs) => {
+                                        for m in msgs { let _ = router.send(m); }
+                                    }
+                                    Err(e) => {
+                                    }
+                                }
+                            } else {
                             }
                         }
-                        continue;
+                        Ok(Output::Event(Event::ChannelClose(cid))) => {
+                            if channel_id == Some(cid) { channel_id = None; }
+                        }
+                        Ok(Output::Timeout(t)) => {
+                            timeout = t;
+                            break;
+                        }
+                        Err(e) => {
+                            error!("poll_output: {:?}", e);
+                            break;
+                        }
+                        _ => {}
                     }
-                    Ok(Output::Event(Event::ChannelClose(cid))) => {
-                        if channel_id == Some(cid) { channel_id = None; }
-                        continue;
-                    }
-                    Err(e) => { error!("poll_output: {:?}", e); break; }
-                    _ => { continue; }
+                }
+
+                // === 4. Calculate sleep duration ===
+                let now = Instant::now();
+                let sleep_dur = if timeout > now {
+                    timeout - now
+                } else {
+                    Duration::from_millis(1)
                 };
 
+                // === 5. Wait for next event (commands, UDP, or timeout) ===
                 enum LoopResult {
                     Cmd(Option<WrtcCommand>),
                     Recv(Result<(usize, SocketAddr), std::io::Error>),
                     Timeout,
                 }
 
-                if timeout.is_zero() {
-                    eprintln!("[WRTC] zero-timeout firing peer={}", peer_id);
-                    if let Err(e) = rtc.handle_input(Input::Timeout(Instant::now())) {
-                        eprintln!("[WRTC] timeout input ERROR peer={}: {:?}", peer_id, e);
-                    }
-                    continue;
-                }
-
                 let result = tokio::select! {
                     cmd = rx.recv() => LoopResult::Cmd(cmd),
                     res = socket.recv_from(&mut buf) => LoopResult::Recv(res),
-                    _ = tokio::time::sleep(timeout) => LoopResult::Timeout,
+                    _ = tokio::time::sleep(sleep_dur) => LoopResult::Timeout,
                 };
 
                 match result {
                     LoopResult::Cmd(Some(WrtcCommand::Write(data))) => {
                         if let Some(cid) = channel_id {
                             if let Some(mut chan) = rtc.channel(cid) {
-                                if chan.write(false, &data).is_err() {
-                                    debug!("DataChannel write failed");
-                                }
+                                let r = chan.write(false, &data);
+                            } else {
                             }
                         } else if connected {
-                            debug!("DataChannel not open, dropping {} bytes", data.len());
                         }
                     }
                     LoopResult::Cmd(Some(WrtcCommand::Signal(signal))) => {
-                        eprintln!("[WRTC] MATCH Signal id={} to={:?} offer={} answer={} peer={}", signal.id, signal.to, signal.offer.is_some(), signal.answer.is_some(), peer_id);
-                        if let Some(offer_str) = &signal.offer {
-                            eprintln!("[WRTC] MATCH offer_str len={} peer={}", offer_str.len(), peer_id);
-                            match serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
-                                Ok(offer) => {
-                                    eprintln!("[WRTC] MATCH deserialize offer OK peer={}", peer_id);
-                                    match rtc.sdp_api().accept_offer(offer) {
-                                        Ok(answer) => {
-                                            eprintln!("[WRTC] MATCH accept_offer OK peer={}", peer_id);
-                                            let answer_str = serde_json::to_string(&answer).unwrap_or_default();
-                                            let reply = Message::RtcSignal(RtcSignal {
-                                                id: format!("wrtca{}", random_string(24)),
-                                                from: own_addr.clone(),
-                                                to: Some(router_target.clone()),
-                                                offer: None,
-                                                answer: Some(answer_str),
-                                                candidate: None,
-                                                json_str: None,
-                                            });
-                                            eprintln!("[WRTC] MATCH answer reply id={} to={:?} peer={}", reply.get_id(), router_target, peer_id);
-                                            let r = router.send(reply);
-                                            eprintln!("[WRTC] MATCH router.send result: is_ok={} peer={}", r.is_ok(), peer_id);
-                                        }
-                                        Err(e) => eprintln!("[WRTC] MATCH accept_offer FAILED peer={}: {:?}", peer_id, e),
-                                    }
+                        if let Some(addr_str) = &signal.local_addr {
+                            if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+                                if let Ok(candidate) = Candidate::host(addr, "udp") {
+                                    rtc.add_remote_candidate(candidate);
                                 }
-                                Err(e) => eprintln!("[WRTC] MATCH deserialize offer FAILED peer={}: {:?}", peer_id, e),
+                            }
+                        }
+                        if let Some(offer_str) = &signal.offer {
+                            if let Ok(offer) = serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
+                                if let Ok(answer) = rtc.sdp_api().accept_offer(offer) {
+                                    let answer_str = serde_json::to_string(&answer).unwrap_or_default();
+                                    let reply = Message::RtcSignal(RtcSignal {
+                                        id: format!("wrtca{}", random_string(24)),
+                                        from: own_addr.clone(),
+                                        to: Some(router_target.clone()),
+                                        offer: None,
+                                        answer: Some(answer_str),
+                                        candidate: None,
+                                        local_addr: Some(local_addr.to_string()),
+                                        json_str: None,
+                                    });
+                                    let _ = router.send(reply);
+                                }
                             }
                         }
                         if let Some(answer_str) = &signal.answer {
-                            eprintln!("[WRTC] MATCH answer_str len={} peer={}", answer_str.len(), peer_id);
                             if let Some(pending_offer) = pending.take() {
-                                match serde_json::from_str::<SdpAnswer>(answer_str) {
-                                    Ok(answer) => {
-                                        eprintln!("[WRTC] MATCH deserialize answer OK peer={}", peer_id);
-                                        match rtc.sdp_api().accept_answer(pending_offer, answer) {
-                                            Ok(()) => eprintln!("[WRTC] MATCH accept_answer OK peer={}", peer_id),
-                                            Err(e) => eprintln!("[WRTC] MATCH accept_answer FAILED peer={}: {:?}", peer_id, e),
-                                        }
-                                    }
-                                    Err(e) => eprintln!("[WRTC] MATCH deserialize answer FAILED peer={}: {:?}", peer_id, e),
+                                if let Ok(answer) = serde_json::from_str::<SdpAnswer>(answer_str) {
+                                    let _ = rtc.sdp_api().accept_answer(pending_offer, answer);
                                 }
-                            } else {
-                                eprintln!("[WRTC] MATCH no pending offer for answer peer={}", peer_id);
                             }
                         }
                         if let Some(candidate_str) = &signal.candidate {
-                            eprintln!("[WRTC] MATCH candidate_str peer={}", peer_id);
                             if let Ok(candidate) = Candidate::from_sdp_string(candidate_str) {
                                 rtc.add_remote_candidate(candidate);
                             }
@@ -370,7 +350,6 @@ impl Actor for WebRtcPeer {
                     LoopResult::Cmd(Some(WrtcCommand::Stop)) |
                     LoopResult::Cmd(None) => break,
                     LoopResult::Recv(Ok((n, source))) => {
-                        eprintln!("[WRTC] Recv {} bytes from {} peer={}", n, source, peer_id);
                         let input = Input::Receive(
                             Instant::now(),
                             Receive {
@@ -382,16 +361,15 @@ impl Actor for WebRtcPeer {
                             }
                         );
                         if let Err(e) = rtc.handle_input(input) {
-                            eprintln!("[WRTC] handle_input ERROR peer={}: {:?}", peer_id, e);
+                            error!("handle_input: {:?}", e);
                         }
                     }
+                    LoopResult::Recv(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                     LoopResult::Recv(Err(e)) => {
                         error!("UDP recv: {:?}", e);
                     }
                     LoopResult::Timeout => {
-                        if let Err(e) = rtc.handle_input(Input::Timeout(Instant::now())) {
-                            eprintln!("[WRTC] timeout input ERROR peer={}: {:?}", peer_id, e);
-                        }
+                        // Time already advanced above; loop back to poll_output
                     }
                 }
             }
@@ -404,15 +382,17 @@ impl Actor for WebRtcPeer {
         if let Some(tx) = &self.tx {
             match msg {
                 Message::RtcSignal(signal) => {
-                    if signal.to.as_ref() != Some(&self.peer_id) { return; }
-                    debug!("signal from {}", signal.from);
-                    let _ = tx.send(WrtcCommand::Signal(signal));
+                    if signal.to.as_ref() != Some(&self.peer_id) { 
+                        return; 
+                    }
+                    let r = tx.send(WrtcCommand::Signal(signal));
                 }
                 other => {
                     let text = other.to_string();
                     let _ = tx.send(WrtcCommand::Write(text.into_bytes()));
                 }
             }
+        } else {
         }
     }
 
@@ -426,8 +406,7 @@ impl Actor for WebRtcPeer {
 }
 
 impl WebRtcPeer {
-    fn start_as_offerer(&self, ctx: &ActorContext, rtc: &mut Rtc) -> Option<str0m::change::SdpPendingOffer> {
-        eprintln!("[WRTC] start_as_offerer peer_id={} target={}", self.peer_id, self.target_peer_id);
+    fn start_as_offerer(&self, ctx: &ActorContext, rtc: &mut Rtc, local_addr: SocketAddr) -> Option<str0m::change::SdpPendingOffer> {
         let mut changes = rtc.sdp_api();
         let _cid = changes.add_channel("gun-mesh".to_string());
         let (offer, pending) = changes.apply()?;
@@ -439,6 +418,7 @@ impl WebRtcPeer {
             offer: Some(offer_str),
             answer: None,
             candidate: None,
+            local_addr: Some(local_addr.to_string()),
             json_str: None,
         });
         let _ = ctx.router.send(signal);

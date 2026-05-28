@@ -192,6 +192,9 @@ pub struct RtcSignal {
     pub offer: Option<String>,
     pub answer: Option<String>,
     pub candidate: Option<String>,
+    /// The UDP socket address of the sender, so the receiver can add it as a
+    /// remote ICE candidate for loopback and direct connections.
+    pub local_addr: Option<String>,
     pub json_str: Option<String>,
 }
 
@@ -213,6 +216,9 @@ impl RtcSignal {
         }
         if let Some(candidate) = &self.candidate {
             json["candidate"] = json!(candidate);
+        }
+        if let Some(local_addr) = &self.local_addr {
+            json["local_addr"] = json!(local_addr);
         }
         json.to_string()
     }
@@ -554,6 +560,7 @@ impl Message {
                 let offer = obj.get("offer").and_then(|o| o.as_str().map(|s| s.to_string()));
                 let answer = obj.get("answer").and_then(|a| a.as_str().map(|s| s.to_string()));
                 let candidate = obj.get("candidate").and_then(|c| c.as_str().map(|s| s.to_string()));
+                let local_addr = obj.get("local_addr").and_then(|l| l.as_str().map(|s| s.to_string()));
                 Ok(Message::RtcSignal(RtcSignal {
                     id: msg_id,
                     from,
@@ -561,6 +568,7 @@ impl Message {
                     offer,
                     answer,
                     candidate,
+                    local_addr,
                     json_str: Some(json_str),
                 }))
             } else {
