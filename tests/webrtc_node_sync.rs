@@ -26,6 +26,9 @@ mod tests {
 
     #[tokio::test]
     async fn webrtc_sync_over_mesh() {
+        // Initialize str0m crypto provider (required for DTLS certificate generation)
+        str0m::crypto::from_feature_flags().install_process_default();
+
         let config = Config::default();
 
         // Node A: WsServer (for signaling mesh) + will initiate WebRTC as offerer
