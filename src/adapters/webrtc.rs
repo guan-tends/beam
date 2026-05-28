@@ -68,7 +68,7 @@ impl WebRtcPeer {
 
         // Bind a std socket first so we can do blocking STUN/TURN queries
         // before handing the socket to the async runtime.
-        let std_socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
+        let std_socket = match std::net::UdpSocket::bind("127.0.0.1:0") {
             Ok(s) => s,
             Err(e) => { error!("UDP bind failed: {}", e); return None; }
         };
@@ -121,6 +121,7 @@ impl WebRtcPeer {
         }
 
         // Hand the socket over to tokio
+        let _ = std_socket.set_nonblocking(true);
         let socket = match UdpSocket::from_std(std_socket) {
             Ok(s) => Arc::new(s),
             Err(e) => { error!("tokio UdpSocket from_std failed: {}", e); return None; }
