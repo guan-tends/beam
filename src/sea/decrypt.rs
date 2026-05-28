@@ -52,11 +52,11 @@ pub async fn decrypt(
     let salt_owned = salt_bytes;
     let nonce_owned = nonce_bytes;
 
-    // Run PBKDF2 + AES-GCM in spawn_blocking
+    // Run SHA-256 KDF + AES-GCM in spawn_blocking
     let plaintext = tokio::task::spawn_blocking(move || {
         // Derive AES key
         let aes_key = if let Some(ref their_pub) = their_epub {
-            // Shared decryption: ECDH → PBKDF2
+            // Shared decryption: ECDH → SHA-256
             let shared_secret = super::secret::secret_sync(their_pub, &pair)?;
             derive_aes_key_sync(&shared_secret, &salt_owned)?
         } else {
