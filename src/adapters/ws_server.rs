@@ -84,16 +84,15 @@ impl WsServer {
     async fn start_web_server(config: WsServerConfig, peer_id: String) {
         use warp::Filter;
         // Match any request and return hello world!
-        let iris = warp::fs::dir("./assets/iris");
         let stats = warp::path("stats").and(warp::fs::dir("./assets/stats"));
         let peer_id = warp::path("peer_id").map(move || format!("{}", peer_id));
-        let routes = warp::get().and(iris.or(stats).or(peer_id));
+        let routes = warp::get().and(stats.or(peer_id));
 
         let port = config.port + 1;
         if let Some(cert_path) = config.cert_path {
             let key_path = config.key_path.unwrap();
             let addr = format!("https://localhost:{}", port);
-            eprintln!("Iris UI:            {}", addr);
+            eprintln!("Web UI:             {}", addr);
             eprintln!("Stats:              {}/stats", addr);
             warp::serve(routes)
                 .tls()
@@ -105,7 +104,7 @@ impl WsServer {
         }
 
         let addr = format!("http://localhost:{}", port);
-        eprintln!("Iris UI:            {}", addr);
+        eprintln!("Web UI:             {}", addr);
         eprintln!("Stats:              {}/stats", addr);
         warp::serve(routes).run(([0, 0, 0, 0], port)).await;
     }

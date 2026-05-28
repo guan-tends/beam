@@ -4,7 +4,7 @@
 
 Rust Object Database.
 
-The decentralized social networking application [Iris-messenger](https://github.com/irislib/iris-messenger) syncs over Rod peers by default.
+Rod powers decentralized graph synchronization. For an example application built on Rod, see [Iris-messenger](https://github.com/irislib/iris-messenger) (upstream demo, not included in BEAM).
 
 ## Use
 
@@ -124,7 +124,7 @@ async fn main() {
 
 ### Issues
 
-- Multicast doesn't relay large messages like Iris posts with photos
+- Multicast doesn't relay large messages like social posts with photos
 
 ## Develop
 
