@@ -165,6 +165,58 @@ impl Actor for WebRtcPeer {
             let mut pending: Option<str0m::change::SdpPendingOffer> = pending_offer;
 
             loop {
+
+                // Drain pending commands before str0m I/O to prevent starvation.
+                // ICE keepalive Transmits can dominate poll_output() and starve rx.recv()
+                // in tokio::select! by returning Transmit before select is ever reached.
+                while let Ok(cmd) = rx.try_recv() {
+                    match cmd {
+                        WrtcCommand::Write(data) => {
+                            if let Some(cid) = channel_id {
+                                if let Some(mut chan) = rtc.channel(cid) {
+                                    let _ = chan.write(false, &data);
+                                }
+                            }
+                        }
+                        WrtcCommand::Signal(signal) => {
+                            if let Some(offer_str) = &signal.offer {
+                                if let Ok(offer) = serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
+                                    match rtc.sdp_api().accept_offer(offer) {
+                                        Ok(answer) => {
+                                            let answer_str = serde_json::to_string(&answer).unwrap_or_default();
+                                            let reply = Message::RtcSignal(RtcSignal {
+                                                id: format!("wrtca{}", random_string(24)),
+                                                from: own_addr.clone(),
+                                                to: Some(peer_id.clone()),
+                                                offer: None,
+                                                answer: Some(answer_str),
+                                                candidate: None,
+                                                json_str: None,
+                                            });
+                                            let _ = router.send(reply);
+                                        }
+                                        Err(e) => error!("accept_offer: {:?}", e),
+                                    }
+                                }
+                            }
+                            if let Some(answer_str) = &signal.answer {
+                                if let Some(pending_offer) = pending.take() {
+                                    if let Ok(answer) = serde_json::from_str::<SdpAnswer>(answer_str) {
+                                        if let Err(e) = rtc.sdp_api().accept_answer(pending_offer, answer) {
+                                            error!("accept_answer: {:?}", e);
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(candidate_str) = &signal.candidate {
+                                if let Ok(candidate) = Candidate::from_sdp_string(candidate_str) {
+                                    rtc.add_remote_candidate(candidate);
+                                }
+                            }
+                        }
+                        WrtcCommand::Stop => break,
+                    }
+                }
                 let timeout = match rtc.poll_output() {
                     Ok(Output::Timeout(t)) => {
                         if t <= Instant::now() { Duration::ZERO }
