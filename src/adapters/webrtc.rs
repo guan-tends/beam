@@ -136,6 +136,10 @@ impl Actor for WebRtcPeer {
     async fn pre_start(&mut self, ctx: &ActorContext) {
         info!("WebRtcPeer {:?} for {}", self.role, self.peer_id);
 
+        // Register with Router BEFORE setup_rtc so offers can be forwarded.
+        let hi = Message::Hi { from: ctx.addr.clone(), peer_id: self.peer_id.clone() };
+        let _ = ctx.router.send(hi);
+
         let (mut rtc, socket, local_addr) = match Self::setup_rtc(&self.ice_servers).await {
             Some(v) => v,
             None => return,
