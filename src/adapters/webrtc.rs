@@ -244,11 +244,12 @@ impl Actor for WebRtcPeer {
                         else { t - Instant::now() }
                     }
                     Ok(Output::Transmit(t)) => {
+                        eprintln!("[WRTC] Transmit {} bytes to {} peer={}", t.contents.len(), t.destination, peer_id);
                         let _ = socket.send_to(&t.contents, t.destination).await;
                         continue;
                     }
                     Ok(Output::Event(Event::IceConnectionStateChange(IceConnectionState::Connected))) => {
-                        info!("ICE connected for {}", peer_id);
+                        eprintln!("[WRTC] ICE connected peer={}", peer_id);
                         connected = true;
                         continue;
                     }
@@ -257,7 +258,7 @@ impl Actor for WebRtcPeer {
                         break;
                     }
                     Ok(Output::Event(Event::ChannelOpen(cid, label))) => {
-                        info!("channel {} open for {}", label, peer_id);
+                        eprintln!("[WRTC] ChannelOpen cid={:?} label={} peer={}", cid, label, peer_id);
                         channel_id = Some(cid);
                         let hi = Message::Hi { from: own_addr.clone(), peer_id: peer_id.clone() };
                         let _ = router.send(hi);
@@ -287,8 +288,9 @@ impl Actor for WebRtcPeer {
                 }
 
                 if timeout.is_zero() {
+                    eprintln!("[WRTC] zero-timeout firing peer={}", peer_id);
                     if let Err(e) = rtc.handle_input(Input::Timeout(Instant::now())) {
-                        error!("timeout input: {:?}", e);
+                        eprintln!("[WRTC] timeout input ERROR peer={}: {:?}", peer_id, e);
                     }
                     continue;
                 }
@@ -368,6 +370,7 @@ impl Actor for WebRtcPeer {
                     LoopResult::Cmd(Some(WrtcCommand::Stop)) |
                     LoopResult::Cmd(None) => break,
                     LoopResult::Recv(Ok((n, source))) => {
+                        eprintln!("[WRTC] Recv {} bytes from {} peer={}", n, source, peer_id);
                         let input = Input::Receive(
                             Instant::now(),
                             Receive {
@@ -379,7 +382,7 @@ impl Actor for WebRtcPeer {
                             }
                         );
                         if let Err(e) = rtc.handle_input(input) {
-                            error!("handle_input: {:?}", e);
+                            eprintln!("[WRTC] handle_input ERROR peer={}: {:?}", peer_id, e);
                         }
                     }
                     LoopResult::Recv(Err(e)) => {
@@ -387,7 +390,7 @@ impl Actor for WebRtcPeer {
                     }
                     LoopResult::Timeout => {
                         if let Err(e) = rtc.handle_input(Input::Timeout(Instant::now())) {
-                            error!("timeout input: {:?}", e);
+                            eprintln!("[WRTC] timeout input ERROR peer={}: {:?}", peer_id, e);
                         }
                     }
                 }
