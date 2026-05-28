@@ -69,7 +69,14 @@ impl TryFrom<SerdeJsonValue> for Value {
                 Some(n) => Ok(Value::Number(n)),
                 _ => Err("not convertible to f64"),
             },
-            SerdeJsonValue::Object(_) => Err("cannot convert json object into Value"),
+            SerdeJsonValue::Object(obj) => {
+                // Node reference: {"#": "soul"} → Value::Link
+                if let Some(soul) = obj.get("#").and_then(|v| v.as_str()) {
+                    Ok(Value::Link(soul.to_string()))
+                } else {
+                    Err("cannot convert json object into Value")
+                }
+            }
             SerdeJsonValue::Array(_) => Err("cannot convert array into Value"),
         }
     }
