@@ -43,15 +43,15 @@ pub async fn encrypt(
     let salt_owned = salt_bytes.to_vec();
     let nonce_owned = nonce_bytes.to_vec();
 
-    // Run PBKDF2 + AES-GCM in spawn_blocking to avoid blocking the async executor
+    // Run SHA-256 KDF + AES-GCM in spawn_blocking to avoid blocking the async executor
     let result = tokio::task::spawn_blocking(move || {
         // Derive AES key
         let aes_key = if let Some(ref their_pub) = their_epub {
-            // Shared encryption: ECDH → PBKDF2
+            // Shared encryption: ECDH → SHA-256
             let shared_secret = super::secret::secret_sync(their_pub, &pair)?;
             derive_aes_key_sync(&shared_secret, &salt_owned)?
         } else {
-            // Self encryption: epriv directly as PBKDF2 input
+            // Self encryption: epriv directly as SHA-256 input
             let epriv = pair
                 .epriv_key
                 .as_ref()
