@@ -3,6 +3,7 @@
 //! Reverse of encrypt.rs
 
 use super::{KeyPair, SeaError};
+use sha2::{Digest, Sha256};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
@@ -94,15 +95,13 @@ pub async fn decrypt(
         .map_err(|e| SeaError::Decryption(format!("invalid JSON in plaintext: {}", e)))
 }
 
-/// Derive AES-256 key from secret material + salt via PBKDF2 (synchronous)
+/// Derive AES-256 key from secret material + salt via SHA-256 (synchronous)
+/// Matches Gun.js aeskey.js: SHA-256(key_string + salt_bytes.toString('utf8'))
 fn derive_aes_key_sync(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
-    let secret_bytes = base64::decode_config(secret_b64, base64::STANDARD_NO_PAD)
-        .unwrap_or_else(|_| secret_b64.as_bytes().to_vec());
-
-    let mut key = vec![0u8; 32];
-    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(&secret_bytes, salt, 100_000, &mut key);
-
-    Ok(key)
+    let salt_str = String::from_utf8_lossy(salt);
+    let combo = format!("{}{}", secret_b64, salt_str);
+    let hash = Sha256::digest(combo.as_bytes());
+    Ok(hash.to_vec())
 }
 
 /// Decrypt data using a raw symmetric key (AES-256-GCM, no ECDH/PBKDF2)
