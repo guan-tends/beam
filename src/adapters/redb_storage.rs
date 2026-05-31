@@ -200,6 +200,15 @@ impl RedbStorage {
 impl Actor for RedbStorage {
     async fn pre_start(&mut self, _ctx: &ActorContext) {
         debug!("RedbStorage started at {}", self.path);
+        // redb 4.x: open_table on a ReadTransaction returns TableDoesNotExist for
+        // missing tables, but on a WriteTransaction it auto-creates.  Warm the
+        // schema once at startup so that the very first read (e.g. auth recall
+        // on a brand-new database) finds the tables already present.
+        if let Ok(mut wtxn) = self.db.begin_write() {
+            let _ = wtxn.open_table(ROD_NODES);
+            let _ = wtxn.open_table(ROD_META);
+            let _ = wtxn.commit();
+        }
     }
 
     #[allow(unused_variables)]
