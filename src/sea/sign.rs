@@ -1,17 +1,50 @@
-//! Digital signatures
-//! Based on Gun.js sea/sign.js
-//! ECDSA P-256 signing
+//! Digital signatures — Gun.js `sea/sign.js` equivalent.
+//!
+//! Signs JSON data using ECDSA P-256 with SHA-256, returning the Gun.js
+//! wire format: `{"m": message, "s": signature}` where:
+//!
+//! - `m` is the JSON-serialized message
+//! - `s` is the base64-encoded 64-byte signature (r || s)
+//!
+//! # Blocking
+//!
+//! Signing is CPU-intensive and runs via [`tokio::task::spawn_blocking`]
+//! so the async executor is not blocked.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use rod::sea::{generate_pair, sign};
+//!
+//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
+//! let pair = generate_pair().await.unwrap();
+//! let data = serde_json::json!({"hello": "world"});
+//! let signed = sign(&data, &pair).await.unwrap();
+//! assert!(signed.get("m").is_some());
+//! assert!(signed.get("s").is_some());
+//! # });
+//! ```
 
 use super::{KeyPair, SeaError};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use serde_json::Value;
 use std::convert::TryInto;
 
-/// Sign data with a key pair
-/// Returns signed data in format: {m: message, s: signature}
+/// Sign JSON data with a key pair's private key.
 ///
-/// The message is JSON-serialized and signed using ECDSA P-256 with SHA-256.
-/// Signing runs in tokio::task::spawn_blocking so the async executor is not blocked.
+/// The data is JSON-serialized, then signed using ECDSA P-256 with
+/// SHA-256. The signature is returned in Gun.js format:
+/// `{"m": message, "s": base64_signature}`.
+///
+/// # Arguments
+///
+/// * `data` — JSON value to sign (will be cloned and serialized)
+/// * `pair` — Key pair containing the private key
+///
+/// # Errors
+///
+/// - [`SeaError::InvalidKey`] — private key is not 32 bytes or malformed
+/// - [`SeaError::Crypto`] — serialization or signing error
 pub async fn sign(data: &Value, pair: &KeyPair) -> Result<Value, SeaError> {
     let data = data.clone();
     let priv_key = pair.priv_key.clone();
@@ -50,4 +83,72 @@ pub async fn sign(data: &Value, pair: &KeyPair) -> Result<Value, SeaError> {
     })
     .await
     .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sea::{generate_pair, verify_sync};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_sign_basic() {
+        let pair = generate_pair().await.unwrap();
+        let data = json!({"hello": "world"});
+        let signed = sign(&data, &pair).await.unwrap();
+
+        assert!(signed.get("m").is_some(), "signed output should have 'm' field");
+        assert!(signed.get("s").is_some(), "signed output should have 's' field");
+    }
+
+    #[tokio::test]
+    async fn test_sign_verify_roundtrip() {
+        let pair = generate_pair().await.unwrap();
+        let data = json!({"message": "test", "count": 42});
+        let signed = sign(&data, &pair).await.unwrap();
+
+        // Verify against the pub key
+        let verified = verify_sync(&signed, &pair.pub_key).unwrap();
+        assert_eq!(verified, data);
+    }
+
+    #[tokio::test]
+    async fn test_sign_empty_object() {
+        let pair = generate_pair().await.unwrap();
+        let data = json!({});
+        let signed = sign(&data, &pair).await.unwrap();
+        let verified = verify_sync(&signed, &pair.pub_key).unwrap();
+        assert_eq!(verified, data);
+    }
+
+    #[tokio::test]
+    async fn test_sign_wrong_key_fails_verification() {
+        let pair_a = generate_pair().await.unwrap();
+        let pair_b = generate_pair().await.unwrap();
+        let data = json!({"secret": "data"});
+        let signed = sign(&data, &pair_a).await.unwrap();
+
+        // Verify with wrong pub key should fail
+        assert!(verify_sync(&signed, &pair_b.pub_key).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sign_invalid_priv_key() {
+        let pair = generate_pair().await.unwrap();
+        let mut bad_pair = pair.clone();
+        bad_pair.priv_key = "invalid_base64".to_string();
+        let data = json!({"test": 1});
+        assert!(sign(&data, &bad_pair).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sign_wrong_length_priv_key() {
+        let pair = generate_pair().await.unwrap();
+        let mut bad_pair = pair.clone();
+        // 16 bytes instead of 32
+        bad_pair.priv_key =
+            base64::encode_config([0u8; 16], base64::STANDARD_NO_PAD);
+        let data = json!({"test": 1});
+        assert!(sign(&data, &bad_pair).await.is_err());
+    }
 }
