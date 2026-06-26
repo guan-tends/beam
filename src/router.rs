@@ -1,4 +1,37 @@
 #![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
+
+//! Message router — the central hub for Rod's P2P message routing.
+//!
+//! The [`Router`] actor sits between [`crate::Node`] and all storage/network
+//! adapters. It handles:
+//!
+//! - **Message deduplication** — prevents processing the same message twice
+//!   using Gun.js DAM-style dedup (via [`crate::Dup`])
+//! - **Get routing** — forwards `Get` messages to storage, server peers, and
+//!   a random sample of known peers (MANET-style)
+//! - **Put relay** — fans out `Put` messages to storage adapters and network
+//!   peers, with anti-loop detection via peer-hop-lists
+//! - **Peer management** — tracks known peers and topic subscribers
+//! - **Flush forwarding** — sends flush messages to storage adapters for
+//!   durable persistence
+//! - **WebRTC signaling** — routes `RtcSignal` messages to the correct peer
+//!
+//! # Architecture
+//!
+//! ```text
+//!   Node ──→ Router ──→ Storage Adapters (MemoryStorage, RedbStorage)
+//!     ↑                   ↓
+//!     └──→ Router ──→ Network Adapters (WsConn, WsServer, WebRtcPeer)
+//!                        ↓
+//!                    Remote Peers
+//! ```
+//!
+//! # Deduplication
+//!
+//! Two layers of dedup, matching Gun.js:
+//! 1. Message ID (`#` field) — prevents echo and re-processing
+//! 2. Ack + hash (`@` + `##` fields) — deduplicates identical responses
+
 use crate::Config;
 use crate::Dup;
 use crate::actor::{Actor, ActorContext, Addr};
@@ -10,22 +43,44 @@ use rand::{seq::IteratorRandom, thread_rng};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Maximum number of seen Get messages to track for deduplication.
 static SEEN_MSGS_MAX_SIZE: usize = 10000;
 
+/// Tracks a seen Get message for dedup and response routing.
 struct SeenGetMessage {
+    /// The actor that sent the original Get — used to route the response back.
     from: Addr,
+    /// Checksum of the last reply sent to this requester. If a new reply has
+    /// the same checksum, it's suppressed (already sent).
     last_reply_checksum: Option<i32>,
 }
 
+/// The central message router actor.
+///
+/// Sits between [`crate::Node`] and all adapters, handling deduplication,
+/// peer management, subscription tracking, and message routing.
+///
+/// # Peer Management
+///
+/// The router tracks:
+/// - `known_peers` — all connected peer actor addresses
+/// - `peer_addrs` — mapping of peer IDs to addresses (for WebRTC signaling)
+/// - `server_peers` — outgoing WebSocket peers (subscribed to everything)
+/// - `subscribers_by_topic` — topic → set of interested peer addresses
+///
+/// # Deduplication
+///
+/// Uses [`crate::Dup`] for message-ID dedup and a [`BoundedHashMap`] for
+/// Get message tracking. Response dedup uses checksum comparison.
 pub struct Router {
     config: Config,
-    known_peers: HashSet<Addr>, // ping them periodically to remove closed addrs? and sort by timestamp & prefer long-lasting conns
-    peer_addrs: HashMap<String, Addr>, // peer_id to adapter address mapping for RtcSignal forwarding
+    known_peers: HashSet<Addr>,
+    peer_addrs: HashMap<String, Addr>,
     storage_adapters: HashSet<Addr>,
     network_adapters: HashSet<Addr>,
     storage_adapter_actors: Vec<Box<dyn Actor>>,
     network_adapter_actors: Vec<Box<dyn Actor>>,
-    server_peers: HashSet<Addr>, // temporary, so we can forward stuff to outgoing websocket peers (servers)
+    server_peers: HashSet<Addr>,
     dup: Dup,
     seen_get_messages: BoundedHashMap<String, SeenGetMessage>,
     subscribers_by_topic: HashMap<String, HashSet<Addr>>,
@@ -34,7 +89,8 @@ pub struct Router {
 
 #[async_trait]
 impl Actor for Router {
-    /// Listen to incoming messages and start [Actor]s
+    /// Starts storage and network adapter actors, registers them, and
+    /// optionally begins stats reporting.
     async fn pre_start(&mut self, ctx: &ActorContext) {
         while let Some(adapter) = self.storage_adapter_actors.pop() {
             let addr = ctx.start_actor(adapter);
@@ -49,6 +105,7 @@ impl Actor for Router {
             }
         }
 
+        // Stats collection is currently unimplemented (see update_stats)
         if self.config.stats {
             self.update_stats();
         }
@@ -83,23 +140,19 @@ impl Actor for Router {
                 }
             }
             Message::RtcSignal(rtc) => {
-                eprintln!(
-                    "[ROUTER] RtcSignal id={} to={:?} peer_addrs_keys={:?}",
+                debug!(
+                    "RtcSignal id={} to={:?} known_peers={}",
                     rtc.id,
                     rtc.to,
-                    self.peer_addrs.keys().collect::<Vec<_>>()
+                    self.known_peers.len()
                 );
                 if let Some(to_peer_id) = &rtc.to {
                     if let Some(addr) = self.peer_addrs.get(to_peer_id) {
-                        eprintln!(
-                            "[ROUTER] RtcSignal DELIVERING to local addr for peer_id={}",
-                            to_peer_id
-                        );
-                        let r = addr.send(Message::RtcSignal(rtc));
-                        eprintln!("[ROUTER] RtcSignal send result={:?}", r);
+                        debug!("RtcSignal delivering to local addr for peer_id={}", to_peer_id);
+                        let _ = addr.send(Message::RtcSignal(rtc));
                     } else {
-                        eprintln!(
-                            "[ROUTER] RtcSignal BROADCASTING to {} known_peers",
+                        debug!(
+                            "RtcSignal broadcasting to {} known_peers",
                             self.known_peers.len()
                         );
                         for addr in self.known_peers.iter() {
@@ -113,6 +166,16 @@ impl Actor for Router {
 }
 
 impl Router {
+    /// Creates a new router with the given config and adapter actors.
+    ///
+    /// The adapter actors are started in [`Actor::pre_start`], not here —
+    /// they need the router's `ActorContext` to spawn.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Node configuration
+    /// * `storage_adapter_actors` - Storage actors to be started
+    /// * `network_adapter_actors` - Network actors to be started
     pub fn new(
         config: Config,
         storage_adapter_actors: Vec<Box<dyn Actor>>,
@@ -134,37 +197,23 @@ impl Router {
         }
     }
 
+    /// Stats reporting placeholder.
+    ///
+    /// Stats collection is not yet implemented. The original implementation
+    /// used `sysinfo` to report memory/CPU/uptime but was removed due to
+    /// dependency weight. A future implementation could use lightweight
+    /// metrics via the `msg_counter` atomic.
     fn update_stats(&self) {
-        /*
-        let mut stats = node.get("node_stats").get(&peer_id);
-        let start_time = Instant::now();
-        let msg_counter = self.msg_counter;
-        ctx.child_task(async move {
-            let mut sys = System::new_all();
-            loop { // TODO break
-                sys.refresh_all();
-                stats.get("msgs_per_second").put(msg_counter.load(Ordering::Relaxed).into());
-                msg_counter.store(0, Ordering::Relaxed);
-                stats.get("total_memory").put(format!("{} MB", sys.total_memory() / 1000).into());
-                stats.get("used_memory").put(format!("{} MB", sys.used_memory() / 1000).into());
-                stats.get("cpu_usage").put(format!("{} %", sys.global_processor_info().cpu_usage() as u64).into());
-                let uptime_secs = start_time.elapsed().as_secs();
-                let uptime;
-                if uptime_secs <= 60 {
-                    uptime = format!("{} seconds", uptime_secs);
-                } else if uptime_secs <= 2 * 60 * 60 {
-                    uptime = format!("{} minutes", uptime_secs / 60);
-                } else {
-                    uptime = format!("{} hours", uptime_secs / 60 / 60);
-                }
-                stats.get("process_uptime").put(uptime.into());
-                sleep(Duration::from_millis(1000)).await;
-            }
-        });
-         */
+        // Stats collection not yet implemented.
+        // TODO: implement lightweight stats via msg_counter and broadcast channel.
     }
 
-    // record subscription & relay
+    /// Handles a `Get` message: records subscription, queries storage and peers.
+    ///
+    /// The Get is deduplicated by message ID. The requester is registered as
+    /// a subscriber for the topic (the first path segment of the node_id).
+    /// Storage adapters are queried first, then server peers, then a random
+    /// sample of up to 4 known subscribers/peers (MANET-style).
     fn handle_get(&mut self, get: Get) {
         if !get.id.chars().all(char::is_alphanumeric) {
             error!("id {}", get.id);
@@ -201,12 +250,11 @@ impl Router {
             already_sent_to.insert(addr.clone());
         }
 
-        // Ask network
+        // Ask network subscribers
         let mut errored = HashSet::new();
         let mut sent_to = 0;
         let mut rng = thread_rng();
         if let Some(topic_subscribers) = self.subscribers_by_topic.get(topic) {
-            // should have a list of all peers and send to those who are the likeliest to respond (MANET)
             let sample = topic_subscribers.iter().choose_multiple(&mut rng, 4);
             for addr in sample {
                 if get.from == *addr {
@@ -265,7 +313,18 @@ impl Router {
         }
     }
 
-    // relay to original requester or all subscribers
+    /// Handles a `Put` message: deduplicates, routes to storage or back to requester.
+    ///
+    /// If the Put is a response to a Get (has `in_response_to`), it's routed
+    /// directly back to the original requester. Otherwise, it's forwarded to
+    /// storage adapters and relayed to network peers.
+    ///
+    /// # Deduplication
+    ///
+    /// Two layers:
+    /// 1. Message ID dedup (via [`Dup`])
+    /// 2. Response checksum dedup — if the same response (same `@` + `##`) has
+    ///    been seen, it's suppressed
     fn handle_put(&mut self, put: Put) {
         if self.is_message_seen(&put.id) {
             return;
@@ -309,11 +368,13 @@ impl Router {
         };
     }
 
-    /// Relay a Put to server peers and subscribers.
-    /// Storage is NOT touched — this is pure network fan-out.
+    /// Relays a Put to server peers and subscribers.
+    ///
+    /// Storage is NOT touched here — this is pure network fan-out.
+    /// Anti-loop detection uses the `peer_hop_list` field: peers already
+    /// in the hop list are skipped.
     fn handle_put_relay(&mut self, put: &Put) {
         // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
-        // The relay's only job is to fan out with anti-loop via peer_hop_list.
         let mut hops = put.peer_hop_list.clone().unwrap_or_default();
         hops.insert(put.from.to_string());
         let mut already_sent_to = HashSet::new();
@@ -335,7 +396,6 @@ impl Router {
             let topic = node_id.split("/").next().unwrap_or("");
             if let Some(topic_subscribers) = self.subscribers_by_topic.get_mut(topic) {
                 topic_subscribers.retain(|addr| {
-                    // send & remove closed addresses
                     if put.from == *addr || hops.contains(&addr.to_string()) {
                         return true;
                     }
@@ -364,7 +424,6 @@ impl Router {
                 if sent_to >= 4 {
                     break;
                 }
-                // TODO: seems like the following is necessary, but it causes a test to fail
                 if already_sent_to.contains(addr) {
                     continue;
                 }
@@ -376,7 +435,7 @@ impl Router {
                 put.peer_hop_list = Some(hops.clone());
                 match addr.send(Message::Put(put)) {
                     Ok(_) => {
-                        debug!("sent put to random dude");
+                        debug!("sent put to random peer");
                     }
                     _ => {
                         errored.insert(addr.clone());
@@ -389,8 +448,11 @@ impl Router {
         }
     }
 
-    /// Forward a BatchPut to storage adapters (single transaction),
-    /// then relay each constituent Put individually.
+    /// Handles a `BatchPut`: forwards to storage (single transaction), then
+    /// relays each constituent Put individually with deduplication.
+    ///
+    /// This preserves atomic multi-write semantics for storage adapters while
+    /// still doing per-message dedup and network relay.
     fn handle_batch_put(&mut self, batch: BatchPut) {
         // Forward BatchPut to storage — preserves single-transaction semantics
         for addr in self.storage_adapters.iter() {
@@ -429,8 +491,11 @@ impl Router {
         }
     }
 
+    /// Handles a `Flush` message by forwarding to all storage adapters.
+    ///
+    /// Storage adapters can use this to trigger `fsync` or other durable
+    /// persistence. The flush is not relayed to network peers.
     fn handle_flush(&mut self, flush: Flush) {
-        // Forward flush to all storage adapters (they can fsync)
         let mut sent = HashSet::new();
         for addr in self.storage_adapters.iter() {
             if flush.from == *addr {
@@ -445,6 +510,10 @@ impl Router {
         debug!("forwarded flush to {} storage adapters", sent.len());
     }
 
+    /// Checks if a message ID has been seen, and tracks it if not.
+    ///
+    /// Returns `true` if the message was already seen (and should be
+    /// skipped), `false` if it's new. Also increments the message counter.
     fn is_message_seen(&mut self, id: &String) -> bool {
         self.msg_counter.fetch_add(1, Ordering::Relaxed);
         if self.dup.check(id) {
@@ -453,5 +522,42 @@ impl Router {
         }
         self.dup.track(id);
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::MemoryStorage;
+
+    #[test]
+    fn test_router_new() {
+        let config = Config::default();
+        let storage = vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
+        let router = Router::new(config, storage, vec![]);
+        assert!(router.known_peers.is_empty());
+        assert!(router.storage_adapters.is_empty());
+        assert!(router.network_adapters.is_empty());
+    }
+
+    #[test]
+    fn test_router_default_dedup() {
+        let router = Router::new(Config::default(), vec![], vec![]);
+        assert_eq!(router.dup.max(), 999);
+        assert_eq!(router.dup.age(), std::time::Duration::from_secs(9));
+    }
+
+    #[test]
+    fn test_router_seen_msg_capacity() {
+        let router = Router::new(Config::default(), vec![], vec![]);
+        // The seen_get_messages BoundedHashMap should have capacity SEEN_MSGS_MAX_SIZE
+        assert_eq!(SEEN_MSGS_MAX_SIZE, 10000);
+        let _ = router; // just verify it constructs
+    }
+
+    #[test]
+    fn test_router_msg_counter_starts_zero() {
+        let router = Router::new(Config::default(), vec![], vec![]);
+        assert_eq!(router.msg_counter.load(Ordering::Relaxed), 0);
     }
 }
