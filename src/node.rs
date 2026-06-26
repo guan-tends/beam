@@ -1,3 +1,38 @@
+//! Graph node — the core API for reading and writing data in the Rod graph.
+//!
+//! [`Node`] is the primary user-facing type. It represents a node in the
+//! distributed graph database and provides methods for:
+//!
+//! - **Reading**: [`Node::get`] (traverse to child), [`Node::on`] (subscribe
+//!   to value updates), [`Node::once`] (read once), [`Node::map`] (subscribe
+//!   to all children)
+//! - **Writing**: [`Node::put`] (set a value), [`Node::batch_put`] (atomic
+//!   multi-write)
+//! - **Networking**: [`Node::connect_peer`] (WebSocket), [`Node::connect_webrtc_peer`]
+//!   (WebRTC, feature-gated)
+//! - **Lifecycle**: [`Node::stop`]
+//!
+//! # Architecture
+//!
+//! A `Node` is cheaply cloneable (uses `Arc` internally). Each clone shares
+//! the same underlying state. Child nodes are created lazily via `get()` and
+//! are backed by their own actor + broadcast channels.
+//!
+//! The root node owns a [`Router`] actor that manages storage and network
+//! adapters, message deduplication, and peer routing. All `put` and `get`
+//! operations flow through the router.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use rod::{Node, Value};
+//!
+//! let mut db = Node::new();
+//! let mut sub = db.get("greeting").on();
+//! db.get("greeting").put("Hello World!".into());
+//! // sub.recv().await == Some(Value::Text("Hello World!"))
+//! ```
+
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::MemoryStorage;
 use crate::message::{BatchPut, Flush, Get, Message, Put};
@@ -11,33 +46,41 @@ use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime}; // TODO get time from ActorContext
+use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, oneshot};
 use tokio_tungstenite::connect_async;
-use url::Url; // TODO replace with generics: Sender and Receiver traits?
+use url::Url;
 
-// TODO proper automatic tests
-// Node { node: Arc<RwLock<NodeInner>> } instead of Arc<RwLock> for each member? compare performance
-// TODO connections don't seem to be closed / timeouted properly when client has disconnected
-// TODO should use async RwLock everywhere?
-
-// TODO: separate configs for each adapter?
-/// [Node] configuration object.
+/// Configuration for a [`Node`] and its associated adapters.
+///
+/// Controls public space access, stats reporting, broadcast channel sizing,
+/// and WebRTC ICE server configuration.
 #[derive(Clone)]
 pub struct Config {
+    /// Whether to accept writes to public space (non-user-owned nodes).
+    ///
+    /// When `true` (default), the node accepts puts to any node ID. When
+    /// `false`, only content-addressed (signed) data and user-owned nodes
+    /// are accepted — matching Gun.js `opt.enforce` semantics.
     pub allow_public_space: bool,
-    /// Prioritize data storage for this public key. Format: x.y where x and y are base64 encoded ECDSA public key coordinates.
-    /// Example: hyECQHwSo7fgr2MVfPyakvayPeixxsaAWVtZ-vbaiSc.TXIp8MnCtrnW6n2MrYquWPcc-DTmZzMBmc2yaGv9gIU
+    /// Public key to prioritize for this node (format: `x.y`).
+    ///
+    /// When set, the node will preferentially cache data owned by this
+    /// public key. Used for user-authenticated nodes.
     pub my_pub: Option<String>,
-    /// Show node stats at /stats?
+    /// Whether to expose node stats at the `/stats` endpoint.
+    ///
+    /// Currently a no-op placeholder — stats collection is not implemented.
     pub stats: bool,
     /// Buffer size for broadcast channels used by `on()` and `map()`.
+    ///
     /// Defaults to 4096. Increase for high-throughput scenarios; decrease
     /// to save memory per active subscription.
     pub broadcast_buffer_size: usize,
     /// STUN/TURN servers for WebRTC ICE negotiation.
-    /// Defaults to Google's public STUN server.
-    /// Only used when the `webrtc` feature is enabled.
+    ///
+    /// Defaults to Google's public STUN server. Only used when the
+    /// `webrtc` feature is enabled.
     pub ice_servers: Vec<String>,
 }
 
@@ -53,8 +96,25 @@ impl Default for Config {
     }
 }
 
-/// A Graph Node that provides an API for graph traversal.
-/// Sends, processes and relays Put & Get messages between storage and transport adapters.
+/// A graph node — the primary API for reading and writing data in Rod.
+///
+/// A `Node` represents a position in the distributed graph. The root node
+/// (created via [`Node::new`] or [`Node::new_with_config`]) owns the router
+/// and all adapter actors. Child nodes (created via [`Node::get`]) share
+/// the router and communicate through broadcast channels.
+///
+/// # Cloning
+///
+/// `Node` is cheaply cloneable. Clones share the same underlying state
+/// via `Arc`. This is important for async patterns where you need to
+/// send a node into multiple futures.
+///
+/// # Concurrency
+///
+/// Each node runs as a tokio actor, processing [`Message::Put`] messages
+/// in its `handle()` method. Reads are served via `broadcast` channels —
+/// `on()` returns a `Receiver<Value>` and `map()` returns a
+/// `Receiver<(String, Value)>`.
 #[derive(Clone)]
 pub struct Node {
     uid: Arc<RwLock<String>>,
@@ -82,44 +142,38 @@ impl Actor for Node {
 }
 
 impl Node {
-    /// Create a new root-level Node using default configuration. No network or storage adapters are started.
-    /// Create a new Node with default configuration and in-memory storage.
+    /// Creates a new root-level node with default configuration and in-memory storage.
+    ///
+    /// This is the simplest way to get started with Rod. The node will use
+    /// [`MemoryStorage`] and have no network adapters connected.
     pub fn new() -> Self {
-        // Use MemoryStorage by default
         let storage = MemoryStorage::new();
         Self::new_with_config(Config::default(), vec![Box::new(storage)], Vec::new())
     }
 
+    /// Returns the unique identifier of this node (the path joined by `/`).
+    ///
+    /// The root node has an empty `uid`. Child nodes have uids like
+    /// `"parent_key/child_key"`.
     pub fn id(&self) -> String {
         self.uid.read().clone()
     }
 
+    /// Returns the peer ID of this node's actor context.
+    ///
+    /// The peer ID is a random string generated at node creation time.
+    /// It identifies this node instance in the P2P mesh.
     pub fn peer_id(&self) -> String {
         self.actor_context.peer_id.read().clone()
     }
 
-    /// Create a new root-level Node using custom configuration. Starts the default or configured network and storage adapters.
+    /// Creates a new root-level node with custom configuration, storage, and network adapters.
     ///
-    /// # Examples
+    /// # Arguments
     ///
-    /// ```
-    /// tokio_test::block_on(async {
-    ///
-    ///     use rod::{Node, Config, Value};
-    ///     use rod::adapters::{MemoryStorage, OutgoingWebsocketManager};
-    ///
-    ///     let config = Config::default();
-    ///     let memory_storage = Box::new(MemoryStorage::new());
-    ///     let ws_client = Box::new(OutgoingWebsocketManager::new(config.clone(), vec!["wss://some-rod-server.com/ws".to_string()]));
-    ///     let mut db = Node::new_with_config(config.clone(), vec![memory_storage], vec![ws_client]);
-    ///     let mut sub = db.get("greeting").on();
-    ///     db.get("greeting").put("Hello World!".into());
-    ///     if let Value::Text(str) = sub.recv().await.unwrap() {
-    ///         assert_eq!(&str, "Hello World!");
-    ///     }
-    ///
-    /// })
-    /// ```
+    /// * `config` - Node configuration (see [`Config`])
+    /// * `storage_adapters` - Storage actors (e.g. [`MemoryStorage`], `RedbStorage`)
+    /// * `network_adapters` - Network actors (e.g. `OutgoingWebsocketManager`, `WsServer`)
     pub fn new_with_config(
         config: Config,
         storage_adapters: Vec<Box<dyn Actor>>,
@@ -146,9 +200,7 @@ impl Node {
         let addr = node.actor_context.start_actor(Box::new(node.clone()));
         *node.addr.write() = Some(addr);
 
-        let router = Box::new(Router::new(config, storage_adapters, network_adapters)); // actually, we should communicate with
-        // MemoryStorage (or sled), which has a special role in maintaining our version of the current state?
-        // MemoryStorage can then communicate with router as needed.
+        let router = Box::new(Router::new(config, storage_adapters, network_adapters));
         let router_addr = node.actor_context.start_router(router);
         node.actor_context.router = router_addr.clone();
         *node.router.write() = Some(router_addr);
@@ -156,6 +208,13 @@ impl Node {
         node
     }
 
+    /// Handles incoming [`Put`] messages by dispatching values to subscribers.
+    ///
+    /// If the put is a flush acknowledgement (has `in_response_to` matching a
+    /// pending flush), the flush's oneshot sender is triggered instead.
+    ///
+    /// For replay puts (have `in_response_to`), a `__rod_replay_complete__`
+    /// marker is sent on the map channel after all child values are dispatched.
     fn handle_put(&mut self, put: Put) {
         // Intercept flush acks before processing as normal data
         if let Some(response_id) = &put.in_response_to {
@@ -164,12 +223,11 @@ impl Node {
                 return;
             }
         }
-        // TODO accept puts only from our memory/sled adapter, which is supposed to serve the latest version.
-        // Or store latest NodeData in Node? Would eat up memory though.
         let is_replay = put.in_response_to.is_some();
         for (node_id, node_data) in put.updated_nodes {
             if node_id == *self.uid.read() {
                 for (child, child_data) in node_data {
+                    // Skip internal control keys
                     if child.starts_with("__rod_") {
                         continue;
                     }
@@ -189,6 +247,22 @@ impl Node {
         }
     }
 
+    /// Flushes pending writes to persistent storage and waits for acknowledgement.
+    ///
+    /// Sends a [`Flush`] message to all storage adapters via the router, then
+    /// waits for the first adapter to acknowledge. If no acknowledgement
+    /// arrives within the timeout, returns an error.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Maximum time to wait. Defaults to 30 seconds if `None`.
+    ///
+    /// # Errors
+    ///
+    /// - `"router not initialized"` — node has no router (shouldn't happen in normal use)
+    /// - `"failed to send flush to router"` — router channel is closed
+    /// - `"flush ack channel closed"` — oneshot sender was dropped
+    /// - `"flush timed out"` — no acknowledgement within timeout
     pub async fn flush_storage(&self, timeout: Option<Duration>) -> Result<(), String> {
         let router_addr = match &*self.router.read() {
             Some(addr) => addr.clone(),
@@ -243,7 +317,11 @@ impl Node {
         node
     }
 
-    /// Subscribe to the Node's value.
+    /// Subscribes to this node's value updates.
+    ///
+    /// Returns a [`broadcast::Receiver`] that will receive [`Value`] updates
+    /// whenever the node's value changes. The current value (if any) is
+    /// requested from storage via a `Get` message — it arrives asynchronously.
     pub fn on(&mut self) -> broadcast::Receiver<Value> {
         let key = if self.path.len() > 1 {
             self.path.last().cloned()
@@ -260,14 +338,22 @@ impl Node {
             addr = self.addr.read().clone().unwrap();
         }
         let get = Get::new(node_id, key, addr);
-        // subscribe before send
+        // subscribe before send so we don't miss the response
         let subscriber = self.on_sender.subscribe();
         if let Some(router) = self.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
         subscriber
     }
-    /// Get back the value only once, or None when not found.
+
+    /// Reads the node's value once, or `None` if not found within the timeout.
+    ///
+    /// This is a convenience wrapper around [`Node::on`] with a timeout.
+    /// The default timeout is 66ms (matching Gun.js's `opt.wait`).
+    ///
+    /// # Arguments
+    ///
+    /// * `wait` - Optional timeout. Defaults to 66ms.
     pub async fn once(&mut self, wait: Option<Duration>) -> Option<Value> {
         let val = tokio::time::timeout(wait.unwrap_or(Duration::from_millis(66)), self.on().recv())
             .await
@@ -276,10 +362,19 @@ impl Node {
         Some(val)
     }
 
-    /// Connect to a remote peer at `url` via WebSocket with automatic reconnection.
-    /// Retries with exponential backoff (starting at 1s, max 60s).
-    /// The spawned WsConn actor auto-handshakes via Message::Hi on pre_start,
-    /// and Router::handle_adds_peer handles the Hi to register the peer.
+    /// Connects to a remote peer via WebSocket with automatic reconnection.
+    ///
+    /// Retries with exponential backoff starting at 1 second, maxing at 60
+    /// seconds. The spawned `WsConn` actor auto-handshakes via [`Message::Hi`]
+    /// on `pre_start`, and the [`Router`] registers the peer on `Hi` receipt.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - WebSocket URL (e.g. `"wss://relay.example.com/ws"`)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the URL is invalid (should not happen with well-formed URLs).
     pub fn connect_peer(&self, url: &str) {
         let ctx = self.actor_context.clone();
         let ctx_for_actor = ctx.clone();
@@ -315,10 +410,12 @@ impl Node {
         });
     }
 
-    /// Connect to a remote peer via WebRTC data channel.
-    /// Signaling bootstraps over the existing WebSocket mesh via `Message::RtcSignal`.
-    /// Once the data channel opens, the peer is registered in `Router::known_peers`
-    /// just like a WebSocket peer, and Gun protocol messages flow over the P2P link.
+    /// Connects to a remote peer via WebRTC data channel.
+    ///
+    /// Signaling bootstraps over the existing WebSocket mesh via
+    /// [`Message::RtcSignal`]. Once the data channel opens, the peer is
+    /// registered in `Router::known_peers` just like a WebSocket peer, and
+    /// Gun protocol messages flow over the P2P link.
     ///
     /// Requires the `webrtc` feature. Without it, this method is a no-op.
     #[cfg(feature = "webrtc")]
@@ -347,8 +444,15 @@ impl Node {
         });
     }
 
-    // TODO: optionally specify which adapters to ask
-    /// Return a child Node corresponding to the given key.
+    /// Returns a child node corresponding to the given key, creating it if necessary.
+    ///
+    /// This is the primary graph traversal method. Calling `node.get("key")`
+    /// returns a child node. If the child already exists, the existing
+    /// instance is returned; otherwise a new child is created lazily.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The child key. Must not be empty (empty returns `self`).
     pub fn get(&mut self, key: &str) -> Node {
         if key.is_empty() {
             return self.clone();
@@ -368,12 +472,16 @@ impl Node {
         }
     }
 
-    /// Subscribe to all children of this Node.
+    /// Subscribes to all children of this node.
+    ///
+    /// Returns a [`broadcast::Receiver`] that emits `(child_key, value)` tuples
+    /// for each child. The current children (if any) are requested from storage
+    /// via a `Get` message.
     pub fn map(&self) -> broadcast::Receiver<(String, Value)> {
         let node_id = self.uid.read().to_string();
         let addr = self.addr.read().clone().unwrap();
         let get = Get::new(node_id, None, addr);
-        // subscribe before send
+        // subscribe before send so we don't miss the response
         let subscriber = self.map_sender.subscribe();
         if let Some(router) = self.router.read().clone() {
             let _ = router.send(Message::Get(get));
@@ -381,6 +489,11 @@ impl Node {
         subscriber
     }
 
+    /// Walks up the parent chain, building the `updated_nodes` map for a Put.
+    ///
+    /// For each ancestor, this inserts the child's value as a child of the
+    /// parent node in `updated_nodes`, and links the parent as a `Value::Link`.
+    /// This builds the Gun.js wire format's nested node structure.
     fn add_parent_nodes(
         &mut self,
         updated_nodes: &mut BTreeMap<String, Children>,
@@ -403,7 +516,15 @@ impl Node {
         }
     }
 
-    /// Set a Value for the Node.
+    /// Sets a value on this node and propagates it through the graph.
+    ///
+    /// The value is immediately sent to local `on()` subscribers, then a
+    /// [`Put`] message is sent to the router for storage and network relay.
+    /// The timestamp is the current Unix epoch in milliseconds.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The value to set (see [`Value`] for supported types)
     pub fn put(&mut self, value: Value) {
         let updated_at: f64 = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -420,22 +541,15 @@ impl Node {
         }
     }
 
-    /// Write multiple values in a single storage transaction.
+    /// Writes multiple values in a single storage transaction.
     ///
     /// Each operation is a `(path, value)` pair where `path` is a vector of
-    /// keys from the caller's Node down to the leaf. The caller should
-    /// invoke this on the **root** Node.
+    /// keys from the caller's [`Node`] down to the leaf. The caller should
+    /// invoke this on the **root** [`Node`].
     ///
-    /// # Example
+    /// # Arguments
     ///
-    /// ```no_run
-    /// use rod::Node;
-    /// let mut root = Node::new();
-    /// root.batch_put(vec![
-    ///     (vec!["users".to_string(), "alice".to_string()], "hi".into()),
-    ///     (vec!["users".to_string(), "bob".to_string()], "hey".into()),
-    /// ]);
-    /// ```
+    /// * `ops` - Vector of `(path, value)` pairs
     pub fn batch_put(&mut self, ops: Vec<(Vec<String>, Value)>) {
         let updated_at: f64 = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -468,21 +582,36 @@ impl Node {
         }
     }
 
+    /// Stops the node and all its child actors and adapters.
+    ///
+    /// This calls [`ActorContext::stop`] on the node's actor context, which
+    /// aborts all child tasks and sends stop signals to all child actors.
     pub fn stop(&mut self) {
         info!("Node stopping");
         self.actor_context.stop();
     }
 }
 
-/// Options for put operations (SEA cert support)
+/// Options for put operations (SEA certificate support).
+///
+/// Currently a placeholder — the `cert` field is reserved for future
+/// certificate-based write authorization.
 #[derive(Clone, Debug, Default)]
 pub struct PutOptions {
-    /// Optional certificate for delegated writes
+    /// Optional certificate for delegated writes.
+    ///
+    /// When set, the put will be checked against the certificate's
+    /// policy (path restrictions, expiry, authorized certificants).
+    /// Currently a no-op; reserved for future enforcement.
     pub cert: Option<serde_json::Value>,
 }
 
 impl Node {
-    /// Set a Value with options (currently cert is no-op; reserved for future enforcement)
+    /// Sets a value with options (currently cert is no-op; reserved for future enforcement).
+    ///
+    /// See [`Node::put`] for the basic version. The `options` parameter
+    /// allows passing a [`PutOptions`] with a certificate for delegated
+    /// writes, though certificate enforcement is not yet implemented.
     pub fn put_with_options(&mut self, value: Value, _options: PutOptions) {
         self.put(value);
     }
@@ -491,5 +620,116 @@ impl Node {
 impl Default for Node {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_node_new() {
+        let node = Node::new();
+        assert!(node.id().is_empty(), "root node uid should be empty");
+        assert!(!node.peer_id().is_empty(), "peer_id should be non-empty");
+    }
+
+    #[tokio::test]
+    async fn test_node_default() {
+        let node = Node::default();
+        assert!(node.id().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_node_get_creates_child() {
+        let mut node = Node::new();
+        let child = node.get("child_key");
+        assert_eq!(child.id(), "child_key");
+    }
+
+    #[tokio::test]
+    async fn test_node_get_empty_key_returns_self() {
+        let mut node = Node::new();
+        let child = node.get("");
+        assert_eq!(child.id(), node.id());
+    }
+
+    #[tokio::test]
+    async fn test_node_get_nested() {
+        let mut node = Node::new();
+        let deep = node.get("a").get("b").get("c");
+        assert_eq!(deep.id(), "a/b/c");
+    }
+
+    #[tokio::test]
+    async fn test_node_get_returns_existing() {
+        let mut node = Node::new();
+        let child1 = node.get("key");
+        let child2 = node.get("key");
+        assert_eq!(child1.id(), child2.id());
+    }
+
+    #[tokio::test]
+    async fn test_node_put_and_on() {
+        let mut node = Node::new();
+        let mut sub = node.get("greeting").on();
+        node.get("greeting").put("hello".into());
+        let val = tokio::time::timeout(Duration::from_secs(2), sub.recv())
+            .await
+            .expect("timeout")
+            .expect("recv error");
+        assert_eq!(val, Value::Text("hello".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_node_once() {
+        let mut node = Node::new();
+        node.get("key").put("value".into());
+        let val = node.get("key").once(Some(Duration::from_secs(2))).await;
+        assert_eq!(val, Some(Value::Text("value".to_string())));
+    }
+
+    #[tokio::test]
+    async fn test_node_batch_put() {
+        let mut node = Node::new();
+        let mut sub = node.get("a").on();
+        node.batch_put(vec![
+            (vec!["a".to_string()], Value::Text("x".into())),
+        ]);
+        let val = tokio::time::timeout(Duration::from_secs(2), sub.recv())
+            .await
+            .expect("timeout")
+            .expect("recv error");
+        assert_eq!(val, Value::Text("x".to_string()));
+    }
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+        assert!(config.allow_public_space);
+        assert!(config.stats);
+        assert_eq!(config.broadcast_buffer_size, 4096);
+        assert!(!config.ice_servers.is_empty());
+    }
+
+    #[test]
+    fn test_config_custom() {
+        let config = Config {
+            allow_public_space: false,
+            stats: false,
+            my_pub: Some("test.pub".to_string()),
+            broadcast_buffer_size: 1024,
+            ice_servers: vec![],
+        };
+        assert!(!config.allow_public_space);
+        assert!(!config.stats);
+        assert_eq!(config.broadcast_buffer_size, 1024);
+        assert!(config.ice_servers.is_empty());
+    }
+
+    #[test]
+    fn test_put_options_default() {
+        let opts = PutOptions::default();
+        assert!(opts.cert.is_none());
     }
 }
