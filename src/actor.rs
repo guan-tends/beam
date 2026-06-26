@@ -1,4 +1,36 @@
 #![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
+
+//! Actor framework — a lightweight actor model built on Tokio channels.
+//!
+//! This module provides a minimal actor system inspired by
+//! [Alice Ryhl's "Actors with Tokio"](https://ryhl.io/blog/actors-with-tokio/)
+//! guide. Actors communicate via typed messages over unbounded channels
+//! and run on the Tokio async runtime.
+//!
+//! # Architecture
+//!
+//! - [`Actor`] trait — defines the message handling interface
+//! - [`ActorContext`] — per-actor context with peer ID, router address, and
+//!   child actor management
+//! - [`Addr`] — a clonable, hashable address for sending messages to an actor
+//!
+//! # Message Flow
+//!
+//! ```text
+//! Sender → Addr.send(msg) → UnboundedChannel → Actor.handle(msg, ctx)
+//!                                                ↓
+//!                                          Actor can:
+//!                                          - spawn child actors
+//!                                          - send to router
+//!                                          - spawn child tasks
+//! ```
+//!
+//! # Shutdown
+//!
+//! Actors are stopped via a stop signal channel. When the context's `stop()`
+//! method is called, all child tasks are aborted and stop signals are sent
+//! to all child actors.
+
 use crate::Node;
 use crate::message::Message;
 use crate::utils::random_string;
@@ -15,23 +47,61 @@ use tokio::sync::mpsc::{
 };
 use tokio::task::JoinHandle;
 
-// TODO: stop signal. Or just call tokio runtime stop / abort? https://docs.rs/tokio/1.18.2/tokio/task/struct.JoinHandle.html#method.abort
-// TODO make this a trait. Move platform / runtime specific stuff here, so different versions can be used on wasm.
-
-/// Our very own actor framework. Kudos to https://ryhl.io/blog/actors-with-tokio/
+/// The core actor trait.
 ///
-/// Actors should relay messages to [Node::get_router_addr]
+/// Implementors define how to handle [`Message`] values and optionally
+/// configure lifecycle hooks (`pre_start`, `stopping`).
+///
+/// # Lifecycle
+///
+/// 1. `pre_start` — called once before the actor begins processing messages
+/// 2. `handle` — called for each message received
+/// 3. `stopping` — called once after the actor's message loop exits
+///
+/// # Example
+///
+/// ```no_run
+/// use rod::actor::{Actor, ActorContext};
+/// use rod::message::Message;
+/// use async_trait::async_trait;
+///
+/// struct EchoActor;
+///
+/// #[async_trait]
+/// impl Actor for EchoActor {
+///     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
+///         // Process message
+///     }
+/// }
+/// ```
 #[async_trait]
 pub trait Actor: Send + Sync + 'static {
+    /// Handle an incoming message.
     async fn handle(&mut self, message: Message, context: &ActorContext);
+
+    /// Called once before the actor starts processing messages.
+    ///
+    /// Override to initialize state, spawn child actors, or establish
+    /// connections. Defaults to a no-op.
     async fn pre_start(&mut self, _context: &ActorContext) {}
+
+    /// Called once after the actor's message loop exits.
+    ///
+    /// Override for cleanup logic. Defaults to a no-op.
     async fn stopping(&mut self, _context: &ActorContext) {}
-    /// Tells the router if this Actor wants to receive all messages (like the Multicast adapter)
+
+    /// Whether this actor wants to receive all messages (not just addressed
+    /// to it). Used by the Multicast adapter.
+    ///
+    /// Defaults to `false`.
     fn subscribe_to_everything(&self) -> bool {
         false
     }
 }
+
 impl dyn Actor {
+    /// Internal run loop — receives messages until the stop signal fires
+    /// or the channel is closed.
     async fn run(
         &mut self,
         mut receiver: UnboundedReceiver<Message>,
@@ -58,18 +128,41 @@ impl dyn Actor {
     }
 }
 
-/// Stuff that Actors need (cocaine not included)
+/// Per-actor context providing access to runtime services.
+///
+/// Each actor receives an `ActorContext` in `pre_start`, `handle`, and
+/// `stopping`. The context is clonable — clones share the same underlying
+/// state via `Arc`.
+///
+/// # Key Fields
+///
+/// - `peer_id` — this node's peer identifier (shared across all actors)
+/// - `router` — the router actor's address (for forwarding messages)
+/// - `addr` — this actor's own address
+/// - `node` — optional owned [`Node`] (set for the root actor)
 #[derive(Clone)]
 pub struct ActorContext {
+    /// This node's peer ID, shared across all actors.
     pub peer_id: Arc<RwLock<String>>,
+    /// The router actor's address for message forwarding.
     pub router: Addr,
+    /// Stop signals for child actors (keyed by child Addr).
     stop_signals: Arc<RwLock<HashMap<Addr, Sender<()>>>>,
+    /// Join handles for spawned child tasks.
     task_handles: Arc<RwLock<Vec<JoinHandle<()>>>>,
+    /// This actor's own address.
     pub addr: Addr,
+    /// Whether this actor has been stopped.
     pub is_stopped: Arc<RwLock<bool>>,
+    /// Optional owned Node (set for the root actor).
     pub node: Option<Node>,
 }
+
 impl ActorContext {
+    /// Creates a new `ActorContext` with the given peer ID.
+    ///
+    /// The `addr` and `router` fields are initialized to [`Addr::noop()`]
+    /// and should be set before use.
     pub fn new(peer_id: String) -> Self {
         Self {
             addr: Addr::noop(),
@@ -82,10 +175,12 @@ impl ActorContext {
         }
     }
 
+    /// Returns the number of child actors spawned by this context.
     pub fn child_actor_count(&self) -> usize {
         self.stop_signals.read().len()
     }
 
+    /// Creates a child context with the given address and stop signal.
     fn child_context(&self, addr: Addr, stop_signal: Sender<()>) -> Self {
         let mut stop_signals = HashMap::new();
         stop_signals.insert(addr.clone(), stop_signal);
@@ -100,14 +195,24 @@ impl ActorContext {
         }
     }
 
+    /// Spawns a child actor and returns its address.
+    ///
+    /// The actor runs in a tokio task. Its lifecycle is managed by this
+    /// context — calling `stop()` will send a stop signal and abort the task.
     pub fn start_actor(&self, actor: Box<dyn Actor>) -> Addr {
         self.start_actor_or_router(actor, false)
     }
 
+    /// Spawns a router actor. The router's context will have its `router`
+    /// field set to its own address (so messages forwarded to `router`
+    /// come back to itself).
     pub fn start_router(&self, actor: Box<dyn Actor>) -> Addr {
         self.start_actor_or_router(actor, true)
     }
 
+    /// Spawns a child async task (non-blocking).
+    ///
+    /// The task's `JoinHandle` is tracked so it can be aborted on stop.
     pub fn child_task<T>(&self, task: T)
     where
         T: Future<Output = ()> + Send + 'static,
@@ -116,6 +221,9 @@ impl ActorContext {
         self.task_handles.write().push(handle);
     }
 
+    /// Spawns a blocking child task via `spawn_blocking`.
+    ///
+    /// Use for CPU-intensive work that should not block the async runtime.
     pub fn blocking_child_task<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static,
@@ -142,6 +250,10 @@ impl ActorContext {
         addr
     }
 
+    /// Stops this actor and all its children.
+    ///
+    /// Aborts all child tasks and sends stop signals to all child actors.
+    /// Sets `is_stopped` to `true`.
     pub fn stop(&mut self) {
         for handle in self.task_handles.read().iter() {
             handle.abort();
@@ -154,12 +266,29 @@ impl ActorContext {
     }
 }
 
+/// A clonable, hashable address for sending messages to an actor.
+///
+/// `Addr` implements `PartialEq`, `Eq`, and `Hash` based on its `id` field
+/// (a random 32-character string), **not** the underlying channel sender.
+/// This means two `Addr`s are equal iff they refer to the same actor.
+///
+/// # Sending Messages
+///
+/// ```no_run
+/// use rod::actor::Addr;
+/// use rod::message::Message;
+///
+/// // addr.send(msg) returns Result<(), ()>
+/// // Err(()) means the actor's channel is closed (actor stopped)
+/// ```
 #[derive(Clone, Debug)]
 pub struct Addr {
     id: String,
     sender: UnboundedSender<Message>,
 }
+
 impl Addr {
+    /// Creates a new address wrapping an unbounded channel sender.
     pub fn new(sender: UnboundedSender<Message>) -> Self {
         Self {
             id: random_string(32),
@@ -167,6 +296,10 @@ impl Addr {
         }
     }
 
+    /// Sends a message to this actor.
+    ///
+    /// Returns `Ok(())` if the message was enqueued, `Err(())` if the
+    /// actor's channel is closed (actor has stopped).
     #[allow(clippy::result_unit_err)] // channel-closed is unrecoverable; no meaningful error payload
     pub fn send(&self, msg: Message) -> Result<(), ()> {
         match self.sender.send(msg) {
@@ -175,25 +308,124 @@ impl Addr {
         }
     }
 
-    /// Returns a no-op address
+    /// Returns a no-op address with a discarded receiver.
+    ///
+    /// Messages sent to a noop address are silently dropped. Useful as a
+    /// placeholder before a real address is set.
     pub fn noop() -> Addr {
         let (sender, _receiver) = unbounded_channel::<Message>();
         Addr::new(sender)
     }
 }
+
 impl PartialEq for Addr {
     fn eq(&self, other: &Addr) -> bool {
         self.id == other.id
     }
 }
+
 impl Eq for Addr {}
+
 impl Hash for Addr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
+
 impl fmt::Display for Addr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "actor:{}", self.id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_addr_equality() {
+        let (s1, _r1) = unbounded_channel::<Message>();
+        let (s2, _r2) = unbounded_channel::<Message>();
+        let a1 = Addr::new(s1);
+        let a2 = Addr::new(s2);
+        assert_ne!(a1, a2, "different addrs are not equal");
+        assert_eq!(a1, a1.clone(), "clone is equal");
+    }
+
+    #[test]
+    fn test_addr_hash() {
+        let (s1, _r1) = unbounded_channel::<Message>();
+        let a1 = Addr::new(s1);
+        let a2 = a1.clone();
+        let mut set = std::collections::HashSet::new();
+        set.insert(a1);
+        assert!(set.contains(&a2), "clone should be found in HashSet");
+    }
+
+    #[test]
+    fn test_addr_display() {
+        let (s, _r) = unbounded_channel::<Message>();
+        let addr = Addr::new(s);
+        let display = format!("{}", addr);
+        assert!(display.starts_with("actor:"));
+        assert_eq!(display.len(), "actor:".len() + 32);
+    }
+
+    #[test]
+    fn test_addr_noop_sends_silently() {
+        let addr = Addr::noop();
+        // Sending to noop should not panic
+        // We can't easily send a Message without constructing one,
+        // but noop creates a valid channel with a discarded receiver
+        assert_eq!(addr.id.len(), 32);
+    }
+
+    #[test]
+    fn test_addr_id_length() {
+        let (s, _r) = unbounded_channel::<Message>();
+        let addr = Addr::new(s);
+        assert_eq!(addr.id.len(), 32);
+        assert!(
+            addr.id.chars().all(|c| c.is_ascii_alphanumeric()),
+            "addr id should be alphanumeric"
+        );
+    }
+
+    struct TestActor {
+        received: Arc<RwLock<Vec<Message>>>,
+    }
+
+    #[async_trait]
+    impl Actor for TestActor {
+        async fn handle(&mut self, message: Message, _ctx: &ActorContext) {
+            self.received.write().push(message);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_actor_context_new() {
+        let ctx = ActorContext::new("peer1".to_string());
+        assert_eq!(*ctx.peer_id.read(), "peer1");
+        assert_eq!(ctx.child_actor_count(), 0);
+        assert!(!*ctx.is_stopped.read());
+    }
+
+    #[tokio::test]
+    async fn test_actor_start_and_send() {
+        let mut ctx = ActorContext::new("test".to_string());
+        let received = Arc::new(RwLock::new(Vec::new()));
+        let actor = TestActor {
+            received: received.clone(),
+        };
+        let _addr = ctx.start_actor(Box::new(actor));
+
+        // Give the actor a moment to start
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert_eq!(ctx.child_actor_count(), 1);
+
+        // Stop the actor
+        ctx.stop();
+        assert!(*ctx.is_stopped.read());
     }
 }

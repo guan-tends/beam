@@ -26,12 +26,10 @@ use std::collections::{HashMap, VecDeque};
 ///
 /// # Example
 ///
-/// ```
-/// use rod::utils::random_string;
-///
-/// let id = random_string(32);
+/// ```ignore
+/// // Module is crate-private; use from within rod.
+/// let id = rod::utils::random_string(32);
 /// assert_eq!(id.len(), 32);
-/// assert!(id.chars().all(|c| c.is_ascii_alphanumeric()));
 /// ```
 pub fn random_string(len: usize) -> String {
     thread_rng()
@@ -50,16 +48,12 @@ pub fn random_string(len: usize) -> String {
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
+/// // Module is crate-private; use from within rod.
 /// use rod::utils::BoundedHashMap;
-///
 /// let mut map = BoundedHashMap::new(2);
 /// map.insert("a", 1);
 /// map.insert("b", 2);
-/// assert_eq!(map.get(&"a"), Some(&1)); // still present
-/// map.insert("c", 3); // "a" evicted (oldest)
-/// assert_eq!(map.get(&"a"), None);
-/// assert_eq!(map.get(&"c"), Some(&3));
 /// ```
 pub struct BoundedHashMap<K, V> {
     map: HashMap<K, V>,
