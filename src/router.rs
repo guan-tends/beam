@@ -1,8 +1,8 @@
+use crate::Config;
+use crate::Dup;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::utils::BoundedHashMap;
-use crate::Dup;
-use crate::Config;
 use async_trait::async_trait;
 use log::{debug, error, info};
 use rand::{seq::IteratorRandom, thread_rng};
@@ -71,7 +71,10 @@ impl Actor for Router {
                 if !peer_id.is_empty() {
                     if let Some(existing) = self.peer_addrs.get(&peer_id) {
                         if existing != &from {
-                            error!("Router peer_id collision: '{}' already mapped to {:?}, rejecting {:?}. Each peer_id must be unique.", peer_id, existing, from);
+                            error!(
+                                "Router peer_id collision: '{}' already mapped to {:?}, rejecting {:?}. Each peer_id must be unique.",
+                                peer_id, existing, from
+                            );
                             return;
                         }
                     }
@@ -79,14 +82,25 @@ impl Actor for Router {
                 }
             }
             Message::RtcSignal(rtc) => {
-                eprintln!("[ROUTER] RtcSignal id={} to={:?} peer_addrs_keys={:?}", rtc.id, rtc.to, self.peer_addrs.keys().collect::<Vec<_>>());
+                eprintln!(
+                    "[ROUTER] RtcSignal id={} to={:?} peer_addrs_keys={:?}",
+                    rtc.id,
+                    rtc.to,
+                    self.peer_addrs.keys().collect::<Vec<_>>()
+                );
                 if let Some(to_peer_id) = &rtc.to {
                     if let Some(addr) = self.peer_addrs.get(to_peer_id) {
-                        eprintln!("[ROUTER] RtcSignal DELIVERING to local addr for peer_id={}", to_peer_id);
+                        eprintln!(
+                            "[ROUTER] RtcSignal DELIVERING to local addr for peer_id={}",
+                            to_peer_id
+                        );
                         let r = addr.send(Message::RtcSignal(rtc));
                         eprintln!("[ROUTER] RtcSignal send result={:?}", r);
                     } else {
-                        eprintln!("[ROUTER] RtcSignal BROADCASTING to {} known_peers", self.known_peers.len());
+                        eprintln!(
+                            "[ROUTER] RtcSignal BROADCASTING to {} known_peers",
+                            self.known_peers.len()
+                        );
                         for addr in self.known_peers.iter() {
                             let _ = addr.send(Message::RtcSignal(rtc.clone()));
                         }
@@ -269,7 +283,8 @@ impl Router {
         match &put.in_response_to {
             Some(in_response_to) => {
                 if let Some(seen_get_message) = self.seen_get_messages.get_mut(in_response_to) {
-                    if put.checksum != None && put.checksum == seen_get_message.last_reply_checksum {
+                    if put.checksum != None && put.checksum == seen_get_message.last_reply_checksum
+                    {
                         debug!("same reply already sent");
                         return;
                     }

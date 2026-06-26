@@ -6,11 +6,11 @@
 
 #[cfg(feature = "webrtc")]
 mod tests {
-    use rod::{Config, Node, Value};
     use rod::adapters::{MemoryStorage, OutgoingWebsocketManager, WsServer};
+    use rod::{Config, Node, Value};
     use std::time::Instant;
     use tokio::net::TcpStream;
-    use tokio::time::{sleep, timeout, Duration};
+    use tokio::time::{Duration, sleep, timeout};
 
     async fn wait_for_port(port: u16, timeout_ms: u64) {
         let start = Instant::now();
@@ -67,7 +67,10 @@ mod tests {
         sleep(Duration::from_millis(5000)).await;
 
         // Write a value on peer_b; it should propagate to peer_a via DataChannel.
-        peer_b.get("sync").get("test").put("Hello from WebRTC".into());
+        peer_b
+            .get("sync")
+            .get("test")
+            .put("Hello from WebRTC".into());
 
         // Assert peer_a receives the synced value.
         let val = timeout(Duration::from_secs(30), sub.recv())

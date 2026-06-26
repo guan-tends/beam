@@ -1,8 +1,8 @@
+use crate::Config;
+use crate::Node;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::ws_conn::WsConn;
 use crate::message::Message;
-use crate::Config;
-use crate::Node;
 
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -10,9 +10,9 @@ use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
-use futures_util::{future, StreamExt};
+use futures_util::{StreamExt, future};
 use log::info;
 use tokio::net::TcpListener;
 use tokio_native_tls::native_tls::Identity;

@@ -55,7 +55,9 @@ impl Dup {
     pub fn track(&mut self, id: &str) {
         self.entries.insert(
             id.to_string(),
-            DupEntry { was: Instant::now() },
+            DupEntry {
+                was: Instant::now(),
+            },
         );
         if self.entries.len() > self.max {
             self.drop_oldest(self.max / 3);
@@ -85,7 +87,9 @@ impl Dup {
 
     fn drop_oldest(&mut self, n: usize) {
         let n = n.min(self.entries.len());
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
         // Collect keys + timestamps, sort by age, remove oldest n
         let mut pairs: Vec<(String, Instant)> = self
             .entries

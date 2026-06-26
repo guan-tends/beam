@@ -2,23 +2,23 @@
 //! Based on Gun.js sea/ directory
 //! Provides encryption, authentication, and authorization capabilities
 
+pub mod certify;
+pub mod decrypt;
+pub mod encrypt;
 pub mod pair;
+pub mod secret;
 pub mod session;
 pub mod sign;
+pub mod user;
 pub mod verify;
 pub mod work;
-pub mod secret;
-pub mod encrypt;
-pub mod decrypt;
-pub mod certify;
-pub mod user;
 
+use crate::types::Value as RodValue;
+use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use async_trait::async_trait;
 use zeroize::Zeroize;
-use crate::types::Value as RodValue;
 
 /// Key pair for signing and encryption
 #[derive(Clone, Debug)]
@@ -129,8 +129,6 @@ impl Drop for SessionState {
     }
 }
 
-
-
 /// Identity metadata for an authenticated user.
 /// Mirrors Gun.js `user.is` semantics.
 #[derive(Clone, Debug)]
@@ -195,7 +193,6 @@ impl User {
         })
     }
 
-
     /// Clear key pair from memory and mark unauthenticated (all clones invalidated)
     pub fn leave(&self) {
         if let Ok(mut inner) = self.inner.write() {
@@ -247,14 +244,10 @@ pub async fn verify_async(signed_data: &JsonValue, pub_key: &str) -> Result<Json
 
 /// Re-export synchronous secret derivation for use inside spawn_blocking closures
 pub use secret::secret_sync;
-pub use user::{verify_trust, accept_grant};
+pub use user::{accept_grant, verify_trust};
 
 /// Compute proof-of-work or content hash
-pub async fn work(
-    data: &[u8],
-    salt: Option<&[u8]>,
-    opts: WorkOptions,
-) -> Result<String, SeaError> {
+pub async fn work(data: &[u8], salt: Option<&[u8]>, opts: WorkOptions) -> Result<String, SeaError> {
     work::work(data, salt, opts).await
 }
 
@@ -280,7 +273,6 @@ pub async fn decrypt(
 ) -> Result<JsonValue, SeaError> {
     decrypt::decrypt(encrypted, pair, their_epub).await
 }
-
 
 // ─── Symmetric cipher re-exports (no ECDH/PBKDF2) ───
 
@@ -317,7 +309,6 @@ pub fn is_pubkey_certified(payload: &JsonValue, pubkey: &str) -> bool {
     certify::is_certified(payload, pubkey)
 }
 
-
 /// Sign JSON data and wrap as a Rod Value::Text for user-space puts.
 /// The returned value is a JSON-serialized {"m": message, "s": signature} string.
 /// Call this before db.put(value) when writing authenticated user data.
@@ -331,9 +322,9 @@ pub async fn sign_value(data: &JsonValue, pair: &KeyPair) -> Result<RodValue, Se
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::sea::session::InMemorySessionStorage;
     use crate::sea::{KeyPair, SessionStorage};
+    use serde_json::json;
 
     #[tokio::test]
     async fn test_generate_pair() {
@@ -376,7 +367,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_sha256() {
-        let result = work(b"hello", None, WorkOptions { name: Some("SHA-256".to_string()), ..Default::default() }).await.unwrap();
+        let result = work(
+            b"hello",
+            None,
+            WorkOptions {
+                name: Some("SHA-256".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(!result.is_empty());
     }
 
@@ -384,8 +384,12 @@ mod tests {
     async fn test_secret_shared_equality() {
         let alice = generate_pair().await.unwrap();
         let bob = generate_pair().await.unwrap();
-        let ab = secret(bob.epub_key.as_ref().unwrap(), &alice).await.unwrap();
-        let ba = secret(alice.epub_key.as_ref().unwrap(), &bob).await.unwrap();
+        let ab = secret(bob.epub_key.as_ref().unwrap(), &alice)
+            .await
+            .unwrap();
+        let ba = secret(alice.epub_key.as_ref().unwrap(), &bob)
+            .await
+            .unwrap();
         assert_eq!(ab, ba);
     }
 
@@ -401,7 +405,9 @@ mod tests {
     #[tokio::test]
     async fn test_user_create_and_auth() {
         let mut node = crate::Node::new();
-        let user = User::create("testuser", "testpass", &mut node).await.unwrap();
+        let user = User::create("testuser", "testpass", &mut node)
+            .await
+            .unwrap();
         assert!(user.is_authenticated());
         assert_eq!(user.alias(), Some("testuser".to_string()));
         let auth = User::auth("testuser", "testpass", &mut node).await.unwrap();
@@ -418,7 +424,9 @@ mod tests {
     #[tokio::test]
     async fn test_user_leave_zeroizes() {
         let mut node = crate::Node::new();
-        let user = User::create("leaveuser", "leavepass", &mut node).await.unwrap();
+        let user = User::create("leaveuser", "leavepass", &mut node)
+            .await
+            .unwrap();
         assert!(!user.pair().priv_key.is_empty());
         user.leave();
         assert!(!user.is_authenticated());
@@ -450,7 +458,9 @@ mod tests {
     async fn test_session_memory_save_load_recall() {
         let mut node = crate::Node::new();
         let storage = InMemorySessionStorage::new();
-        let user = User::create("sessuser", "sesspass", &mut node).await.unwrap();
+        let user = User::create("sessuser", "sesspass", &mut node)
+            .await
+            .unwrap();
         user.save_to(&storage).await.unwrap();
         let recalled = User::recall("sessuser", &storage).await.unwrap();
         assert!(recalled.is_authenticated());
@@ -460,13 +470,18 @@ mod tests {
     #[tokio::test]
     async fn test_session_recall_missing() {
         let storage = InMemorySessionStorage::new();
-        assert!(matches!(User::recall("nosuch", &storage).await, Err(SeaError::AuthFailed)));
+        assert!(matches!(
+            User::recall("nosuch", &storage).await,
+            Err(SeaError::AuthFailed)
+        ));
     }
 
     #[tokio::test]
     async fn test_session_leave_invalidates_clones() {
         let mut node = crate::Node::new();
-        let user = User::create("cloneuser", "clonepass", &mut node).await.unwrap();
+        let user = User::create("cloneuser", "clonepass", &mut node)
+            .await
+            .unwrap();
         let clone = user.clone();
         user.leave();
         assert!(!user.is_authenticated());
@@ -479,8 +494,14 @@ mod tests {
     async fn test_session_caller_side_remember() {
         let mut node = crate::Node::new();
         let storage = InMemorySessionStorage::new();
-        let _ = User::create("remember_user", "remember_pass", &mut node).await.unwrap();
-        let user = node.user().auth("remember_user", "remember_pass").await.unwrap();
+        let _ = User::create("remember_user", "remember_pass", &mut node)
+            .await
+            .unwrap();
+        let user = node
+            .user()
+            .auth("remember_user", "remember_pass")
+            .await
+            .unwrap();
         user.save_to(&storage).await.unwrap();
         assert!(User::recall("remember_user", &storage).await.is_ok());
     }
@@ -504,7 +525,9 @@ mod tests {
 
         let certificants = vec![alice.pub_key.clone(), bob.pub_key.clone()];
         let policies = Some(json!({"e": 9999999999999.0_f64, "r": ".*", "w": "skills/"}));
-        let signed = certify(&certificants, policies.as_ref(), &authority).await.unwrap();
+        let signed = certify(&certificants, policies.as_ref(), &authority)
+            .await
+            .unwrap();
 
         // Verify with correct authority
         let payload = verify_certificate(&signed, &authority.pub_key).unwrap();
@@ -522,7 +545,9 @@ mod tests {
 
         // Expiry in the past (1970)
         let policies = Some(json!({"e": 1000.0_f64}));
-        let signed = certify(&[alice.pub_key.clone()], policies.as_ref(), &authority).await.unwrap();
+        let signed = certify(&[alice.pub_key.clone()], policies.as_ref(), &authority)
+            .await
+            .unwrap();
 
         assert!(verify_certificate(&signed, &authority.pub_key).is_err());
     }
@@ -542,22 +567,30 @@ mod tests {
         let mut node = crate::Node::new();
 
         // Alice and Bob each create accounts
-        let alice_user = User::create("alice_int", "secretA", &mut node).await.unwrap();
+        let alice_user = User::create("alice_int", "secretA", &mut node)
+            .await
+            .unwrap();
         let bob_user = User::create("bob_int", "secretB", &mut node).await.unwrap();
 
         let alice_pair = alice_user.pair();
         let bob_pair = bob_user.pair();
 
         // Alice trusts Bob to write at path "test/data"
-        alice_user.trust(&bob_pair.pub_key, Some("test/data"), &mut node).await.unwrap();
+        alice_user
+            .trust(&bob_pair.pub_key, Some("test/data"), &mut node)
+            .await
+            .unwrap();
 
         // Alice grants Bob access to secret at "test/data"
-        alice_user.grant(
-            &bob_pair.pub_key,
-            bob_pair.epub_key.as_ref().unwrap(),
-            "test/data",
-            &mut node,
-        ).await.unwrap();
+        alice_user
+            .grant(
+                &bob_pair.pub_key,
+                bob_pair.epub_key.as_ref().unwrap(),
+                "test/data",
+                &mut node,
+            )
+            .await
+            .unwrap();
 
         // Verify trust from Bob's perspective
         let trusted = verify_trust(
@@ -565,7 +598,9 @@ mod tests {
             &bob_pair.pub_key,
             Some("test/data"),
             &mut node,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert!(trusted, "Bob should be trusted by Alice for test/data");
 
         // Bob accepts the grant and recovers the secret
@@ -575,7 +610,9 @@ mod tests {
             alice_pair.epub_key.as_ref().unwrap(),
             &bob_pair,
             &mut node,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         // Secret should be a non-empty base64 string
         assert!(!secret.is_empty(), "secret should be recovered");
@@ -592,12 +629,15 @@ mod tests {
         let bob_pair = bob_user.pair();
 
         // Alice grants Bob
-        alice_user.grant(
-            &bob_pair.pub_key,
-            bob_pair.epub_key.as_ref().unwrap(),
-            "docs/shared",
-            &mut node,
-        ).await.unwrap();
+        alice_user
+            .grant(
+                &bob_pair.pub_key,
+                bob_pair.epub_key.as_ref().unwrap(),
+                "docs/shared",
+                &mut node,
+            )
+            .await
+            .unwrap();
 
         // Alice (as owner) reads her own backup copy at ~{pub}/grant/{path}/{my_pub}
         let mut owner_grant = node
@@ -606,26 +646,37 @@ mod tests {
             .get("docs__shared")
             .get(&alice_pair.pub_key);
 
-        let owner_text = owner_grant.once(None).await
-            .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None });
+        let owner_text = owner_grant.once(None).await.and_then(|v| match v {
+            RodValue::Text(t) => Some(t),
+            _ => None,
+        });
 
         assert!(owner_text.is_some(), "owner backup copy should exist");
 
         // Verify it's a signed payload {m,s}
         let parsed: JsonValue = serde_json::from_str(&owner_text.unwrap()).unwrap();
-        assert!(parsed.get("m").is_some(), "backup should be signed payload with m");
-        assert!(parsed.get("s").is_some(), "backup should be signed payload with s");
+        assert!(
+            parsed.get("m").is_some(),
+            "backup should be signed payload with m"
+        );
+        assert!(
+            parsed.get("s").is_some(),
+            "backup should be signed payload with s"
+        );
     }
-
 
     #[tokio::test]
     async fn test_user_secret_roundtrip() {
         let mut node = crate::Node::new();
-        let user = User::create("secretAlice", "hunter42", &mut node).await.unwrap();
+        let user = User::create("secretAlice", "hunter42", &mut node)
+            .await
+            .unwrap();
         let pair = user.pair();
 
         let payload = json!({"token": "abracadabra", "exp": 1234567890});
-        user.secret(&payload, "wallet/key", &mut node).await.unwrap();
+        user.secret(&payload, "wallet/key", &mut node)
+            .await
+            .unwrap();
 
         let path_key = "wallet__key";
         let mut secret_node = node
@@ -633,8 +684,13 @@ mod tests {
             .get("secret")
             .get(&path_key);
 
-        let stored = secret_node.once(None).await
-            .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None })
+        let stored = secret_node
+            .once(None)
+            .await
+            .and_then(|v| match v {
+                RodValue::Text(t) => Some(t),
+                _ => None,
+            })
             .expect("secret should be stored");
 
         let outer: JsonValue = serde_json::from_str(&stored).unwrap();
@@ -649,34 +705,60 @@ mod tests {
         assert_eq!(decrypted, payload);
     }
 
-
-
     #[tokio::test]
     async fn test_secret_grant_accept_full_roundtrip() {
         let mut node = crate::Node::new();
 
         // 1. Alice creates user and stores a self-encrypted secret
-        let alice = User::create("roundtripAlice", "alicePass", &mut node).await.unwrap();
+        let alice = User::create("roundtripAlice", "alicePass", &mut node)
+            .await
+            .unwrap();
         let alice_pair = alice.pair();
         let secret_data = json!({"api_key": "sk-live-4242", "tier": "pro"});
-        alice.secret(&secret_data, "api/credentials", &mut node).await.unwrap();
+        alice
+            .secret(&secret_data, "api/credentials", &mut node)
+            .await
+            .unwrap();
 
         // 2. Bob creates user
-        let bob = User::create("roundtripBob", "bobPass", &mut node).await.unwrap();
+        let bob = User::create("roundtripBob", "bobPass", &mut node)
+            .await
+            .unwrap();
         let bob_pair = bob.pair();
 
         // 3. Alice trusts Bob for the same path
-        alice.trust(&bob_pair.pub_key, Some("api/credentials"), &mut node).await.unwrap();
+        alice
+            .trust(&bob_pair.pub_key, Some("api/credentials"), &mut node)
+            .await
+            .unwrap();
 
         // 4. Alice grants Bob a random shared secret (grant generates 16 bytes internally)
         let bob_epub = bob_pair.epub_key.as_ref().expect("bob has epub");
-        alice.grant(&bob_pair.pub_key, bob_epub, "api/credentials", &mut node).await.unwrap();
+        alice
+            .grant(&bob_pair.pub_key, bob_epub, "api/credentials", &mut node)
+            .await
+            .unwrap();
 
         // 5. Bob accepts the grant and recovers a shared secret
         let alice_epub = alice_pair.epub_key.as_ref().expect("alice has epub");
-        let recovered = accept_grant("api/credentials", &alice_pair.pub_key, alice_epub, &bob_pair, &mut node).await.unwrap();
-        assert!(!recovered.is_empty(), "Bob should recover a non-empty secret");
-        assert_eq!(recovered.len(), 22, "grant generates 16 bytes => 22 chars base64 no-pad");
+        let recovered = accept_grant(
+            "api/credentials",
+            &alice_pair.pub_key,
+            alice_epub,
+            &bob_pair,
+            &mut node,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !recovered.is_empty(),
+            "Bob should recover a non-empty secret"
+        );
+        assert_eq!(
+            recovered.len(),
+            22,
+            "grant generates 16 bytes => 22 chars base64 no-pad"
+        );
 
         // 6. Alice's self-encrypted data is still intact and independent
         let mut alice_secret = node
@@ -684,9 +766,14 @@ mod tests {
             .get("secret")
             .get("api__credentials");
 
-        let self_enc = alice_secret.once(None).await
-            .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None });
-        assert!(self_enc.is_some(), "Alice's self-encrypted secret should still exist");
+        let self_enc = alice_secret.once(None).await.and_then(|v| match v {
+            RodValue::Text(t) => Some(t),
+            _ => None,
+        });
+        assert!(
+            self_enc.is_some(),
+            "Alice's self-encrypted secret should still exist"
+        );
 
         // Verify Bob's recovered secret !== Alice's self-encrypted data (different things)
         let outer: JsonValue = serde_json::from_str(&self_enc.unwrap()).unwrap();
@@ -698,7 +785,9 @@ mod tests {
         let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD).unwrap();
 
         let decrypted = decrypt_symmetric(&enc, &dh_bytes).await.unwrap();
-        assert_eq!(decrypted, secret_data, "Alice's self-encrypted copy should match original");
+        assert_eq!(
+            decrypted, secret_data,
+            "Alice's self-encrypted copy should match original"
+        );
     }
-
 }

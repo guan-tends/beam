@@ -1,11 +1,11 @@
 use crate::actor::{Actor, ActorContext};
 use crate::message::Message;
-use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::SinkExt;
+use futures_util::stream::{SplitSink, SplitStream};
 
 use async_trait::async_trait;
 
-use futures_util::{future, TryStreamExt};
+use futures_util::{TryStreamExt, future};
 use log::{debug, error, info};
 
 use tokio_tungstenite::tungstenite::Message as WsMessage;

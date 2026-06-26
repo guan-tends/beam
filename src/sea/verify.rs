@@ -3,7 +3,7 @@
 //! ECDSA P-256 verification
 
 use super::SeaError;
-use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::Value;
 use std::convert::TryInto;
 
@@ -54,8 +54,7 @@ pub fn verify_sync(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError
         .try_into()
         .map_err(|_| SeaError::VerificationFailed)?;
 
-    let signature = Signature::from_slice(&sig_array)
-        .map_err(|_| SeaError::VerificationFailed)?;
+    let signature = Signature::from_slice(&sig_array).map_err(|_| SeaError::VerificationFailed)?;
 
     // Verify (uses ECDSA with internal SHA-256 hashing)
     verifying_key
@@ -63,8 +62,7 @@ pub fn verify_sync(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError
         .map_err(|_| SeaError::VerificationFailed)?;
 
     // Parse and return the message
-    serde_json::from_str(message)
-        .map_err(|e| SeaError::Crypto(format!("invalid JSON: {}", e)))
+    serde_json::from_str(message).map_err(|e| SeaError::Crypto(format!("invalid JSON: {}", e)))
 }
 
 /// Verify a signature asynchronously (non-blocking via spawn_blocking)

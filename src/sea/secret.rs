@@ -44,21 +44,22 @@ pub fn secret_sync(their_epub: &str, pair: &KeyPair) -> Result<String, SeaError>
     let mut priv_array = [0u8; 32];
     priv_array.copy_from_slice(&our_priv_bytes);
 
-    let our_secret = p256::SecretKey::from_bytes(&priv_array.into())
-        .map_err(|_| SeaError::InvalidKey)?;
+    let our_secret =
+        p256::SecretKey::from_bytes(&priv_array.into()).map_err(|_| SeaError::InvalidKey)?;
 
     // Derive shared secret using ECDH
-    let shared_secret = p256::ecdh::diffie_hellman(
-        our_secret.to_nonzero_scalar(),
-        their_pub.as_affine(),
-    );
+    let shared_secret =
+        p256::ecdh::diffie_hellman(our_secret.to_nonzero_scalar(), their_pub.as_affine());
 
     // Extract the x-coordinate of the shared point as the secret
     // This is what Gun.js does — uses the x coordinate
     let shared_bytes = shared_secret.raw_secret_bytes();
 
     // Return as base64 (matching Gun.js format)
-    Ok(base64::encode_config(&shared_bytes[..], base64::STANDARD_NO_PAD))
+    Ok(base64::encode_config(
+        &shared_bytes[..],
+        base64::STANDARD_NO_PAD,
+    ))
 }
 
 /// Parse an epub key (format: x.y base64) into a p256 PublicKey

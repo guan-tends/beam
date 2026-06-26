@@ -10,14 +10,14 @@
 //! Expiry: default 30 days, overridable via `BEAM_SEA_SESSION_EXPIRY_DAYS`.
 
 use super::super::{KeyPair, SeaError, SessionStorage};
-use async_trait::async_trait;
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce as AesNonce,
+    aead::{Aead, KeyInit},
 };
+use async_trait::async_trait;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -117,12 +117,14 @@ impl EncryptedFileSessionStorage {
 
         // 1. Env var
         if let Ok(b64) = std::env::var("BEAM_SEA_SESSION_KEY") {
-            let key = base64::decode_config(&b64, base64::STANDARD)
-                .map_err(|_| SeaError::SessionStorage("bad base64 in BEAM_SEA_SESSION_KEY".to_string()))?;
+            let key = base64::decode_config(&b64, base64::STANDARD).map_err(|_| {
+                SeaError::SessionStorage("bad base64 in BEAM_SEA_SESSION_KEY".to_string())
+            })?;
             if key.len() != 32 {
-                return Err(SeaError::SessionStorage(
-                    format!("BEAM_SEA_SESSION_KEY must be 32 bytes, got {}", key.len())
-                ));
+                return Err(SeaError::SessionStorage(format!(
+                    "BEAM_SEA_SESSION_KEY must be 32 bytes, got {}",
+                    key.len()
+                )));
             }
             log::info!(target: "beam::sea::session", "Loaded session master key from BEAM_SEA_SESSION_KEY env var");
             self.master_key = Some(key.clone());
@@ -151,9 +153,11 @@ impl EncryptedFileSessionStorage {
         if let Some(parent) = key_file.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        std::fs::write(&key_file, &b64)
-            .map_err(|e| SeaError::SessionStorage(format!("failed to write session key file: {}", e)))?;
-        #[cfg(unix)] {
+        std::fs::write(&key_file, &b64).map_err(|e| {
+            SeaError::SessionStorage(format!("failed to write session key file: {}", e))
+        })?;
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).ok();
         }
@@ -192,11 +196,14 @@ impl SessionStorage for EncryptedFileSessionStorage {
 
         // Ensure session dir exists
         if self.dir.parent().is_some() {
-            tokio::fs::create_dir_all(&self.dir).await
+            tokio::fs::create_dir_all(&self.dir)
+                .await
                 .map_err(|e| SeaError::SessionStorage(format!("mkdir: {}", e)))?;
-            #[cfg(unix)] {
+            #[cfg(unix)]
+            {
                 use std::os::unix::fs::PermissionsExt;
-                tokio::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700)).await
+                tokio::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))
+                    .await
                     .map_err(|e| SeaError::SessionStorage(format!("chmod: {}", e)))?;
             }
         }
@@ -241,7 +248,8 @@ impl SessionStorage for EncryptedFileSessionStorage {
 
         let json = serde_json::to_string_pretty(&session_file)
             .map_err(|e| SeaError::SessionStorage(format!("json: {}", e)))?;
-        tokio::fs::write(self.file_path(&session_file.alias), json).await
+        tokio::fs::write(self.file_path(&session_file.alias), json)
+            .await
             .map_err(|e| SeaError::SessionStorage(format!("write: {}", e)))?;
 
         log::info!(target: "beam::sea::session", "Saved session for alias={}", session_file.alias);
@@ -299,10 +307,24 @@ impl SessionStorage for EncryptedFileSessionStorage {
             .map_err(|_| SeaError::SessionStorage("bad json".to_string()))?;
 
         let pair = KeyPair {
-            pub_key: data.get("pub").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-            priv_key: data.get("priv").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-            epub_key: data.get("epub").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            epriv_key: data.get("epriv").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            pub_key: data
+                .get("pub")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            priv_key: data
+                .get("priv")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            epub_key: data
+                .get("epub")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            epriv_key: data
+                .get("epriv")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         };
 
         log::info!(target: "beam::sea::session", "Loaded session for alias={}", alias);
@@ -336,8 +358,12 @@ mod tests {
     }
 
     fn clear_test_env() {
-        unsafe { std::env::remove_var("BEAM_SEA_SESSION_KEY"); }
-        unsafe { std::env::remove_var("BEAM_SEA_SESSION_EXPIRY_DAYS"); }
+        unsafe {
+            std::env::remove_var("BEAM_SEA_SESSION_KEY");
+        }
+        unsafe {
+            std::env::remove_var("BEAM_SEA_SESSION_EXPIRY_DAYS");
+        }
     }
 
     #[tokio::test]
@@ -374,7 +400,10 @@ mod tests {
         let storage = EncryptedFileSessionStorage::with_dir_and_key(dir.clone(), vec![]);
 
         let result = storage.load("alice").await.unwrap();
-        assert!(result.is_none(), "missing key should return None, not error");
+        assert!(
+            result.is_none(),
+            "missing key should return None, not error"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -402,7 +431,10 @@ mod tests {
         assert!(loaded.is_none(), "expired session should be reaped on load");
 
         let file_path = dir.join("beam").join("sessions").join("expired_user.json");
-        assert!(!file_path.exists(), "expired session file should be deleted");
+        assert!(
+            !file_path.exists(),
+            "expired session file should be deleted"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

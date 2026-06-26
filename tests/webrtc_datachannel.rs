@@ -65,9 +65,13 @@ fn webrtc_datachannel_puts_reach_peer() {
     let mut r_rtc = Rtc::new(now);
 
     // — 4. Add local + remote candidates —
-    l_rtc.add_local_candidate(Candidate::host(l_addr, "udp").unwrap()).unwrap();
+    l_rtc
+        .add_local_candidate(Candidate::host(l_addr, "udp").unwrap())
+        .unwrap();
     l_rtc.add_remote_candidate(Candidate::host(r_addr, "udp").unwrap());
-    r_rtc.add_local_candidate(Candidate::host(r_addr, "udp").unwrap()).unwrap();
+    r_rtc
+        .add_local_candidate(Candidate::host(r_addr, "udp").unwrap())
+        .unwrap();
     r_rtc.add_remote_candidate(Candidate::host(l_addr, "udp").unwrap());
 
     // — 5. Exchange DTLS fingerprints —
@@ -120,14 +124,18 @@ fn webrtc_datachannel_puts_reach_peer() {
 
         for ev in &l_events {
             match ev {
-                Event::IceConnectionStateChange(IceConnectionState::Completed) => l_connected = true,
+                Event::IceConnectionStateChange(IceConnectionState::Completed) => {
+                    l_connected = true
+                }
                 Event::ChannelOpen(_, _) => l_chan_open = true,
                 _ => {}
             }
         }
         for ev in &r_events {
             match ev {
-                Event::IceConnectionStateChange(IceConnectionState::Completed) => r_connected = true,
+                Event::IceConnectionStateChange(IceConnectionState::Completed) => {
+                    r_connected = true
+                }
                 Event::ChannelOpen(_, _) => r_chan_open = true,
                 _ => {}
             }

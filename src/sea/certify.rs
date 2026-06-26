@@ -16,8 +16,8 @@
 //!
 //! Signed format: {m: payload_json, s: signature_b64}
 
-use serde_json::Value as JsonValue;
 use super::{KeyPair, SeaError};
+use serde_json::Value as JsonValue;
 
 /// Build and sign a capability certificate.
 ///
@@ -74,7 +74,8 @@ pub fn verify_certificate(
 
 /// Check if a given pubkey appears in the certificants list.
 pub fn is_certified(payload: &JsonValue, pubkey: &str) -> bool {
-    payload.get("c")
+    payload
+        .get("c")
         .and_then(|c| c.as_array())
         .map(|arr| arr.iter().any(|v| v.as_str() == Some(pubkey)))
         .unwrap_or(false)

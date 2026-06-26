@@ -3,12 +3,12 @@
 //! Reverse of encrypt.rs
 
 use super::{KeyPair, SeaError};
-use sha2::{Digest, Sha256};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// Decrypt data using AES-256-GCM
 ///
@@ -76,9 +76,9 @@ pub async fn decrypt(
         let nonce = Nonce::from_slice(&nonce_owned);
 
         // Decrypt
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext.as_ref())
-            .map_err(|_| SeaError::Decryption("decryption failed — tampered or wrong key".to_string()))?;
+        let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|_| {
+            SeaError::Decryption("decryption failed — tampered or wrong key".to_string())
+        })?;
 
         Ok::<Vec<u8>, SeaError>(plaintext)
     })
@@ -144,9 +144,9 @@ pub async fn decrypt_symmetric(encrypted: &Value, key: &[u8]) -> Result<Value, S
 
         let nonce = Nonce::from_slice(&nonce_owned);
 
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext.as_ref())
-            .map_err(|_| SeaError::Decryption("symmetric decryption failed — tampered or wrong key".to_string()))?;
+        let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|_| {
+            SeaError::Decryption("symmetric decryption failed — tampered or wrong key".to_string())
+        })?;
 
         Ok::<Vec<u8>, SeaError>(plaintext)
     })

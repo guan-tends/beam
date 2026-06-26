@@ -1,20 +1,20 @@
 use crate::actor::{Actor, ActorContext, Addr};
+use crate::adapters::MemoryStorage;
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::router::Router;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
-use crate::adapters::MemoryStorage;
 use async_trait::async_trait;
-use log::{debug, info, warn};
 use futures_util::StreamExt;
-use tokio_tungstenite::connect_async;
-use url::Url;
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use log::{debug, info, warn};
 use parking_lot::RwLock;
-use std::time::{SystemTime, Duration}; // TODO get time from ActorContext
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime}; // TODO get time from ActorContext
 use tokio::sync::{broadcast, oneshot};
-use std::collections::HashMap; // TODO replace with generics: Sender and Receiver traits?
+use tokio_tungstenite::connect_async;
+use url::Url; // TODO replace with generics: Sender and Receiver traits?
 
 // TODO proper automatic tests
 // Node { node: Arc<RwLock<NodeInner>> } instead of Arc<RwLock> for each member? compare performance
@@ -147,8 +147,8 @@ impl Node {
         *node.addr.write() = Some(addr);
 
         let router = Box::new(Router::new(config, storage_adapters, network_adapters)); // actually, we should communicate with
-                                                                                        // MemoryStorage (or sled), which has a special role in maintaining our version of the current state?
-                                                                                        // MemoryStorage can then communicate with router as needed.
+        // MemoryStorage (or sled), which has a special role in maintaining our version of the current state?
+        // MemoryStorage can then communicate with router as needed.
         let router_addr = node.actor_context.start_router(router);
         node.actor_context.router = router_addr.clone();
         *node.router.write() = Some(router_addr);
@@ -170,7 +170,9 @@ impl Node {
         for (node_id, node_data) in put.updated_nodes {
             if node_id == *self.uid.read() {
                 for (child, child_data) in node_data {
-                    if child.starts_with("__rod_") { continue; }
+                    if child.starts_with("__rod_") {
+                        continue;
+                    }
                     if let Some(child) = self.children.read().get(&child) {
                         let _ = child.on_sender.send(child_data.value.clone());
                     }
@@ -179,7 +181,9 @@ impl Node {
                         .send((child.to_string(), child_data.value.clone()));
                 }
                 if is_replay {
-                    let _ = self.map_sender.send(("__rod_replay_complete__".to_string(), Value::Null));
+                    let _ = self
+                        .map_sender
+                        .send(("__rod_replay_complete__".to_string(), Value::Null));
                 }
             }
         }
@@ -220,10 +224,7 @@ impl Node {
         let node = Self {
             path,
             children: Arc::new(RwLock::new(BTreeMap::new())),
-            parent: Arc::new(RwLock::new(Some((
-                self.uid.read().clone(),
-                self.clone(),
-            )))),
+            parent: Arc::new(RwLock::new(Some((self.uid.read().clone(), self.clone())))),
             broadcast_buffer_size: self.broadcast_buffer_size,
             on_sender: broadcast::channel::<Value>(self.broadcast_buffer_size).0,
             map_sender: broadcast::channel::<(String, Value)>(self.broadcast_buffer_size).0,
@@ -269,10 +270,10 @@ impl Node {
     }
     /// Get back the value only once, or None when not found.
     pub async fn once(&mut self, wait: Option<Duration>) -> Option<Value> {
-        let val = tokio::time::timeout(
-            wait.unwrap_or(Duration::from_millis(66)),
-            self.on().recv(),
-        ).await.ok()?.expect("recv error??");
+        let val = tokio::time::timeout(wait.unwrap_or(Duration::from_millis(66)), self.on().recv())
+            .await
+            .ok()?
+            .expect("recv error??");
         Some(val)
     }
 
@@ -293,11 +294,8 @@ impl Node {
                 match connect_async(Url::parse(&url).expect("valid URL")).await {
                     Ok((socket, _)) => {
                         let (sender, receiver) = socket.split();
-                        let conn = crate::adapters::WsConn::new(
-                            sender,
-                            receiver,
-                            allow_public_space,
-                        );
+                        let conn =
+                            crate::adapters::WsConn::new(sender, receiver, allow_public_space);
                         let addr = ctx.start_actor(Box::new(conn));
                         info!("BEAM connected to peer {} (addr: {})", url, addr);
                         backoff = Duration::from_secs(1);
@@ -325,7 +323,12 @@ impl Node {
     ///
     /// Requires the `webrtc` feature. Without it, this method is a no-op.
     #[cfg(feature = "webrtc")]
-    pub fn connect_webrtc_peer(&self, peer_id: &str, target_peer_id: &str, role: crate::adapters::WebRtcRole) {
+    pub fn connect_webrtc_peer(
+        &self,
+        peer_id: &str,
+        target_peer_id: &str,
+        role: crate::adapters::WebRtcRole,
+    ) {
         let peer_id = peer_id.to_string();
         let target_peer_id = target_peer_id.to_string();
         let ice_servers = self.ice_servers.clone();
@@ -344,7 +347,6 @@ impl Node {
             info!("BEAM WebRtcPeer started (addr: {})", addr);
         });
     }
-
 
     // TODO: optionally specify which adapters to ask
     /// Return a child Node corresponding to the given key.

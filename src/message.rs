@@ -3,11 +3,11 @@ use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
 use java_utils::HashCode;
 use jsonwebkey as jwk;
-use jsonwebtoken::crypto::verify;
 use jsonwebtoken::Algorithm;
+use jsonwebtoken::crypto::verify;
 use log::{debug, error};
-use ring::digest::{digest, SHA256};
-use serde_json::{json, Value as JsonValue};
+use ring::digest::{SHA256, digest};
+use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
 
@@ -131,7 +131,6 @@ impl Put {
             }
         }
 
-
         let s = json.to_string();
         self.json_str = Some(s.clone());
         s
@@ -158,11 +157,7 @@ impl BatchPut {
     /// BatchPut is an internal optimization; on the wire it
     /// materializes as the constituent puts.
     pub fn to_string(&mut self) -> String {
-        let parts: Vec<String> = self
-            .puts
-            .iter_mut()
-            .map(|put| put.to_string())
-            .collect();
+        let parts: Vec<String> = self.puts.iter_mut().map(|put| put.to_string()).collect();
         format!("[{}]", parts.join(","))
     }
 }
@@ -410,7 +405,11 @@ impl Message {
         let peer_hop_list: Option<HashSet<String>> = match json.get("><") {
             Some(hops) => match hops.as_str() {
                 Some(s) => {
-                    let set: HashSet<String> = s.split(",").map(|x| x.to_string()).filter(|x| !x.is_empty()).collect();
+                    let set: HashSet<String> = s
+                        .split(",")
+                        .map(|x| x.to_string())
+                        .filter(|x| !x.is_empty())
+                        .collect();
                     if set.is_empty() { None } else { Some(set) }
                 }
                 _ => None,
@@ -556,11 +555,21 @@ impl Message {
             Self::from_get_obj(json, json_str, msg_id, from)
         } else if let Some(dam) = obj.get("dam").and_then(|d| d.as_str()) {
             if dam == "rtc" {
-                let to = obj.get("to").and_then(|t| t.as_str().map(|s| s.to_string()));
-                let offer = obj.get("offer").and_then(|o| o.as_str().map(|s| s.to_string()));
-                let answer = obj.get("answer").and_then(|a| a.as_str().map(|s| s.to_string()));
-                let candidate = obj.get("candidate").and_then(|c| c.as_str().map(|s| s.to_string()));
-                let local_addr = obj.get("local_addr").and_then(|l| l.as_str().map(|s| s.to_string()));
+                let to = obj
+                    .get("to")
+                    .and_then(|t| t.as_str().map(|s| s.to_string()));
+                let offer = obj
+                    .get("offer")
+                    .and_then(|o| o.as_str().map(|s| s.to_string()));
+                let answer = obj
+                    .get("answer")
+                    .and_then(|a| a.as_str().map(|s| s.to_string()));
+                let candidate = obj
+                    .get("candidate")
+                    .and_then(|c| c.as_str().map(|s| s.to_string()));
+                let local_addr = obj
+                    .get("local_addr")
+                    .and_then(|l| l.as_str().map(|s| s.to_string()));
                 Ok(Message::RtcSignal(RtcSignal {
                     id: msg_id,
                     from,
@@ -780,7 +789,8 @@ mod tests {
     fn alias_registry_accepted_unsigned() {
         // ~@alias is the public alias registry — unsigned lookup data.
         // verify_sig should skip validation and return Ok immediately.
-        let res = Message::try_from(r##"
+        let res = Message::try_from(
+            r##"
         {
           "put": {
             "~@alice": {
@@ -795,7 +805,13 @@ mod tests {
           },
           "#": "aliasmsg01"
         }
-        "##, Addr::noop(), false);
-        assert!(res.is_ok(), "~@alias registry should be accepted without sig verification");
+        "##,
+            Addr::noop(),
+            false,
+        );
+        assert!(
+            res.is_ok(),
+            "~@alias registry should be accepted without sig verification"
+        );
     }
 }

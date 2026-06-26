@@ -3,7 +3,7 @@
 //! ECDSA P-256 signing
 
 use super::{KeyPair, SeaError};
-use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use serde_json::Value;
 use std::convert::TryInto;
 
@@ -29,9 +29,7 @@ pub async fn sign(data: &Value, pair: &KeyPair) -> Result<Value, SeaError> {
             return Err(SeaError::InvalidKey);
         }
 
-        let priv_array: [u8; 32] = priv_bytes
-            .try_into()
-            .map_err(|_| SeaError::InvalidKey)?;
+        let priv_array: [u8; 32] = priv_bytes.try_into().map_err(|_| SeaError::InvalidKey)?;
 
         // Create signing key from private key bytes
         let signing_key = SigningKey::from_bytes(&priv_array.into())

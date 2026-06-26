@@ -2,15 +2,19 @@
 //! User authentication and session management
 //! Provides create/auth/leave/recall using Rod's graph persistence
 
-use super::{certify, decrypt, decrypt_symmetric, encrypt, encrypt_symmetric, generate_pair, is_pubkey_certified, secret, sign_value, verify_certificate, work, KeyPair, SeaError, SessionState, SessionStorage, User, WorkOptions};
+use super::{
+    KeyPair, SeaError, SessionState, SessionStorage, User, WorkOptions, certify, decrypt,
+    decrypt_symmetric, encrypt, encrypt_symmetric, generate_pair, is_pubkey_certified, secret,
+    sign_value, verify_certificate, work,
+};
 use crate::{Node, Value as RodValue};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
-use sha2::{Digest, Sha256};
 use rand::RngCore;
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
+use sha2::{Digest, Sha256};
 
 impl User {
     /// Create a new user with alias and password.
@@ -24,7 +28,12 @@ impl User {
         let mut salt_bytes = [0u8; 9];
         rand::thread_rng().fill_bytes(&mut salt_bytes);
 
-        let proof = work(proof_input.as_bytes(), Some(&salt_bytes), WorkOptions::default()).await?;
+        let proof = work(
+            proof_input.as_bytes(),
+            Some(&salt_bytes),
+            WorkOptions::default(),
+        )
+        .await?;
         // Build key pair data to encrypt
         let auth_data = json!({
             "pub": pair.pub_key,
@@ -57,10 +66,7 @@ impl User {
     /// Authenticate existing user from Rod's graph.
     pub async fn auth(alias: &str, pass: &str, db: &mut Node) -> Result<Self, SeaError> {
         let mut alias_node = db.get("~@").get(alias);
-        let value = alias_node
-            .once(None)
-            .await
-            .ok_or(SeaError::AuthFailed)?;
+        let value = alias_node.once(None).await.ok_or(SeaError::AuthFailed)?;
 
         let text = match value {
             RodValue::Text(t) => t,
@@ -70,9 +76,7 @@ impl User {
         let alias_data: JsonValue =
             serde_json::from_str(&text).map_err(|_| SeaError::AuthFailed)?;
 
-        let encrypted_auth = alias_data
-            .get("auth")
-            .ok_or(SeaError::AuthFailed)?;
+        let encrypted_auth = alias_data.get("auth").ok_or(SeaError::AuthFailed)?;
 
         let salt_decoded = if let Some(salt_b64) = alias_data.get("salt").and_then(|v| v.as_str()) {
             base64::decode_config(salt_b64, base64::STANDARD_NO_PAD)
@@ -82,7 +86,12 @@ impl User {
         };
 
         let proof_input = format!("{}{}", alias, pass);
-        let proof = work(proof_input.as_bytes(), Some(&salt_decoded), WorkOptions::default()).await?;
+        let proof = work(
+            proof_input.as_bytes(),
+            Some(&salt_decoded),
+            WorkOptions::default(),
+        )
+        .await?;
         let decrypted = decrypt_pass(encrypted_auth, &proof).await?;
 
         let pair = KeyPair {
@@ -145,7 +154,10 @@ impl User {
 
     /// Save current session to storage.
     pub async fn save_to(&self, storage: &dyn SessionStorage) -> Result<(), SeaError> {
-        let inner = self.inner.read().map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
         if !inner.is_authenticated {
             return Err(SeaError::NotAuthenticated);
         }
@@ -225,8 +237,7 @@ async fn decrypt_pass(encrypted: &JsonValue, passphrase: &str) -> Result<JsonVal
         let text = String::from_utf8(plaintext)
             .map_err(|_| SeaError::Decryption("bad utf8".to_string()))?;
 
-        serde_json::from_str(&text)
-            .map_err(|e| SeaError::Decryption(format!("bad json: {}", e)))
+        serde_json::from_str(&text).map_err(|e| SeaError::Decryption(format!("bad json: {}", e)))
     })
     .await
     .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?
@@ -285,7 +296,9 @@ impl User {
         path: Option<&str>,
         db: &mut Node,
     ) -> Result<(), SeaError> {
-        let inner = self.inner.read()
+        let inner = self
+            .inner
+            .read()
             .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
         if !inner.is_authenticated {
             return Err(SeaError::NotAuthenticated);
@@ -295,8 +308,11 @@ impl User {
         let policies = path.map(|p| json!({"w": p}));
         let signed = certify(&certificants, policies.as_ref(), &inner.pair).await?;
 
-        let path_key = path.map(encode_path).unwrap_or_else(|| "global".to_string());
-        let mut trust_node = db.get(&format!("~{}", inner.pair.pub_key))
+        let path_key = path
+            .map(encode_path)
+            .unwrap_or_else(|| "global".to_string());
+        let mut trust_node = db
+            .get(&format!("~{}", inner.pair.pub_key))
             .get("trust")
             .get(&path_key);
         trust_node.put(RodValue::Text(signed.to_string()));
@@ -313,7 +329,9 @@ impl User {
         data_path: &str,
         db: &mut Node,
     ) -> Result<(), SeaError> {
-        let inner = self.inner.read()
+        let inner = self
+            .inner
+            .read()
             .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
         if !inner.is_authenticated {
             return Err(SeaError::NotAuthenticated);
@@ -323,7 +341,8 @@ impl User {
 
         // 1. Retrieve or create a 16-byte random secret for this data path
         let sec = {
-            let mut secret_node = db.get(&format!("~{}", pair.pub_key))
+            let mut secret_node = db
+                .get(&format!("~{}", pair.pub_key))
                 .get("secrets")
                 .get(&path_key);
             match secret_node.once(None).await {
@@ -331,14 +350,16 @@ impl User {
                     let outer: JsonValue = serde_json::from_str(&enc_text)
                         .map_err(|e| SeaError::Decryption(format!("bad secret json: {}", e)))?;
                     let enc = if outer.get("m").is_some() && outer.get("s").is_some() {
-                        let msg = outer["m"].as_str()
+                        let msg = outer["m"]
+                            .as_str()
                             .ok_or_else(|| SeaError::Decryption("m not string".into()))?;
                         serde_json::from_str(msg)
                             .map_err(|e| SeaError::Decryption(format!("bad m: {}", e)))?
                     } else {
                         outer
                     };
-                    decrypt(&enc, pair, None).await?
+                    decrypt(&enc, pair, None)
+                        .await?
                         .as_str()
                         .ok_or_else(|| SeaError::Decryption("secret not string".into()))?
                         .to_string()
@@ -365,7 +386,8 @@ impl User {
         let signed_recipient = sign_value(&enc_for_recipient, pair).await?;
 
         // 4a. Store recipient copy
-        let mut grant_node = db.get(&format!("~{}", pair.pub_key))
+        let mut grant_node = db
+            .get(&format!("~{}", pair.pub_key))
             .get("grant")
             .get(&path_key)
             .get(recipient_pubkey);
@@ -374,7 +396,8 @@ impl User {
         // 4b. Store owner backup (self-encrypted)
         let enc_for_owner = encrypt(&json!(sec), pair, None).await?;
         let signed_owner = sign_value(&enc_for_owner, pair).await?;
-        let mut owner_grant_node = db.get(&format!("~{}", pair.pub_key))
+        let mut owner_grant_node = db
+            .get(&format!("~{}", pair.pub_key))
             .get("grant")
             .get(&path_key)
             .get(&pair.pub_key);
@@ -386,8 +409,15 @@ impl User {
     /// Encrypt and store data under a self-derived symmetric key.
     /// Only this user can decrypt it — the key comes from ECDH(self.pub, self.priv).
     /// Stored at `~{pub}/secret/{path_key}` as a signed payload.
-    pub async fn secret(&self, data: &JsonValue, path: &str, db: &mut Node) -> Result<(), SeaError> {
-        let inner = self.inner.read()
+    pub async fn secret(
+        &self,
+        data: &JsonValue,
+        path: &str,
+        db: &mut Node,
+    ) -> Result<(), SeaError> {
+        let inner = self
+            .inner
+            .read()
             .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
         if !inner.is_authenticated {
             return Err(SeaError::NotAuthenticated);
@@ -397,7 +427,9 @@ impl User {
         let user_root = format!("~{}", pair.pub_key);
 
         // Derive self-symmetric key: ECDH with own ephemeral public key
-        let epub = pair.epub_key.as_ref()
+        let epub = pair
+            .epub_key
+            .as_ref()
             .ok_or_else(|| SeaError::Crypto("no epub".into()))?;
         let dh = secret(epub, pair).await?;
         let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD)
@@ -407,9 +439,7 @@ impl User {
         let enc = encrypt_symmetric(data, &dh_bytes).await?;
         let signed = sign_value(&enc, pair).await?;
 
-        let mut secret_node = db.get(&user_root)
-            .get("secret")
-            .get(&path_key);
+        let mut secret_node = db.get(&user_root).get("secret").get(&path_key);
         secret_node.put(signed);
 
         Ok(())
@@ -424,8 +454,11 @@ pub async fn verify_trust(
     path: Option<&str>,
     db: &mut Node,
 ) -> Result<bool, SeaError> {
-    let path_key = path.map(encode_path).unwrap_or_else(|| "global".to_string());
-    let mut trust_node = db.get(&format!("~{}", authority_pubkey))
+    let path_key = path
+        .map(encode_path)
+        .unwrap_or_else(|| "global".to_string());
+    let mut trust_node = db
+        .get(&format!("~{}", authority_pubkey))
         .get("trust")
         .get(&path_key);
 
@@ -434,11 +467,11 @@ pub async fn verify_trust(
         _ => return Ok(false),
     };
 
-    let cert: JsonValue = serde_json::from_str(&cert_text)
-        .map_err(|_| SeaError::VerificationFailed)?;
+    let cert: JsonValue =
+        serde_json::from_str(&cert_text).map_err(|_| SeaError::VerificationFailed)?;
 
-    let payload = verify_certificate(&cert, authority_pubkey)
-        .map_err(|_| SeaError::VerificationFailed)?;
+    let payload =
+        verify_certificate(&cert, authority_pubkey).map_err(|_| SeaError::VerificationFailed)?;
 
     Ok(is_pubkey_certified(&payload, writer_pubkey))
 }
@@ -452,22 +485,28 @@ pub async fn accept_grant(
     db: &mut Node,
 ) -> Result<String, SeaError> {
     let path_key = encode_path(data_path);
-    let mut grant_node = db.get(&format!("~{}", owner_pubkey))
+    let mut grant_node = db
+        .get(&format!("~{}", owner_pubkey))
         .get("grant")
         .get(&path_key)
         .get(&pair.pub_key);
 
-    let enc_text = grant_node.once(None).await
-        .and_then(|v| match v { RodValue::Text(t) => Some(t), _ => None })
+    let enc_text = grant_node
+        .once(None)
+        .await
+        .and_then(|v| match v {
+            RodValue::Text(t) => Some(t),
+            _ => None,
+        })
         .ok_or_else(|| SeaError::Decryption("no grant found".into()))?;
 
     let outer: JsonValue = serde_json::from_str(&enc_text)
         .map_err(|e| SeaError::Decryption(format!("bad grant json: {}", e)))?;
     let enc_json = if outer.get("m").is_some() && outer.get("s").is_some() {
-        let msg = outer["m"].as_str()
+        let msg = outer["m"]
+            .as_str()
             .ok_or_else(|| SeaError::Decryption("m not string".into()))?;
-        serde_json::from_str(msg)
-            .map_err(|e| SeaError::Decryption(format!("bad m: {}", e)))?
+        serde_json::from_str(msg).map_err(|e| SeaError::Decryption(format!("bad m: {}", e)))?
     } else {
         outer
     };
@@ -477,7 +516,8 @@ pub async fn accept_grant(
         .map_err(|_| SeaError::Decryption("bad dh".into()))?;
 
     let sec_json = decrypt_symmetric(&enc_json, &dh_bytes).await?;
-    let sec = sec_json.as_str()
+    let sec = sec_json
+        .as_str()
         .ok_or_else(|| SeaError::Decryption("secret not string".into()))?;
     Ok(sec.to_string())
 }

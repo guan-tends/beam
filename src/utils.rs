@@ -1,5 +1,5 @@
 use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 pub fn random_string(len: usize) -> String {
