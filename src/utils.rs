@@ -1,6 +1,6 @@
 use rand::distributions::Alphanumeric;
 use rand::{Rng, thread_rng};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 pub fn random_string(len: usize) -> String {
     thread_rng()

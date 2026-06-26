@@ -75,15 +75,15 @@ pub struct Node {
 #[async_trait]
 impl Actor for Node {
     async fn handle(&mut self, msg: Message, _context: &ActorContext) {
-        match msg {
-            Message::Put(put) => self.handle_put(put),
-            _ => {}
+        if let Message::Put(put) = msg {
+            self.handle_put(put)
         }
     }
 }
 
 impl Node {
     /// Create a new root-level Node using default configuration. No network or storage adapters are started.
+    /// Create a new Node with default configuration and in-memory storage.
     pub fn new() -> Self {
         // Use MemoryStorage by default
         let storage = MemoryStorage::new();
@@ -216,7 +216,7 @@ impl Node {
     }
 
     fn new_child(&self, key: String) -> Node {
-        assert!(key.len() > 0, "Key length must be greater than zero");
+        assert!(!key.is_empty(), "Key length must be greater than zero");
         let mut path = self.path.clone();
         path.push(key.clone());
         let new_child_uid = path.join("/");
@@ -245,12 +245,11 @@ impl Node {
 
     /// Subscribe to the Node's value.
     pub fn on(&mut self) -> broadcast::Receiver<Value> {
-        let key;
-        if self.path.len() > 1 {
-            key = self.path.iter().nth(self.path.len() - 1).cloned();
+        let key = if self.path.len() > 1 {
+            self.path.last().cloned()
         } else {
-            key = None;
-        }
+            None
+        };
         let addr;
         let node_id;
         if let Some((parent_id, parent)) = &*self.parent.read() {
@@ -351,7 +350,7 @@ impl Node {
     // TODO: optionally specify which adapters to ask
     /// Return a child Node corresponding to the given key.
     pub fn get(&mut self, key: &str) -> Node {
-        if key == "" {
+        if key.is_empty() {
             return self.clone();
         }
         debug!("get key {}", key);
@@ -486,5 +485,11 @@ impl Node {
     /// Set a Value with options (currently cert is no-op; reserved for future enforcement)
     pub fn put_with_options(&mut self, value: Value, _options: PutOptions) {
         self.put(value);
+    }
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self::new()
     }
 }

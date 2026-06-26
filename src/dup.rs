@@ -96,7 +96,7 @@ impl Dup {
             .iter()
             .map(|(k, v)| (k.clone(), v.was))
             .collect();
-        pairs.sort_by(|a, b| a.1.cmp(&b.1));
+        pairs.sort_by_key(|a| a.1);
         for (k, _) in pairs.into_iter().take(n) {
             self.entries.remove(&k);
         }

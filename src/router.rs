@@ -1,3 +1,4 @@
+#![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
 use crate::Config;
 use crate::Dup;
 use crate::actor::{Actor, ActorContext, Addr};
@@ -173,7 +174,7 @@ impl Router {
         }
         let seen_get_message = SeenGetMessage {
             from: get.from.clone(),
-            last_reply_checksum: get.checksum.clone(),
+            last_reply_checksum: get.checksum,
         };
         self.seen_get_messages
             .insert(get.id.clone(), seen_get_message);
@@ -183,7 +184,7 @@ impl Router {
         debug!("{} subscribed to {}", get.from, topic);
         self.subscribers_by_topic
             .entry(topic.to_string())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(get.from.clone());
 
         // Ask storage
@@ -229,7 +230,7 @@ impl Router {
             "sent get to a random sample of subscribers of size {}",
             sent_to
         );
-        if errored.len() > 0 {
+        if !errored.is_empty() {
             if let Some(topic_subscribers) = self.subscribers_by_topic.get_mut(topic) {
                 for addr in errored {
                     topic_subscribers.remove(&addr);
@@ -283,12 +284,13 @@ impl Router {
         match &put.in_response_to {
             Some(in_response_to) => {
                 if let Some(seen_get_message) = self.seen_get_messages.get_mut(in_response_to) {
-                    if put.checksum != None && put.checksum == seen_get_message.last_reply_checksum
+                    if put.checksum.is_some()
+                        && put.checksum == seen_get_message.last_reply_checksum
                     {
                         debug!("same reply already sent");
                         return;
                     }
-                    seen_get_message.last_reply_checksum = put.checksum.clone();
+                    seen_get_message.last_reply_checksum = put.checksum;
                     let _ = seen_get_message.from.send(Message::Put(put));
                 }
             }
@@ -418,7 +420,7 @@ impl Router {
                     if put.checksum == seen_get_message.last_reply_checksum {
                         continue;
                     }
-                    seen_get_message.last_reply_checksum = put.checksum.clone();
+                    seen_get_message.last_reply_checksum = put.checksum;
                     let _ = seen_get_message.from.send(Message::Put(put));
                 }
                 continue;

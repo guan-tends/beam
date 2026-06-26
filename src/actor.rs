@@ -1,3 +1,4 @@
+#![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
 use crate::Node;
 use crate::message::Message;
 use crate::utils::random_string;
@@ -117,7 +118,7 @@ impl ActorContext {
 
     pub fn blocking_child_task<F>(&self, task: F)
     where
-        F: FnOnce() -> () + Send + 'static,
+        F: FnOnce() + Send + 'static,
     {
         let handle = tokio::task::spawn_blocking(task);
         self.task_handles.write().push(handle);
@@ -166,6 +167,7 @@ impl Addr {
         }
     }
 
+    #[allow(clippy::result_unit_err)] // channel-closed is unrecoverable; no meaningful error payload
     pub fn send(&self, msg: Message) -> Result<(), ()> {
         match self.sender.send(msg) {
             Ok(_) => Ok(()),

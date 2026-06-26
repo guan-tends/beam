@@ -1,3 +1,4 @@
+#![allow(clippy::inherent_to_string)] // to_string is wire-format serialization, not Display
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as SerdeJsonValue, json};
 use std::collections::BTreeMap;
@@ -13,8 +14,8 @@ pub struct NodeData {
     pub updated_at: f64,
 }
 
-impl NodeData {
-    pub fn default() -> Self {
+impl Default for NodeData {
+    fn default() -> Self {
         Self {
             value: Value::Null,
             updated_at: 0.0,
@@ -32,6 +33,7 @@ pub enum Value {
     Link(String),
 }
 
+#[allow(clippy::inherent_to_string)]
 impl Value {
     pub fn size(&self) -> usize {
         match self {

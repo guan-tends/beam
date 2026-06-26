@@ -10,6 +10,12 @@ pub struct InMemorySessionStorage {
     data: Mutex<HashMap<String, KeyPair>>,
 }
 
+impl Default for InMemorySessionStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InMemorySessionStorage {
     pub fn new() -> Self {
         Self {

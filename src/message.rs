@@ -1,3 +1,4 @@
+#![allow(clippy::inherent_to_string)] // to_string methods are Gun.js wire-format serialization, not Display
 use crate::actor::Addr;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
@@ -362,11 +363,7 @@ impl Message {
                     _ => return Err("bad signature"),
                 },
                 Err(_) => {
-                    error!(
-                        "could not verify signature {} of {}",
-                        signature,
-                        signed_obj.to_string()
-                    );
+                    error!("could not verify signature {} of {}", signature, signed_obj);
                     return Err("could not verify signature");
                 }
             }
@@ -396,10 +393,7 @@ impl Message {
             _ => None,
         };
         let checksum = match json.get("##") {
-            Some(checksum) => match checksum.as_i64() {
-                Some(checksum) => Some(checksum as i32),
-                _ => None,
-            },
+            Some(checksum) => checksum.as_i64().map(|checksum| checksum as i32),
             _ => None,
         };
         let peer_hop_list: Option<HashSet<String>> = match json.get("><") {
@@ -498,10 +492,7 @@ impl Message {
             }
         };
         let checksum = match json.get("##") {
-            Some(checksum) => match checksum.as_i64() {
-                Some(checksum) => Some(checksum as i32),
-                _ => None,
-            },
+            Some(checksum) => checksum.as_i64().map(|checksum| checksum as i32),
             _ => None,
         };
         let child_key = match get.get(".") {

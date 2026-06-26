@@ -24,7 +24,7 @@ pub struct WsConn {
 impl WsConn {
     pub fn new(sender: WsSender, receiver: WsReceiver, allow_public_space: bool) -> Self {
         Self {
-            sender: sender,
+            sender,
             receiver: Some(receiver),
             allow_public_space,
         }
@@ -51,16 +51,15 @@ impl Actor for WsConn {
             let _ = receiver
                 .try_for_each(|msg| {
                     if let Ok(s) = msg.to_text() {
-                        match Message::try_from(s, ctx2.addr.clone(), allow_public_space) {
-                            Ok(msgs) => {
-                                debug!("ws_conn in {}", s);
-                                for msg in msgs.into_iter() {
-                                    if ctx2.router.send(msg).is_err() {
-                                        error!("failed to send incoming message to node");
-                                    }
+                        if let Ok(msgs) =
+                            Message::try_from(s, ctx2.addr.clone(), allow_public_space)
+                        {
+                            debug!("ws_conn in {}", s);
+                            for msg in msgs.into_iter() {
+                                if ctx2.router.send(msg).is_err() {
+                                    error!("failed to send incoming message to node");
                                 }
                             }
-                            _ => {}
                         };
                     }
                     future::ok(())

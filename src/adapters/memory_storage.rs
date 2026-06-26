@@ -1,3 +1,4 @@
+#![allow(clippy::mutable_key_type)] // Addr hashes by id field
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::actor::{Actor, ActorContext};
@@ -11,6 +12,12 @@ use std::sync::Arc;
 
 pub struct MemoryStorage {
     store: Arc<RwLock<HashMap<String, Children>>>, // could use an LRU cache or other existing option
+}
+
+impl Default for MemoryStorage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemoryStorage {

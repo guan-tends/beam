@@ -18,7 +18,7 @@ pub async fn generate_pair() -> Result<KeyPair, SeaError> {
 
     // Export signing private key (32 bytes)
     let priv_bytes = signing_key.to_bytes();
-    let priv_key = base64::encode_config(&priv_bytes, base64::STANDARD_NO_PAD);
+    let priv_key = base64::encode_config(priv_bytes, base64::STANDARD_NO_PAD);
 
     // Get uncompressed public key point
     let pub_point = verifying_key.to_encoded_point(false);
@@ -64,7 +64,7 @@ pub async fn generate_pair() -> Result<KeyPair, SeaError> {
 
     // Export ECDH private key (32 bytes for P-256)
     let epriv_bytes = ecdh_secret.to_bytes();
-    let epriv_key = Some(base64::encode_config(&epriv_bytes, base64::STANDARD_NO_PAD));
+    let epriv_key = Some(base64::encode_config(epriv_bytes, base64::STANDARD_NO_PAD));
 
     Ok(KeyPair {
         pub_key,
