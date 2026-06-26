@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use tokio_tungstenite::connect_async;
 use url::Url;
 
+use crate::Config;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::ws_conn::WsConn;
 use crate::message::Message;
-use crate::Config;
 use async_trait::async_trait;
 use log::{debug, info};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 pub struct OutgoingWebsocketManager {
     config: Config,

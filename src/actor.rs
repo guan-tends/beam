@@ -1,16 +1,16 @@
+use crate::Node;
 use crate::message::Message;
 use crate::utils::random_string;
-use crate::Node;
 use async_trait::async_trait;
 use futures_util::Future;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::Send;
 use std::sync::Arc;
-use parking_lot::RwLock;
 use tokio::sync::mpsc::{
-    channel, unbounded_channel, Receiver, Sender, UnboundedReceiver, UnboundedSender,
+    Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
 };
 use tokio::task::JoinHandle;
 
@@ -131,9 +131,7 @@ impl ActorContext {
         if is_router {
             new_context.router = addr.clone();
         }
-        self.stop_signals
-            .write()
-            .insert(addr.clone(), stop_sender);
+        self.stop_signals.write().insert(addr.clone(), stop_sender);
         let stop_signals = self.stop_signals.clone();
         let addr_clone = addr.clone();
         tokio::spawn(async move {

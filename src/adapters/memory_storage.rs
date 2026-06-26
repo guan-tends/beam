@@ -6,8 +6,8 @@ use crate::types::*;
 
 use async_trait::async_trait;
 use log::{debug, info};
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 pub struct MemoryStorage {
     store: Arc<RwLock<HashMap<String, Children>>>, // could use an LRU cache or other existing option
@@ -97,13 +97,16 @@ impl Actor for MemoryStorage {
                 // Memory storage has no disk state; flush is a no-op.
                 // Ack the barrier so callers never hang.
                 let mut ack = BTreeMap::new();
-                ack.insert("_flushed".to_string(), NodeData {
-                    value: Value::Text("true".to_string()),
-                    updated_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as f64,
-                });
+                ack.insert(
+                    "_flushed".to_string(),
+                    NodeData {
+                        value: Value::Text("true".to_string()),
+                        updated_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64,
+                    },
+                );
                 let mut nodes = BTreeMap::new();
                 nodes.insert("_ack".to_string(), ack);
                 let mut put = Put::new(nodes, Some(flush.id), ctx.addr.clone());

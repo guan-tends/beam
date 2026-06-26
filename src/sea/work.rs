@@ -20,11 +20,7 @@ use std::sync::Arc;
 /// - Triggered when opt.name starts with "sha" (case-insensitive)
 /// - Direct SHA-256 hash of input data
 /// - Output: base64-encoded hash
-pub async fn work(
-    data: &[u8],
-    salt: Option<&[u8]>,
-    opts: WorkOptions,
-) -> Result<String, SeaError> {
+pub async fn work(data: &[u8], salt: Option<&[u8]>, opts: WorkOptions) -> Result<String, SeaError> {
     let opts = Arc::new(opts);
     let data = data.to_vec();
 

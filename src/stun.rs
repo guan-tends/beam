@@ -52,10 +52,10 @@ pub mod webrtc_stun {
         stun_server: SocketAddr,
         timeout: Duration,
     ) -> Option<SocketAddr> {
-        use stun::message::{Message, BINDING_REQUEST};
-        use stun::xoraddr::XorMappedAddress;
-        use stun::attributes::ATTR_XORMAPPED_ADDRESS;
         use std::io::Cursor;
+        use stun::attributes::ATTR_XORMAPPED_ADDRESS;
+        use stun::message::{BINDING_REQUEST, Message};
+        use stun::xoraddr::XorMappedAddress;
 
         let mut request = Message::new();
         request.new_transaction_id().ok()?;
@@ -99,10 +99,10 @@ pub mod webrtc_stun {
         turn_server: SocketAddr,
         timeout: Duration,
     ) -> Option<SocketAddr> {
-        use stun::message::{Message, MessageType, CLASS_REQUEST, METHOD_ALLOCATE};
-        use stun::attributes::{ATTR_REQUESTED_TRANSPORT, ATTR_XOR_RELAYED_ADDRESS};
-        use stun::xoraddr::XorMappedAddress;
         use std::io::Cursor;
+        use stun::attributes::{ATTR_REQUESTED_TRANSPORT, ATTR_XOR_RELAYED_ADDRESS};
+        use stun::message::{CLASS_REQUEST, METHOD_ALLOCATE, Message, MessageType};
+        use stun::xoraddr::XorMappedAddress;
 
         let mut request = Message::new();
         request.new_transaction_id().ok()?;

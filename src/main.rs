@@ -86,7 +86,6 @@ async fn main() {
                         .default_value("false")
                         .takes_value(true),
                 )
-
                 .arg(
                     Arg::with_name("redb-storage")
                         .long("redb-storage")
@@ -136,8 +135,6 @@ async fn main() {
         env_logger::init();
 
         let websocket_server_port: u16 = matches.value_of("port").unwrap().parse::<u16>().unwrap();
-
-
 
         let mut network_adapters: Vec<Box<dyn Actor>> = Vec::new();
         let mut storage_adapters: Vec<Box<dyn Actor>> = Vec::new();

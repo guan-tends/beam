@@ -5,16 +5,14 @@ use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
-use str0m::net::{Protocol, Receive};
-use str0m::{
-    Candidate, Event, IceConnectionState, Input, Output, Rtc,
-};
 use str0m::change::SdpAnswer;
 use str0m::channel::ChannelId;
+use str0m::net::{Protocol, Receive};
+use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
+use crate::actor::{Actor, ActorContext};
 use crate::message::{Message, RtcSignal};
 use crate::utils::random_string;
-use crate::actor::{Actor, ActorContext};
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
 
@@ -48,7 +46,13 @@ pub struct WebRtcPeer {
 }
 
 impl WebRtcPeer {
-    pub fn new(peer_id: String, target_peer_id: String, role: WebRtcRole, allow_public_space: bool, ice_servers: Vec<String>) -> Self {
+    pub fn new(
+        peer_id: String,
+        target_peer_id: String,
+        role: WebRtcRole,
+        allow_public_space: bool,
+        ice_servers: Vec<String>,
+    ) -> Self {
         Self {
             peer_id,
             target_peer_id,
@@ -76,24 +80,35 @@ impl WebRtcPeer {
         // before handing the socket to the async runtime.
         let std_socket = match std::net::UdpSocket::bind("127.0.0.1:0") {
             Ok(s) => s,
-            Err(e) => { error!("UDP bind failed: {}", e); return None; }
+            Err(e) => {
+                error!("UDP bind failed: {}", e);
+                return None;
+            }
         };
         let local_addr = match std_socket.local_addr() {
             Ok(a) => a,
-            Err(e) => { error!("UDP local_addr failed: {}", e); return None; }
+            Err(e) => {
+                error!("UDP local_addr failed: {}", e);
+                return None;
+            }
         };
 
         // Host candidate (always present)
         let candidate = match Candidate::host(local_addr, "udp") {
             Ok(c) => c,
-            Err(e) => { error!("ICE host candidate failed: {}", e); return None; }
+            Err(e) => {
+                error!("ICE host candidate failed: {}", e);
+                return None;
+            }
         };
         rtc.add_local_candidate(candidate);
 
         // STUN discovery for server-reflexive candidates.
         // TURN allocation for relayed candidates when direct/reflexive paths
         // are blocked by symmetric NAT or restrictive firewalls.
-        use crate::stun::webrtc_stun::{parse_ice_server, stun_binding_request, turn_allocate_request};
+        use crate::stun::webrtc_stun::{
+            parse_ice_server, stun_binding_request, turn_allocate_request,
+        };
         for uri in ice_servers {
             if let Some((scheme, srv_addr)) = parse_ice_server(uri) {
                 match scheme.as_str() {
@@ -101,8 +116,11 @@ impl WebRtcPeer {
                         match stun_binding_request(&std_socket, srv_addr, Duration::from_secs(2)) {
                             Some(reflexive_addr) => {
                                 info!("STUN discovered reflexive {} via {}", reflexive_addr, uri);
-                                match Candidate::server_reflexive(reflexive_addr, local_addr, "udp") {
-                                    Ok(c) => { rtc.add_local_candidate(c); }
+                                match Candidate::server_reflexive(reflexive_addr, local_addr, "udp")
+                                {
+                                    Ok(c) => {
+                                        rtc.add_local_candidate(c);
+                                    }
                                     Err(e) => warn!("server-reflexive candidate failed: {}", e),
                                 }
                             }
@@ -114,7 +132,9 @@ impl WebRtcPeer {
                             Some(relay_addr) => {
                                 info!("TURN allocated relay {} via {}", relay_addr, uri);
                                 match Candidate::relayed(relay_addr, local_addr, "udp") {
-                                    Ok(c) => { rtc.add_local_candidate(c); }
+                                    Ok(c) => {
+                                        rtc.add_local_candidate(c);
+                                    }
                                     Err(e) => warn!("relayed candidate failed: {}", e),
                                 }
                             }
@@ -130,7 +150,10 @@ impl WebRtcPeer {
         let _ = std_socket.set_nonblocking(true);
         let socket = match UdpSocket::from_std(std_socket) {
             Ok(s) => Arc::new(s),
-            Err(e) => { error!("tokio UdpSocket from_std failed: {}", e); return None; }
+            Err(e) => {
+                error!("tokio UdpSocket from_std failed: {}", e);
+                return None;
+            }
         };
 
         Some((rtc, socket, local_addr))
@@ -143,7 +166,10 @@ impl Actor for WebRtcPeer {
         info!("WebRtcPeer {:?} for {}", self.role, self.peer_id);
 
         // Register with Router BEFORE setup_rtc so offers can be forwarded.
-        let hi = Message::Hi { from: ctx.addr.clone(), peer_id: self.peer_id.clone() };
+        let hi = Message::Hi {
+            from: ctx.addr.clone(),
+            peer_id: self.peer_id.clone(),
+        };
         let _ = ctx.router.send(hi);
 
         let (mut rtc, socket, local_addr) = match Self::setup_rtc(&self.ice_servers).await {
@@ -157,7 +183,13 @@ impl Actor for WebRtcPeer {
         let local_addr_for_signal = local_addr;
         let pending_offer = match self.role {
             WebRtcRole::Offerer => self.start_as_offerer(ctx, &mut rtc, local_addr_for_signal),
-            WebRtcRole::Answerer => { debug!("[WRTC] answerer waiting peer_id={} target={}", self.peer_id, self.target_peer_id); None },
+            WebRtcRole::Answerer => {
+                debug!(
+                    "[WRTC] answerer waiting peer_id={} target={}",
+                    self.peer_id, self.target_peer_id
+                );
+                None
+            }
         };
 
         let router = ctx.router.clone();
@@ -193,9 +225,12 @@ impl Actor for WebRtcPeer {
                                 }
                             }
                             if let Some(offer_str) = &signal.offer {
-                                if let Ok(offer) = serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
+                                if let Ok(offer) =
+                                    serde_json::from_str::<str0m::change::SdpOffer>(offer_str)
+                                {
                                     if let Ok(answer) = rtc.sdp_api().accept_offer(offer) {
-                                        let answer_str = serde_json::to_string(&answer).unwrap_or_default();
+                                        let answer_str =
+                                            serde_json::to_string(&answer).unwrap_or_default();
                                         let reply = Message::RtcSignal(RtcSignal {
                                             id: format!("wrtca{}", random_string(24)),
                                             from: own_addr.clone(),
@@ -212,7 +247,9 @@ impl Actor for WebRtcPeer {
                             }
                             if let Some(answer_str) = &signal.answer {
                                 if let Some(pending_offer) = pending.take() {
-                                    if let Ok(answer) = serde_json::from_str::<SdpAnswer>(answer_str) {
+                                    if let Ok(answer) =
+                                        serde_json::from_str::<SdpAnswer>(answer_str)
+                                    {
                                         let _ = rtc.sdp_api().accept_answer(pending_offer, answer);
                                     }
                                 }
@@ -239,31 +276,41 @@ impl Actor for WebRtcPeer {
                         Ok(Output::Transmit(t)) => {
                             let _ = socket.send_to(&t.contents, t.destination).await;
                         }
-                        Ok(Output::Event(Event::IceConnectionStateChange(IceConnectionState::Connected))) => {
+                        Ok(Output::Event(Event::IceConnectionStateChange(
+                            IceConnectionState::Connected,
+                        ))) => {
                             connected = true;
                         }
-                        Ok(Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected))) => {
+                        Ok(Output::Event(Event::IceConnectionStateChange(
+                            IceConnectionState::Disconnected,
+                        ))) => {
                             break;
                         }
                         Ok(Output::Event(Event::ChannelOpen(cid, label))) => {
                             channel_id = Some(cid);
-                            let hi = Message::Hi { from: own_addr.clone(), peer_id: peer_id.clone() };
+                            let hi = Message::Hi {
+                                from: own_addr.clone(),
+                                peer_id: peer_id.clone(),
+                            };
                             let _ = router.send(hi);
                         }
                         Ok(Output::Event(Event::ChannelData(data))) => {
                             if let Ok(s) = std::str::from_utf8(&data.data) {
                                 match Message::try_from(s, own_addr.clone(), allow_public_space) {
                                     Ok(msgs) => {
-                                        for m in msgs { let _ = router.send(m); }
+                                        for m in msgs {
+                                            let _ = router.send(m);
+                                        }
                                     }
-                                    Err(e) => {
-                                    }
+                                    Err(e) => {}
                                 }
                             } else {
                             }
                         }
                         Ok(Output::Event(Event::ChannelClose(cid))) => {
-                            if channel_id == Some(cid) { channel_id = None; }
+                            if channel_id == Some(cid) {
+                                channel_id = None;
+                            }
                         }
                         Ok(Output::Timeout(t)) => {
                             timeout = t;
@@ -317,9 +364,12 @@ impl Actor for WebRtcPeer {
                             }
                         }
                         if let Some(offer_str) = &signal.offer {
-                            if let Ok(offer) = serde_json::from_str::<str0m::change::SdpOffer>(offer_str) {
+                            if let Ok(offer) =
+                                serde_json::from_str::<str0m::change::SdpOffer>(offer_str)
+                            {
                                 if let Ok(answer) = rtc.sdp_api().accept_offer(offer) {
-                                    let answer_str = serde_json::to_string(&answer).unwrap_or_default();
+                                    let answer_str =
+                                        serde_json::to_string(&answer).unwrap_or_default();
                                     let reply = Message::RtcSignal(RtcSignal {
                                         id: format!("wrtca{}", random_string(24)),
                                         from: own_addr.clone(),
@@ -347,8 +397,7 @@ impl Actor for WebRtcPeer {
                             }
                         }
                     }
-                    LoopResult::Cmd(Some(WrtcCommand::Stop)) |
-                    LoopResult::Cmd(None) => break,
+                    LoopResult::Cmd(Some(WrtcCommand::Stop)) | LoopResult::Cmd(None) => break,
                     LoopResult::Recv(Ok((n, source))) => {
                         let input = Input::Receive(
                             Instant::now(),
@@ -356,9 +405,11 @@ impl Actor for WebRtcPeer {
                                 proto: Protocol::Udp,
                                 source,
                                 destination: local_addr,
-                                contents: buf[..n].as_ref().try_into()
+                                contents: buf[..n]
+                                    .as_ref()
+                                    .try_into()
                                     .expect("UDP packet fits in buffer"),
-                            }
+                            },
                         );
                         if let Err(e) = rtc.handle_input(input) {
                             error!("handle_input: {:?}", e);
@@ -382,8 +433,8 @@ impl Actor for WebRtcPeer {
         if let Some(tx) = &self.tx {
             match msg {
                 Message::RtcSignal(signal) => {
-                    if signal.to.as_ref() != Some(&self.peer_id) { 
-                        return; 
+                    if signal.to.as_ref() != Some(&self.peer_id) {
+                        return;
                     }
                     let r = tx.send(WrtcCommand::Signal(signal));
                 }
@@ -406,7 +457,12 @@ impl Actor for WebRtcPeer {
 }
 
 impl WebRtcPeer {
-    fn start_as_offerer(&self, ctx: &ActorContext, rtc: &mut Rtc, local_addr: SocketAddr) -> Option<str0m::change::SdpPendingOffer> {
+    fn start_as_offerer(
+        &self,
+        ctx: &ActorContext,
+        rtc: &mut Rtc,
+        local_addr: SocketAddr,
+    ) -> Option<str0m::change::SdpPendingOffer> {
         let mut changes = rtc.sdp_api();
         let _cid = changes.add_channel("gun-mesh".to_string());
         let (offer, pending) = changes.apply()?;

@@ -3,10 +3,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::Config;
 use crate::actor::{Actor, ActorContext};
 use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
-use crate::Config;
 
 use async_trait::async_trait;
 use log::{debug, error};
@@ -82,9 +82,7 @@ impl RedbStorage {
         let children_for_node = match table.get(&*get.node_id) {
             Ok(Some(access_guard)) => {
                 let bytes = access_guard.value();
-                unwrap_or_return!(
-                    bincode::deserialize::<BTreeMap<String, NodeData>>(bytes)
-                )
+                unwrap_or_return!(bincode::deserialize::<BTreeMap<String, NodeData>>(bytes))
             }
             Ok(None) => {
                 debug!("redb get: no data for node_id={}", get.node_id);
@@ -162,11 +160,12 @@ impl RedbStorage {
             if children_for_node.is_empty() {
                 node_table.remove(&*node_id)?;
             } else {
-                let bytes = bincode::serialize(&children_for_node)
-                    .map_err(|e| redb::Error::Io(std::io::Error::new(
+                let bytes = bincode::serialize(&children_for_node).map_err(|e| {
+                    redb::Error::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         format!("bincode serialize: {:?}", e),
-                    )))?;
+                    ))
+                })?;
                 node_table.insert(&*node_id, bytes.as_slice())?;
             }
         }

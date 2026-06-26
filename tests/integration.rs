@@ -6,7 +6,7 @@ mod tests {
     use std::sync::Once;
     use std::time::Instant;
     use tokio::net::TcpStream;
-    use tokio::time::{sleep, timeout, Duration};
+    use tokio::time::{Duration, sleep, timeout};
 
     /// Poll a TCP port until it accepts connections or timeout elapses.
     /// Replaces blind sleep races with deterministic readiness.
@@ -78,9 +78,23 @@ mod tests {
             panic!("once didn't find val");
         };
         assert_eq!(&str, "Fingolfin");
-        assert!(db.get("Fin").get("golf").get("fin").once(None).await.is_none());
+        assert!(
+            db.get("Fin")
+                .get("golf")
+                .get("fin")
+                .once(None)
+                .await
+                .is_none()
+        );
         db.get("Fin").get("golf").get("fin").put(Value::Null);
-        assert!(!db.get("Fin").get("golf").get("fin").once(None).await.is_none());
+        assert!(
+            !db.get("Fin")
+                .get("golf")
+                .get("fin")
+                .once(None)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -130,7 +144,7 @@ mod tests {
         peer2.stop();
     }
 
-/*
+    /*
     #[tokio::test]
     async fn connect_and_sync_longer_path_over_websocket() {
         let config = Config::default();
@@ -193,11 +207,7 @@ mod tests {
                 ..WsServerConfig::default()
             },
         );
-        let mut relay = Node::new_with_config(
-            config.clone(),
-            vec![],
-            vec![Box::new(ws_server)],
-        );
+        let mut relay = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_server)]);
 
         let ws_client = OutgoingWebsocketManager::new(
             config.clone(),
@@ -328,7 +338,7 @@ mod tests {
         relay2.stop();
     }
 
-/*
+    /*
     #[tokio::test]
     async fn ws_server_stats() {
         let config = Config::default();
@@ -365,7 +375,7 @@ mod tests {
         peer2.stop();
     }
     */
-/*
+    /*
     #[tokio::test]
     async fn sync_over_multicast() {
         let config = Config::default();
@@ -417,7 +427,6 @@ mod tests {
     }
      */
 
-
     #[tokio::test]
     async fn redb_storage_persists() {
         let _ = env_logger::try_init();
@@ -465,7 +474,8 @@ mod tests {
             let mut sub = db2.map();
 
             let result = tokio::time::timeout(Duration::from_secs(3), sub.recv()).await;
-            let (key, value) = result.expect("timeout waiting for map replay")
+            let (key, value) = result
+                .expect("timeout waiting for map replay")
                 .expect("broadcast recv error");
 
             assert_eq!(key, "Feanor"); // child key from root
@@ -480,7 +490,6 @@ mod tests {
 
         let _ = std::fs::remove_file(&temp_path);
     }
-
 
     #[tokio::test]
     async fn redb_storage_flush_returns_ok() {

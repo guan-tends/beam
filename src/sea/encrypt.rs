@@ -5,13 +5,13 @@
 //! Matches Gun.js aeskey.js semantics: SHA-256(key_string + salt_bytes)
 
 use super::{KeyPair, SeaError};
-use sha2::{Digest, Sha256};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use rand::RngCore;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// Encrypt data using AES-256-GCM
 ///

@@ -21,7 +21,10 @@ impl InMemorySessionStorage {
 #[async_trait]
 impl SessionStorage for InMemorySessionStorage {
     async fn save(&self, alias: &str, pair: &KeyPair) -> Result<(), SeaError> {
-        self.data.lock().unwrap().insert(alias.to_string(), pair.clone());
+        self.data
+            .lock()
+            .unwrap()
+            .insert(alias.to_string(), pair.clone());
         Ok(())
     }
 

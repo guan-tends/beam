@@ -1,11 +1,11 @@
 mod memory_storage;
 mod multicast;
 mod redb_storage;
+#[cfg(feature = "webrtc")]
+mod webrtc;
 mod ws_client;
 mod ws_conn;
 mod ws_server;
-#[cfg(feature = "webrtc")]
-mod webrtc;
 pub use memory_storage::MemoryStorage;
 pub use multicast::Multicast;
 pub use redb_storage::RedbStorage;

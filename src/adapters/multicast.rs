@@ -1,9 +1,9 @@
-use multicast_socket::{all_ipv4_interfaces, MulticastOptions, MulticastSocket};
+use multicast_socket::{MulticastOptions, MulticastSocket, all_ipv4_interfaces};
 use std::net::SocketAddrV4;
 
+use crate::Config;
 use crate::actor::{Actor, ActorContext};
 use crate::message::Message;
-use crate::Config;
 use async_trait::async_trait;
 use log::{debug, error, info};
 use std::sync::Arc;

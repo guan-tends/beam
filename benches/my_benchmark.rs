@@ -1,12 +1,12 @@
 use criterion::async_executor::FuturesExecutor;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rod::actor::Addr;
 use rod::adapters::{MemoryStorage, OutgoingWebsocketManager, RedbStorage, WsServer};
 use rod::message::Message;
 use rod::{Config, Node};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::runtime::Runtime;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();

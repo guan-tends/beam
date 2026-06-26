@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value as SerdeJsonValue};
+use serde_json::{Value as SerdeJsonValue, json};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 
