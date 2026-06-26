@@ -1,6 +1,5 @@
 extern crate clap;
 use clap::{App, Arg, SubCommand};
-use ctrlc;
 use rod::actor::Actor;
 use rod::adapters::{
     MemoryStorage, Multicast, OutgoingWebsocketManager, RedbStorage, WsServer, WsServerConfig,
@@ -174,7 +173,7 @@ async fn main() {
         if matches.value_of("memory-storage").unwrap() == "true" {
             storage_adapters.push(Box::new(MemoryStorage::new()));
         }
-        if outgoing_websocket_peers.len() > 0 {
+        if !outgoing_websocket_peers.is_empty() {
             network_adapters.push(Box::new(OutgoingWebsocketManager::new(
                 config.clone(),
                 outgoing_websocket_peers,
@@ -192,7 +191,7 @@ async fn main() {
         ctrlc::set_handler(move || {
             node_clone.stop();
             if let Some(tx) = tx_mutex.lock().unwrap().take() {
-                let _ = tx.send(()).unwrap();
+                tx.send(()).unwrap();
             }
         })
         .expect("Error setting Ctrl-C handler");

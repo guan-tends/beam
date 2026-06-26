@@ -8,6 +8,7 @@
 //! Files stored in `~/.config/beam/sessions/` with 0700 permissions.
 //! Encryption: AES-256-GCM with random nonce per write.
 //! Expiry: default 30 days, overridable via `BEAM_SEA_SESSION_EXPIRY_DAYS`.
+#![allow(deprecated)] // GenericArray::from_slice deprecated pending generic-array 1.x upgrade
 
 use super::super::{KeyPair, SeaError, SessionStorage};
 use aes_gcm::{
@@ -217,7 +218,7 @@ impl SessionStorage for EncryptedFileSessionStorage {
         let plaintext = serde_json::to_string(&data)
             .map_err(|e| SeaError::SessionStorage(format!("serialize: {}", e)))?;
 
-        let dir = self.dir.clone();
+        let _dir = self.dir.clone();
         let alias = alias.to_string();
         let expiry = self.expiry_seconds;
 
@@ -237,8 +238,8 @@ impl SessionStorage for EncryptedFileSessionStorage {
             let expires_at = Self::now() + expiry;
             Ok::<SessionFile, SeaError>(SessionFile {
                 ct: base64::encode_config(&ciphertext, base64::STANDARD_NO_PAD),
-                iv: base64::encode_config(&nonce, base64::STANDARD_NO_PAD),
-                s: base64::encode_config(&salt, base64::STANDARD_NO_PAD),
+                iv: base64::encode_config(nonce, base64::STANDARD_NO_PAD),
+                s: base64::encode_config(salt, base64::STANDARD_NO_PAD),
                 alias,
                 expires_at,
             })

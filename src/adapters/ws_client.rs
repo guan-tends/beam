@@ -33,13 +33,14 @@ impl Actor for OutgoingWebsocketManager {
     async fn pre_start(&mut self, ctx: &ActorContext) {
         info!("OutgoingWebsocketManager starting");
         for url in self.urls.iter() {
+            // Retry connection until the websocket is established.
+            // TODO: break on actor shutdown signal instead of polling.
             loop {
-                // TODO break on actor shutdown
                 sleep(Duration::from_millis(1000)).await;
                 if self.clients.contains_key(url) {
-                    continue;
+                    break; // Already connected — move to next URL
                 }
-                let result = connect_async(Url::parse(&url).expect("Can't connect to URL")).await;
+                let result = connect_async(Url::parse(url).expect("Can't connect to URL")).await;
                 if let Ok(tuple) = result {
                     let (socket, _) = tuple;
                     debug!("outgoing websocket opened to {}", url);
@@ -47,6 +48,7 @@ impl Actor for OutgoingWebsocketManager {
                     let client = WsConn::new(sender, receiver, self.config.allow_public_space);
                     let addr = ctx.start_actor(Box::new(client));
                     self.clients.insert(url.clone(), addr);
+                    break; // Connected — move to next URL
                 }
             }
         }

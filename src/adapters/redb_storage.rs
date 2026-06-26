@@ -147,10 +147,10 @@ impl RedbStorage {
                 };
 
             for (child_id, child_data) in update_data {
-                let should_write = match children_for_node.get(&child_id) {
-                    Some(existing) if existing.updated_at > child_data.updated_at => false,
-                    _ => true,
-                };
+                let should_write = !matches!(
+                    children_for_node.get(&child_id),
+                    Some(existing) if existing.updated_at > child_data.updated_at
+                );
 
                 if should_write {
                     children_for_node.insert(child_id, child_data);
@@ -161,10 +161,7 @@ impl RedbStorage {
                 node_table.remove(&*node_id)?;
             } else {
                 let bytes = bincode::serialize(&children_for_node).map_err(|e| {
-                    redb::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("bincode serialize: {:?}", e),
-                    ))
+                    redb::Error::Io(std::io::Error::other(format!("bincode serialize: {:?}", e)))
                 })?;
                 node_table.insert(&*node_id, bytes.as_slice())?;
             }
@@ -203,7 +200,7 @@ impl Actor for RedbStorage {
         // missing tables, but on a WriteTransaction it auto-creates.  Warm the
         // schema once at startup so that the very first read (e.g. auth recall
         // on a brand-new database) finds the tables already present.
-        if let Ok(mut wtxn) = self.db.begin_write() {
+        if let Ok(wtxn) = self.db.begin_write() {
             let _ = wtxn.open_table(ROD_NODES);
             let _ = wtxn.open_table(ROD_META);
             let _ = wtxn.commit();
@@ -257,5 +254,11 @@ impl Actor for RedbStorage {
             }
             _ => {}
         }
+    }
+}
+
+impl Default for RedbStorage {
+    fn default() -> Self {
+        Self::new()
     }
 }

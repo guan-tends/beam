@@ -12,15 +12,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{Duration, sleep};
 
-use futures_util::{StreamExt, future};
+use futures_util::StreamExt;
 use log::info;
 use tokio::net::TcpListener;
 use tokio_native_tls::native_tls::Identity;
 
 use tokio_tungstenite::MaybeTlsStream;
-
-use std::io::Error as IoError;
-use std::path::Path;
 
 type Clients = Arc<RwLock<HashSet<Addr>>>;
 
@@ -85,7 +82,7 @@ impl WsServer {
         use warp::Filter;
         // Match any request and return hello world!
         let stats = warp::path("stats").and(warp::fs::dir("./assets/stats"));
-        let peer_id = warp::path("peer_id").map(move || format!("{}", peer_id));
+        let peer_id = warp::path("peer_id").map(move || peer_id.to_string());
         let routes = warp::get().and(stats.or(peer_id));
 
         let port = config.port + 1;
@@ -130,7 +127,7 @@ impl Actor for WsServer {
             if msg.is_from(conn) {
                 continue;
             }
-            if let Err(_) = conn.send(msg.clone()) {
+            if conn.send(msg.clone()).is_err() {
                 self.clients.write().await.remove(conn);
             }
         }
@@ -186,17 +183,14 @@ impl Actor for WsServer {
                         let ctx = ctx.clone();
                         tokio::spawn(async move {
                             let stream = acceptor.accept(stream).await;
-                            match stream {
-                                Ok(stream) => {
-                                    Self::handle_stream(
-                                        MaybeTlsStream::NativeTls(stream),
-                                        &ctx,
-                                        clients.clone(),
-                                        allow_public_space,
-                                    )
-                                    .await;
-                                }
-                                _ => {}
+                            if let Ok(stream) = stream {
+                                Self::handle_stream(
+                                    MaybeTlsStream::NativeTls(stream),
+                                    &ctx,
+                                    clients.clone(),
+                                    allow_public_space,
+                                )
+                                .await;
                             }
                         });
                     }

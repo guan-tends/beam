@@ -229,7 +229,7 @@ pub fn verify_sync(signed_data: &JsonValue, pub_key: &str) -> Result<JsonValue, 
 
 /// Verify a signature (async wrapper for backwards compat)
 pub async fn verify(signed_data: &JsonValue, pub_key: &str) -> Result<JsonValue, SeaError> {
-    Ok(verify_sync(signed_data, pub_key)?)
+    verify_sync(signed_data, pub_key)
 }
 
 /// Verify a signature asynchronously (non-blocking wrapper via spawn_blocking)

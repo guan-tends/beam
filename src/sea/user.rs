@@ -1,3 +1,4 @@
+#![allow(clippy::await_holding_lock)] // TODO: Refactor in SEA review pass — extract data from MutexGuard before await
 #![allow(deprecated)]
 //! User authentication and session management
 //! Provides create/auth/leave/recall using Rod's graph persistence
@@ -50,7 +51,7 @@ impl User {
             "pub": pair.pub_key,
             "epub": pair.epub_key,
             "auth": encrypted_auth,
-            "salt": base64::encode_config(&salt_bytes, base64::STANDARD_NO_PAD),
+            "salt": base64::encode_config(salt_bytes, base64::STANDARD_NO_PAD),
         });
         let mut alias_node = db.get("~@").get(alias);
         alias_node.put(RodValue::Text(alias_payload.to_string()));
@@ -192,8 +193,8 @@ async fn encrypt_pass(data: &JsonValue, passphrase: &str) -> Result<JsonValue, S
 
         Ok(json!({
             "ct": base64::encode_config(&ciphertext, base64::STANDARD_NO_PAD),
-            "iv": base64::encode_config(&nonce, base64::STANDARD_NO_PAD),
-            "s": base64::encode_config(&salt, base64::STANDARD_NO_PAD),
+            "iv": base64::encode_config(nonce, base64::STANDARD_NO_PAD),
+            "s": base64::encode_config(salt, base64::STANDARD_NO_PAD),
         }))
     })
     .await
@@ -367,7 +368,7 @@ impl User {
                 _ => {
                     let mut bytes = [0u8; 16];
                     rand::thread_rng().fill_bytes(&mut bytes);
-                    let new_sec = base64::encode_config(&bytes, base64::STANDARD_NO_PAD);
+                    let new_sec = base64::encode_config(bytes, base64::STANDARD_NO_PAD);
                     let enc = encrypt(&json!(new_sec), pair, None).await?;
                     let signed = sign_value(&enc, pair).await?;
                     secret_node.put(signed);
