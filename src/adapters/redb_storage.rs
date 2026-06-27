@@ -335,6 +335,14 @@ impl Actor for RedbStorage {
             _ => {}
         }
     }
+
+    /// Returns a boxed clone for the storage read/write actor split.
+    ///
+    /// Both the read and write actor share the same `Arc<Database>`, so
+    /// reads see committed writes immediately via redb's MVCC snapshots.
+    fn try_clone_storage(&self) -> Option<Box<dyn Actor>> {
+        Some(Box::new(self.clone()))
+    }
 }
 
 impl Default for RedbStorage {
