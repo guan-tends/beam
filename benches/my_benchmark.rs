@@ -1,9 +1,13 @@
 //! Criterion benchmarks for Rod — measuring throughput of core operations.
 //!
-//! Benchmarks three paths:
+//! Benchmarks for Rod — measuring throughput of core operations.
+//!
+//! Benchmarks:
 //! 1. **memory_storage get-put** — in-memory storage roundtrip (put → subscribe → recv)
 //! 2. **websocket get-put** — cross-node sync over WebSocket (two-node mesh)
 //! 3. **JSON parse + verify** — message deserialization for public, content-addressed, and signed puts
+//! 4. **redb concurrent read under write load** — read latency while writes hammer the
+//!    write actor. Proves the CQRS read/write split keeps reads fast during fsync.
 //!
 //! Run with: `cargo bench` (requires `--features` for webrtc benchmarks if applicable)
 
@@ -13,7 +17,8 @@ use rod::actor::Addr;
 use rod::adapters::{MemoryStorage, OutgoingWebsocketManager, RedbStorage, WsServer};
 use rod::message::Message;
 use rod::{Config, Node};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tokio::time::{Duration, sleep};
 
@@ -161,6 +166,77 @@ fn criterion_benchmark(c: &mut Criterion) {
             "##, addr.clone(), false).unwrap();
         })
     });
+
+    // Benchmark: concurrent reads under write load using redb.
+    //
+    // Measures read latency (once()) while a background task continuously
+    // writes to the same database. With the CQRS split, reads go through
+    // the read actor and are not blocked by the write actor's spawn_blocking
+    // fsync. Without the split, reads would queue behind writes.
+    let mut group = c.benchmark_group("concurrent read under write");
+    group.sample_size(10);
+
+    group.bench_function("redb read during write", |b| {
+        rt.block_on(async {
+            let temp_path = std::env::temp_dir()
+                .join(format!("rod-bench-{}.redb", std::process::id()));
+            let _ = std::fs::remove_file(&temp_path);
+
+            let config = Config::default();
+            let mut db = Node::new_with_config(
+                config.clone(),
+                vec![Box::new(RedbStorage::new_with_config(
+                    config,
+                    temp_path.to_string_lossy().as_ref(),
+                    None,
+                ))],
+                vec![],
+            );
+
+            // Seed a key so reads have something to find.
+            db.get("bench_key").put("bench_value".into());
+            sleep(Duration::from_millis(100)).await;
+
+            // Background writer: continuously puts to a different key.
+            let mut writer_db = db.clone();
+            let write_counter = Arc::new(AtomicUsize::new(0));
+            let writer_counter_clone = write_counter.clone();
+            let stop_writer = Arc::new(AtomicBool::new(false));
+            let stop_clone = stop_writer.clone();
+            let writer_handle = tokio::spawn(async move {
+                loop {
+                    if stop_clone.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let n = writer_counter_clone.fetch_add(1, Ordering::Relaxed);
+                    writer_db
+                        .get("write_load")
+                        .put(format!("val-{n}").into());
+                    // Small yield to avoid saturating the channel.
+                    tokio::task::yield_now().await;
+                }
+            });
+
+            let read_counter = AtomicUsize::new(0);
+            b.to_async(FuturesExecutor).iter(|| {
+                let mut db = db.clone();
+                async move {
+                    let _ = db
+                        .get("bench_key")
+                        .once(Some(Duration::from_secs(2)))
+                        .await;
+                }
+            });
+
+            // Stop the background writer.
+            stop_writer.store(true, Ordering::Relaxed);
+            let _ = writer_handle.await;
+            db.stop();
+            sleep(Duration::from_millis(200)).await;
+            let _ = std::fs::remove_file(&temp_path);
+        });
+    });
+    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

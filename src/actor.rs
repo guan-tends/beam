@@ -4,8 +4,8 @@
 //!
 //! This module provides a minimal actor system inspired by
 //! [Alice Ryhl's "Actors with Tokio"](https://ryhl.io/blog/actors-with-tokio/)
-//! guide. Actors communicate via typed messages over unbounded channels
-//! and run on the Tokio async runtime.
+//! guide. Actors communicate via typed messages over channels and run on the
+//! Tokio async runtime.
 //!
 //! # Architecture
 //!
@@ -14,15 +14,32 @@
 //!   child actor management
 //! - [`Addr`] — a clonable, hashable address for sending messages to an actor
 //!
+//! # Channel Types
+//!
+//! Actors can use either unbounded or bounded channels:
+//!
+//! - **Unbounded** (default) — [`ActorContext::start_actor`] creates an actor
+//!   with an unbounded channel. No backpressure; messages are always enqueued.
+//! - **Bounded** — [`ActorContext::start_actor_bounded`] creates an actor with
+//!   a bounded channel of the given capacity. When full, [`Addr::send`]
+//!   returns `Err(())`, applying backpressure. Used for storage write actors
+//!   where unbounded queue growth is undesirable.
+//!
+//! Both channel types are abstracted behind [`AddrSender`]/[`AddrReceiver`]
+//! enums, so callers use the same [`Addr::send`] API regardless of channel
+//! type.
+//!
 //! # Message Flow
 //!
 //! ```text
-//! Sender → Addr.send(msg) → UnboundedChannel → Actor.handle(msg, ctx)
-//!                                                ↓
-//!                                          Actor can:
-//!                                          - spawn child actors
-//!                                          - send to router
-//!                                          - spawn child tasks
+//! Sender → Addr.send(msg) → Channel (bounded or unbounded)
+//!                                ↓
+//!                          Actor.handle(msg, ctx)
+//!                                ↓
+//!                          Actor can:
+//!                          - spawn child actors
+//!                          - send to router
+//!                          - spawn child tasks
 //! ```
 //!
 //! # Shutdown
@@ -46,6 +63,34 @@ use tokio::sync::mpsc::{
     Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
 };
 use tokio::task::JoinHandle;
+
+/// Internal enum holding either an unbounded or bounded channel sender.
+///
+/// [`Addr::send`] dispatches over this enum so callers don't need to know
+/// whether the underlying channel has backpressure.
+#[derive(Clone, Debug)]
+enum AddrSender {
+    Unbounded(UnboundedSender<Message>),
+    Bounded(Sender<Message>),
+}
+
+/// Internal enum holding either an unbounded or bounded channel receiver.
+///
+/// [`Actor::run`] consumes this, abstracting over the two receiver types.
+enum AddrReceiver {
+    Unbounded(UnboundedReceiver<Message>),
+    Bounded(Receiver<Message>),
+}
+
+impl AddrReceiver {
+    /// Receives the next message, or `None` when the channel is closed.
+    async fn recv(&mut self) -> Option<Message> {
+        match self {
+            Self::Unbounded(r) => r.recv().await,
+            Self::Bounded(r) => r.recv().await,
+        }
+    }
+}
 
 /// The core actor trait.
 ///
@@ -97,14 +142,34 @@ pub trait Actor: Send + Sync + 'static {
     fn subscribe_to_everything(&self) -> bool {
         false
     }
+
+    /// Attempts to produce a clone of this actor for storage read/write
+    /// splitting.
+    ///
+    /// Storage adapters override this to return a boxed clone, enabling the
+    /// [`crate::router::Router`] to start separate read and write actors that
+    /// share the same underlying database. Non-storage actors return `None`
+    /// (the default).
+    ///
+    /// When the Router receives `Some`, it starts two actors: one registered
+    /// in `read_adapters` (receives only `Get`), one in `write_adapters`
+    /// (receives `Put`, `BatchPut`, `Flush`). Both share the same underlying
+    /// data store via `Arc`, so reads see committed writes immediately.
+    fn try_clone_storage(&self) -> Option<Box<dyn Actor>> {
+        None
+    }
 }
 
 impl dyn Actor {
     /// Internal run loop — receives messages until the stop signal fires
     /// or the channel is closed.
+    ///
+    /// Accepts [`AddrReceiver`] so the run loop works with both unbounded
+    /// and bounded channels. Bounded channels provide backpressure for
+    /// write-heavy actors (e.g. storage write actors).
     async fn run(
         &mut self,
-        mut receiver: UnboundedReceiver<Message>,
+        mut receiver: AddrReceiver,
         mut stop_receiver: Receiver<()>,
         mut context: ActorContext,
     ) {
@@ -195,19 +260,28 @@ impl ActorContext {
         }
     }
 
-    /// Spawns a child actor and returns its address.
+    /// Spawns a child actor with an unbounded channel and returns its address.
     ///
     /// The actor runs in a tokio task. Its lifecycle is managed by this
     /// context — calling `stop()` will send a stop signal and abort the task.
     pub fn start_actor(&self, actor: Box<dyn Actor>) -> Addr {
-        self.start_actor_or_router(actor, false)
+        self.start_actor_or_router(actor, false, None)
+    }
+
+    /// Spawns a child actor with a bounded channel and returns its address.
+    ///
+    /// The `bound` parameter sets the channel capacity. When full, `send`
+    /// returns `Err(())`, applying backpressure to senders. Use for
+    /// write-heavy actors where unbounded queue growth is undesirable.
+    pub fn start_actor_bounded(&self, actor: Box<dyn Actor>, bound: usize) -> Addr {
+        self.start_actor_or_router(actor, false, Some(bound))
     }
 
     /// Spawns a router actor. The router's context will have its `router`
     /// field set to its own address (so messages forwarded to `router`
     /// come back to itself).
     pub fn start_router(&self, actor: Box<dyn Actor>) -> Addr {
-        self.start_actor_or_router(actor, true)
+        self.start_actor_or_router(actor, true, None)
     }
 
     /// Spawns a child async task (non-blocking).
@@ -232,10 +306,23 @@ impl ActorContext {
         self.task_handles.write().push(handle);
     }
 
-    fn start_actor_or_router(&self, mut actor: Box<dyn Actor>, is_router: bool) -> Addr {
-        let (sender, receiver) = unbounded_channel::<Message>();
+    fn start_actor_or_router(
+        &self,
+        mut actor: Box<dyn Actor>,
+        is_router: bool,
+        bound: Option<usize>,
+    ) -> Addr {
+        let (addr, receiver) = match bound {
+            Some(cap) => {
+                let (sender, receiver) = channel::<Message>(cap);
+                (Addr::new_bounded(sender), AddrReceiver::Bounded(receiver))
+            }
+            None => {
+                let (sender, receiver) = unbounded_channel::<Message>();
+                (Addr::new(sender), AddrReceiver::Unbounded(receiver))
+            }
+        };
         let (stop_sender, stop_receiver) = channel(1);
-        let addr = Addr::new(sender);
         let mut new_context = self.child_context(addr.clone(), stop_sender.clone());
         if is_router {
             new_context.router = addr.clone();
@@ -284,7 +371,7 @@ impl ActorContext {
 #[derive(Clone, Debug)]
 pub struct Addr {
     id: String,
-    sender: UnboundedSender<Message>,
+    sender: AddrSender,
 }
 
 impl Addr {
@@ -292,19 +379,36 @@ impl Addr {
     pub fn new(sender: UnboundedSender<Message>) -> Self {
         Self {
             id: random_string(32),
-            sender,
+            sender: AddrSender::Unbounded(sender),
+        }
+    }
+
+    /// Creates a new address wrapping a bounded channel sender.
+    ///
+    /// Bounded addresses apply backpressure: when the channel is full,
+    /// `send` returns `Err(())` (same error as a closed channel).
+    pub fn new_bounded(sender: Sender<Message>) -> Self {
+        Self {
+            id: random_string(32),
+            sender: AddrSender::Bounded(sender),
         }
     }
 
     /// Sends a message to this actor.
     ///
     /// Returns `Ok(())` if the message was enqueued, `Err(())` if the
-    /// actor's channel is closed (actor has stopped).
-    #[allow(clippy::result_unit_err)] // channel-closed is unrecoverable; no meaningful error payload
+    /// actor's channel is closed (actor has stopped) or — for bounded
+    /// channels — if the channel is full (backpressure).
+    ///
+    /// Callers that must not lose messages should retry on `Err`. The
+    /// Router's storage dispatch uses `let _ = addr.send(...)` and accepts
+    /// occasional drops under extreme backpressure, which is the correct
+    /// trade-off for an LWW graph store.
+    #[allow(clippy::result_unit_err)] // channel-closed/full is unrecoverable; no meaningful error payload
     pub fn send(&self, msg: Message) -> Result<(), ()> {
-        match self.sender.send(msg) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(()),
+        match &self.sender {
+            AddrSender::Unbounded(s) => s.send(msg).map_err(|_| ()),
+            AddrSender::Bounded(s) => s.try_send(msg).map_err(|_| ()),
         }
     }
 

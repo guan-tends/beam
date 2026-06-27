@@ -541,4 +541,72 @@ mod tests {
         db.stop();
         let _ = std::fs::remove_file(&temp_path);
     }
+
+    /// Proves that `flush_storage` acts as a write barrier: data written
+    /// before the flush is committed to disk before the flush ack returns.
+    ///
+    /// Writes a key, flushes, then opens a new `Node` on the same database
+    /// file and reads the key back. If the flush barrier is broken, the
+    /// read returns `None` (data not yet committed).
+    #[tokio::test]
+    async fn flush_acts_as_write_barrier() {
+        use rod::adapters::RedbStorage;
+        use std::time::Duration;
+
+        let temp_path = std::env::temp_dir()
+            .join(format!("rod-flush-barrier-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&temp_path);
+
+        let config = Config::default();
+
+        // Write phase: put data, then flush.
+        {
+            let mut db = Node::new_with_config(
+                config.clone(),
+                vec![Box::new(RedbStorage::new_with_config(
+                    config.clone(),
+                    temp_path.to_string_lossy().as_ref(),
+                    None,
+                ))],
+                vec![],
+            );
+
+            db.get("BarrierKey").put("barrier_value".into());
+
+            // Flush must block until the Put is committed.
+            let result = db.flush_storage(Some(Duration::from_secs(5))).await;
+            assert!(result.is_ok(), "flush_storage returned {:?}", result);
+
+            db.stop();
+            // Give the actor tasks time to fully release the database handle.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        // Read phase: new Node on the same database file.
+        {
+            let mut db = Node::new_with_config(
+                config,
+                vec![Box::new(RedbStorage::new_with_config(
+                    Config::default(),
+                    temp_path.to_string_lossy().as_ref(),
+                    None,
+                ))],
+                vec![],
+            );
+
+            let val = db
+                .get("BarrierKey")
+                .once(Some(Duration::from_secs(3)))
+                .await;
+            assert_eq!(
+                val,
+                Some(Value::Text("barrier_value".to_string())),
+                "data should be persisted before flush ack returned"
+            );
+
+            db.stop();
+        }
+
+        let _ = std::fs::remove_file(&temp_path);
+    }
 }

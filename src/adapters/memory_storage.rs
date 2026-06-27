@@ -36,6 +36,7 @@ use std::sync::Arc;
 /// In-memory storage adapter backed by `HashMap<String, Children>`.
 ///
 /// See the [module docs](self) for semantics.
+#[derive(Clone)]
 pub struct MemoryStorage {
     store: Arc<RwLock<HashMap<String, Children>>>,
 }
@@ -159,6 +160,15 @@ impl Actor for MemoryStorage {
             }
             _ => {}
         }
+    }
+
+    /// MemoryStorage does not split into read/write actors.
+    ///
+    /// In-memory writes are synchronous (no fsync), so there is no benefit
+    /// to splitting reads from writes. Keeping a single actor preserves
+    /// read-after-write ordering for tests and synchronous use cases.
+    fn try_clone_storage(&self) -> Option<Box<dyn Actor>> {
+        None
     }
 }
 
