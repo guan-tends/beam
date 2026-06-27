@@ -1,3 +1,36 @@
+//! Persistent embedded storage adapter using [`redb`](https://crates.io/crates/redb).
+//!
+//! [`RedbStorage`] stores the Rod graph in a redb database file on disk.
+//! It provides ACID transactions with automatic crash recovery.
+//!
+//! # Schema
+//!
+//! Two tables:
+//! - `rod_nodes_v1`: key = `node_id` (&str), value = `bincode(Children)` (BTreeMap<String, NodeData>)
+//! - `rod_meta_v1`: key = metadata key (&str), value = `u64` timestamp
+//!
+//! # Semantics
+//!
+//! - **Get**: Reads from a read transaction. If the node exists, replies
+//!   with its children. If not, sends an empty reply (sentinel) so `.map()`
+//!   listeners don't hang. Skips reply if checksum matches (already sent).
+//! - **Put**: Opens a write transaction, merges `updated_nodes` using
+//!   `updated_at` conflict resolution (last-write-wins), commits.
+//! - **BatchPut**: All puts in the batch are applied in a single transaction.
+//! - **Flush**: No additional work (puts already commit inline). Sends
+//!   immediate ack for barrier semantics.
+//!
+//! # Conflict Resolution
+//!
+//! For each child, the incoming `updated_at` is compared to the existing one.
+//! If `incoming.updated_at >= existing.updated_at`, the child is overwritten.
+//! This implements last-write-wins (LWW) per child.
+//!
+//! # Thread Safety
+//!
+//! The `Database` handle is `Arc`-wrapped and safe to share. Reads use
+//! `begin_read()` (concurrent) and writes use `begin_write()` (exclusive).
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -12,9 +45,12 @@ use async_trait::async_trait;
 use log::{debug, error};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
+/// Table definition for graph node data.
 const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
+/// Table definition for metadata (e.g. last write timestamp).
 const ROD_META: TableDefinition<&str, u64> = TableDefinition::new("rod_meta_v1");
 
+/// Macro to unwrap a redb result or log and return early on error.
 macro_rules! unwrap_or_return {
     ($e:expr) => {
         match $e {
@@ -29,13 +65,18 @@ macro_rules! unwrap_or_return {
 
 /// redb-backed persistent storage adapter for Rod.
 ///
-/// Schema: single table `rod_nodes_v1` where
-///   key   = node_id (&str)
-///   value = bincode(BTreeMap<String, NodeData>)
+/// Stores the graph in a single redb database file. Each `Put` commits
+/// inline (ACID). Reads are concurrent. Flush is a no-op ack (puts already
+/// fsync on commit).
 ///
-/// Read operations are sync within the actor task.
-/// Put commits inline for ACID ordering (fsync on local redb is fast).
-/// Flush writes a meta marker and acks for barrier semantics.
+/// # Example
+///
+/// ```ignore
+/// use rod::adapters::RedbStorage;
+/// use rod::Config;
+///
+/// let storage = RedbStorage::new_with_config(Config::default(), "my-db.redb", None);
+/// ```
 pub struct RedbStorage {
     db: Arc<Database>,
     path: String,
@@ -53,12 +94,26 @@ impl Clone for RedbStorage {
 }
 
 impl RedbStorage {
-    /// Open (or create) a redb database at the given path.
+    /// Creates a new redb storage at the default path `rod.redb`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the database cannot be created or opened.
     pub fn new() -> Self {
         Self::new_with_config(Config::default(), "rod.redb", None)
     }
 
-    /// Open (or create) with explicit config and optional size cap.
+    /// Creates a new redb storage with explicit config and path.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Node configuration
+    /// * `path` - File path for the redb database
+    /// * `_max_size` - Optional maximum database size (currently unused)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the database cannot be created or opened at the given path.
     pub fn new_with_config<P: AsRef<Path>>(
         config: Config,
         path: P,
@@ -75,6 +130,11 @@ impl RedbStorage {
         }
     }
 
+    /// Handles a `Get` by reading from the database and replying with children.
+    ///
+    /// If the node doesn't exist, sends an empty reply (sentinel) so `.map()`
+    /// listeners don't hang. If the checksum matches the request, the reply
+    /// is suppressed (already sent the same data).
     fn handle_get(&self, get: Get, ctx: &ActorContext) {
         let read_txn = unwrap_or_return!(self.db.begin_read());
         let table = unwrap_or_return!(read_txn.open_table(ROD_NODES));
@@ -90,7 +150,7 @@ impl RedbStorage {
                 let mut reply_with_nodes = BTreeMap::new();
                 reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
                 let mut put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
-                put.to_string();
+                put.to_string(); // compute checksum
                 let _ = get.from.send(Message::Put(put));
                 return;
             }
@@ -115,7 +175,7 @@ impl RedbStorage {
         reply_with_nodes.insert(get.node_id.clone(), reply_with_children);
 
         let mut put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
-        put.to_string();
+        put.to_string(); // compute checksum
 
         if put.checksum != get.checksum {
             let _ = get.from.send(Message::Put(put));
@@ -124,6 +184,10 @@ impl RedbStorage {
         }
     }
 
+    /// Applies a single Put to the given write transaction.
+    ///
+    /// For each node in `put.updated_nodes`, merges children using LWW
+    /// conflict resolution. Empty nodes are removed from the table.
     fn apply_put_to_tables(
         &self,
         wtxn: &mut redb::WriteTransaction,
@@ -133,6 +197,7 @@ impl RedbStorage {
         let mut meta_table = wtxn.open_table(ROD_META)?;
 
         for (node_id, update_data) in put.updated_nodes.into_iter().rev() {
+            // Skip internal control keys (e.g. _flushed, _ack)
             if !node_id.is_empty() && node_id.starts_with('_') {
                 continue;
             }
@@ -175,6 +240,7 @@ impl RedbStorage {
         Ok(())
     }
 
+    /// Handles a single Put by opening a write transaction, applying, and committing.
     fn handle_put_internal(&self, put: Put) -> Result<(), redb::Error> {
         let mut wtxn = self.db.begin_write()?;
         self.apply_put_to_tables(&mut wtxn, put)?;
@@ -182,6 +248,9 @@ impl RedbStorage {
         Ok(())
     }
 
+    /// Handles a BatchPut by applying all puts in a single transaction.
+    ///
+    /// This preserves atomicity — either all puts commit or none do.
     fn handle_batch_put(&self, batch: BatchPut) -> Result<(), redb::Error> {
         let mut wtxn = self.db.begin_write()?;
         for put in batch.puts {
@@ -196,10 +265,7 @@ impl RedbStorage {
 impl Actor for RedbStorage {
     async fn pre_start(&mut self, _ctx: &ActorContext) {
         debug!("RedbStorage started at {}", self.path);
-        // redb 4.x: open_table on a ReadTransaction returns TableDoesNotExist for
-        // missing tables, but on a WriteTransaction it auto-creates.  Warm the
-        // schema once at startup so that the very first read (e.g. auth recall
-        // on a brand-new database) finds the tables already present.
+        // Warm the schema so the first read finds tables already present.
         if let Ok(wtxn) = self.db.begin_write() {
             let _ = wtxn.open_table(ROD_NODES);
             let _ = wtxn.open_table(ROD_META);
@@ -216,7 +282,6 @@ impl Actor for RedbStorage {
         match message {
             Message::Get(get) => self.handle_get(get, ctx),
             Message::Put(put) => {
-                // Inline commit: redb is local embedded storage; fsync is fast
                 if let Err(e) = self.handle_put_internal(put) {
                     error!("redb put commit failed: {:?}", e);
                 }
@@ -232,9 +297,7 @@ impl Actor for RedbStorage {
                 let ctx_addr = ctx.addr.clone();
 
                 // For embedded redb, put() already commits inline (wtxn.commit).
-                // Flush has no additional durability work.  Send the ack
-                // immediately so the caller never hangs waiting for a barrier
-                // that had nothing to wait on.
+                // Flush has no additional durability work. Send ack immediately.
                 let mut ack_children = BTreeMap::new();
                 ack_children.insert(
                     "_flushed".to_string(),
@@ -249,7 +312,7 @@ impl Actor for RedbStorage {
                 let mut ack_nodes = BTreeMap::new();
                 ack_nodes.insert("_ack".to_string(), ack_children);
                 let mut put = Put::new(ack_nodes, Some(flush_id), ctx_addr.clone());
-                put.to_string();
+                put.to_string(); // compute checksum
                 let _ = from_addr.send(Message::Put(put));
             }
             _ => {}
@@ -260,5 +323,36 @@ impl Actor for RedbStorage {
 impl Default for RedbStorage {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_storage(suffix: &str) -> RedbStorage {
+        let path = format!("/tmp/rod-test-{}-{}.redb", std::process::id(), suffix);
+        RedbStorage::new_with_config(Config::default(), &path, None)
+    }
+
+    #[tokio::test]
+    async fn test_redb_storage_creates_db() {
+        let storage = create_test_storage("create");
+        assert!(!storage.path.is_empty());
+        let _ = std::fs::remove_file(&storage.path);
+    }
+
+    #[tokio::test]
+    async fn test_redb_storage_default() {
+        let storage = RedbStorage::default();
+        let _ = std::fs::remove_file(&storage.path);
+    }
+
+    #[tokio::test]
+    async fn test_redb_storage_clone() {
+        let storage = create_test_storage("clone");
+        let cloned = storage.clone();
+        assert_eq!(storage.path, cloned.path);
+        let _ = std::fs::remove_file(&storage.path);
     }
 }

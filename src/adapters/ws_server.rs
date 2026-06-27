@@ -1,3 +1,26 @@
+//! WebSocket server adapter — accepts inbound WebSocket connections.
+//!
+//! [`WsServer`] listens on a TCP port and accepts incoming WebSocket
+//! connections. Each connection is handled by a [`WsConn`] actor. The
+//! server also optionally starts a web server (on `port + 1`) for stats
+//! and peer ID discovery.
+//!
+//! # TLS Support
+//!
+//! When `cert_path` and `key_path` are configured in [`WsServerConfig`],
+//! the server uses TLS for both the WebSocket and web server. Otherwise,
+//! plain TCP is used.
+//!
+//! # Ports
+//!
+//! - WebSocket port: `ws_config.port` (default 4944)
+//! - Web UI port: `ws_config.port + 1` (default 4945)
+//!
+//! # Stats
+//!
+//! When `Config::stats` is enabled, the server periodically reports the
+//! number of WebSocket connections to the node's stats graph.
+
 use crate::Config;
 use crate::Node;
 use crate::actor::{Actor, ActorContext, Addr};
@@ -19,14 +42,20 @@ use tokio_native_tls::native_tls::Identity;
 
 use tokio_tungstenite::MaybeTlsStream;
 
+/// Shared set of connected client addresses.
 type Clients = Arc<RwLock<HashSet<Addr>>>;
 
+/// Configuration for the [`WsServer`] adapter.
 #[derive(Clone)]
 pub struct WsServerConfig {
+    /// Port to listen for WebSocket connections (default: 4944).
     pub port: u16,
+    /// Path to TLS certificate file (PEM/PKCS8). If `None`, plain TCP is used.
     pub cert_path: Option<String>,
+    /// Path to TLS private key file. Required when `cert_path` is set.
     pub key_path: Option<String>,
 }
+
 impl Default for WsServerConfig {
     fn default() -> Self {
         WsServerConfig {
@@ -37,16 +66,29 @@ impl Default for WsServerConfig {
     }
 }
 
+/// WebSocket server adapter that accepts inbound connections.
+///
+/// Listens on a TCP port and spawns a [`WsConn`] actor for each incoming
+/// WebSocket connection. Optionally serves a web UI on `port + 1` for
+/// stats and peer ID discovery.
 pub struct WsServer {
     config: Config,
     ws_config: WsServerConfig,
     clients: Clients,
 }
+
 impl WsServer {
+    /// Creates a new WebSocket server with default config.
     pub fn new(config: Config) -> Self {
         Self::new_with_config(config, WsServerConfig::default())
     }
 
+    /// Creates a new WebSocket server with custom config.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Node configuration
+    /// * `ws_config` - WebSocket server config (port, TLS)
     pub fn new_with_config(config: Config, ws_config: WsServerConfig) -> Self {
         Self {
             config,
@@ -55,6 +97,8 @@ impl WsServer {
         }
     }
 
+    /// Handles a single incoming WebSocket stream by upgrading it and
+    /// spawning a [`WsConn`] actor.
     async fn handle_stream(
         stream: MaybeTlsStream<tokio::net::TcpStream>,
         ctx: &ActorContext,
@@ -64,9 +108,8 @@ impl WsServer {
         let ws_stream = match tokio_tungstenite::accept_async(stream).await {
             Ok(s) => s,
             Err(_e) => {
-                // suppress errors from receiving normal http requests
-                // error!("Error during the websocket handshake occurred: {}", e);
-                // try to handle normal http request?
+                // Suppress errors from receiving normal HTTP requests
+                // (e.g. browser preflight checks).
                 return;
             }
         };
@@ -78,12 +121,16 @@ impl WsServer {
         clients.write().await.insert(addr);
     }
 
+    /// Starts the web server for stats and peer ID discovery.
+    ///
+    /// Serves on `config.port + 1`. Routes:
+    /// - `/stats/*` — static files from `./assets/stats`
+    /// - `/peer_id` — returns this node's peer ID
     async fn start_web_server(config: WsServerConfig, peer_id: String) {
         use warp::Filter;
-        // Match any request and return hello world!
         let stats = warp::path("stats").and(warp::fs::dir("./assets/stats"));
-        let peer_id = warp::path("peer_id").map(move || peer_id.to_string());
-        let routes = warp::get().and(stats.or(peer_id));
+        let peer_id_route = warp::path("peer_id").map(move || peer_id.to_string());
+        let routes = warp::get().and(stats.or(peer_id_route));
 
         let port = config.port + 1;
         if let Some(cert_path) = config.cert_path {
@@ -106,6 +153,7 @@ impl WsServer {
         warp::serve(routes).run(([0, 0, 0, 0], port)).await;
     }
 
+    /// Periodically reports WebSocket connection count to the stats graph.
     async fn update_stats(ctx: ActorContext, mut stats: Node) {
         stats.put("a".into());
         let mut conns: usize = 0;
@@ -120,6 +168,7 @@ impl WsServer {
         }
     }
 }
+
 #[async_trait]
 impl Actor for WsServer {
     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
@@ -153,7 +202,7 @@ impl Actor for WsServer {
             });
         }
 
-        // Create the event loop and TCP listener we'll accept connections on.
+        // Create the TCP listener
         let try_socket = TcpListener::bind(&addr).await;
         let listener = try_socket.expect("Failed to bind");
         eprintln!("Websocket endpoint: ws://{}/ws", addr);

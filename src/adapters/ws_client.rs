@@ -1,3 +1,21 @@
+//! Outgoing WebSocket client manager — connects to remote relay servers.
+//!
+//! [`OutgoingWebsocketManager`] is a network adapter that maintains outbound
+//! WebSocket connections to one or more relay servers. It:
+//!
+//! - Connects to each configured URL on startup (with retry)
+//! - Creates a [`WsConn`] actor per connection
+//! - Fans out outgoing messages to all connected clients
+//! - Marks itself as `subscribe_to_everything` so the router sends all
+//!   `Get` and `Put` messages to it (relay behavior)
+//!
+//! # Relay Semantics
+//!
+//! Unlike direct P2P connections, relay servers receive all messages
+//! (not just topic-matched ones). This makes them suitable as bootstrap
+//! nodes for discovering peers and relaying messages when direct
+//! connectivity is unavailable.
+
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use tokio_tungstenite::connect_async;
@@ -11,6 +29,11 @@ use async_trait::async_trait;
 use log::{debug, info};
 use tokio::time::{Duration, sleep};
 
+/// Manages outbound WebSocket connections to relay servers.
+///
+/// Created with a list of WebSocket URLs. On `pre_start`, connects to each
+/// URL (with retry) and spawns a [`WsConn`] actor per connection. All
+/// outgoing messages are fanned out to all connected clients.
 pub struct OutgoingWebsocketManager {
     config: Config,
     clients: HashMap<String, Addr>,
@@ -18,6 +41,12 @@ pub struct OutgoingWebsocketManager {
 }
 
 impl OutgoingWebsocketManager {
+    /// Creates a new manager for the given URLs.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Node configuration (uses `allow_public_space` for connections)
+    /// * `urls` - WebSocket URLs to connect to (e.g. `["wss://relay.example.com/ws"]`)
     pub fn new(config: Config, urls: Vec<String>) -> Self {
         OutgoingWebsocketManager {
             urls,
@@ -29,7 +58,6 @@ impl OutgoingWebsocketManager {
 
 #[async_trait]
 impl Actor for OutgoingWebsocketManager {
-    // TODO: support multiple outbound websockets
     async fn pre_start(&mut self, ctx: &ActorContext) {
         info!("OutgoingWebsocketManager starting");
         for url in self.urls.iter() {
@@ -54,11 +82,13 @@ impl Actor for OutgoingWebsocketManager {
         }
     }
 
+    /// Returns `true` — this adapter subscribes to all messages (relay behavior).
     fn subscribe_to_everything(&self) -> bool {
         true
     }
 
     async fn handle(&mut self, message: Message, _ctx: &ActorContext) {
+        // Fan out to all connected clients, removing any that have died.
         self.clients
             .retain(|_url, client| client.send(message.clone()).is_ok());
     }
