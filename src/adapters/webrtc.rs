@@ -1,3 +1,36 @@
+//! WebRTC peer adapter — P2P data channels over str0m (sans-io WebRTC).
+//!
+//! [`WebRtcPeer`] establishes direct P2P connections to remote peers using
+//! WebRTC data channels. Signaling (SDP offer/answer and ICE candidates)
+//! flows over the existing WebSocket mesh via [`Message::RtcSignal`].
+//!
+//! # Architecture
+//!
+//! ```text
+//!   Peer A (Offerer)                    Peer B (Answerer)
+//!   ┌─────────────┐                     ┌─────────────┐
+//!   │ WebRtcPeer  │ ── RtcSignal ──→    │ WebRtcPeer  │
+//!   │             │ ←── (via WS) ───    │             │
+//!   │ str0m Rtc   │                     │ str0m Rtc   │
+//!   │ UDP socket  │ ←── P2P data ──→    │ UDP socket  │
+//!   └─────────────┘                     └─────────────┘
+//! ```
+//!
+//! # ICE Negotiation
+//!
+//! 1. Each peer binds a UDP socket and queries STUN/TURN servers for candidates
+//! 2. The offerer creates an SDP offer and sends it via `RtcSignal`
+//! 3. The answerer accepts the offer and sends back an SDP answer
+//! 4. ICE candidates are exchanged via `RtcSignal` messages
+//! 5. Once connected, Gun protocol messages flow over the data channel
+//!
+//! # Channel
+//!
+//! A single data channel labeled `"gun-mesh"` is created. All Gun protocol
+//! messages (Put, Get, etc.) are serialized as text and sent over this channel.
+//!
+//! Requires the `webrtc` feature.
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,8 +49,7 @@ use crate::utils::random_string;
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
 
-/// WebRTC peer adapter: P2P data channel over str0m (sans-io WebRTC).
-/// Mirrors the WsConn pattern. Signaling flows over the existing mesh.
+/// Role in the WebRTC connection — offerer initiates, answerer responds.
 #[derive(Clone, Debug)]
 pub enum WebRtcRole {
     Offerer,
@@ -302,9 +334,8 @@ impl Actor for WebRtcPeer {
                                             let _ = router.send(m);
                                         }
                                     }
-                                    Err(e) => {}
+                                    Err(e) => debug!("webrtc: failed to parse channel data: {}", e),
                                 }
-                            } else {
                             }
                         }
                         Ok(Output::Event(Event::ChannelClose(cid))) => {
@@ -349,10 +380,8 @@ impl Actor for WebRtcPeer {
                     LoopResult::Cmd(Some(WrtcCommand::Write(data))) => {
                         if let Some(cid) = channel_id {
                             if let Some(mut chan) = rtc.channel(cid) {
-                                let r = chan.write(false, &data);
-                            } else {
+                                let _ = chan.write(false, &data);
                             }
-                        } else if connected {
                         }
                     }
                     LoopResult::Cmd(Some(WrtcCommand::Signal(signal))) => {

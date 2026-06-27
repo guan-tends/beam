@@ -1,3 +1,29 @@
+//! UDP multicast LAN discovery and sync adapter.
+//!
+//! [`Multicast`] uses UDP multicast to discover and sync with Rod peers on
+//! the local network. It broadcasts `Put` and `Get` messages to a multicast
+//! group, enabling zero-config peer discovery on LANs.
+//!
+//! # Configuration
+//!
+//! - Multicast group: `233.255.255.255:7654`
+//! - Buffer size: 64 KB
+//! - Interfaces: all IPv4 interfaces
+//!
+//! # Behavior
+//!
+//! - `pre_start`: Joins the multicast group and starts a blocking receive
+//!   loop in a `blocking_child_task`
+//! - `handle`: Broadcasts outgoing `Put` and `Get` messages to the group
+//! - Incoming messages are parsed and forwarded to the [`crate::router::Router`]
+//! - Marks itself as `subscribe_to_everything` (receives all messages)
+//!
+//! # Limitations
+//!
+//! The receive loop uses `blocking_child_task` — the `MulticastSocket::receive`
+//! call is synchronous and blocks. This is not optimal for async contexts
+//! but is required by the `multicast_socket` crate's API.
+
 use multicast_socket::{MulticastOptions, MulticastSocket, all_ipv4_interfaces};
 use std::net::SocketAddrV4;
 
@@ -9,12 +35,22 @@ use log::{debug, error, info};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// UDP multicast adapter for LAN peer discovery and sync.
+///
+/// Broadcasts Gun protocol messages to the multicast group `233.255.255.255:7654`
+/// and receives messages from other peers on the same LAN.
 pub struct Multicast {
     socket: Arc<RwLock<MulticastSocket>>,
     config: Config,
 }
 
 impl Multicast {
+    /// Creates a new multicast adapter bound to the default group.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the multicast socket cannot be created (e.g. no network
+    /// interfaces available, or port 7654 is in use).
     pub fn new(config: Config) -> Self {
         let bind_address = SocketAddrV4::new([233, 255, 255, 255].into(), 7654);
         let options = MulticastOptions {
@@ -28,9 +64,12 @@ impl Multicast {
         Multicast { socket, config }
     }
 
+    /// Parses an incoming multicast message and forwards it to the router.
+    ///
+    /// Only `Put` and `Get` messages are forwarded — other message types
+    /// (Hi, Flush, RtcSignal) are not meaningful over multicast.
     fn handle_incoming_message(data: &str, ctx: &ActorContext, allow_public_space: bool) {
         debug!("in {}", data);
-        //let from = format!("multicast_{:?}", message.interface).to_string();
         match Message::try_from(data, ctx.addr.clone(), allow_public_space) {
             Ok(msgs) => {
                 for msg in msgs.into_iter() {
@@ -62,7 +101,7 @@ impl Actor for Multicast {
         debug!("out {}", msg.get_id());
         if msg.is_from(&ctx.addr) {
             return;
-        } // should this be in Actor?
+        }
         match msg {
             Message::Put(mut put) => {
                 if let Err(e) = self
@@ -90,6 +129,7 @@ impl Actor for Multicast {
         }
     }
 
+    /// Returns `true` — multicast subscribes to all messages.
     fn subscribe_to_everything(&self) -> bool {
         true
     }
@@ -113,8 +153,7 @@ impl Actor for Multicast {
             // blocking — not optimal!
             loop {
                 if let Ok(message) = socket.receive() {
-                    // this blocks
-                    // TODO if message.from == multicast_[interface], don't resend to [interface]
+                    // TODO: if message.from == multicast_[interface], don't resend to [interface]
                     if let Ok(data) = std::str::from_utf8(&message.data) {
                         Self::handle_incoming_message(data, &ctx_clone, allow_public_space);
                     }
