@@ -132,6 +132,62 @@ pub mod webrtc_stun {
         xra.get_from_as(&response, ATTR_XOR_RELAYED_ADDRESS).ok()?;
         Some(SocketAddr::new(xra.ip, xra.port))
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::parse_ice_server;
+
+        #[test]
+        fn test_parse_stun_uri() {
+            let (scheme, addr) = parse_ice_server("stun:1.2.3.4:19302").unwrap();
+            assert_eq!(scheme, "stun");
+            assert_eq!(addr.port(), 19302);
+        }
+
+        #[test]
+        fn test_parse_stun_default_port() {
+            let (scheme, addr) = parse_ice_server("stun:1.2.3.4").unwrap();
+            assert_eq!(scheme, "stun");
+            assert_eq!(addr.port(), 3478);
+        }
+
+        #[test]
+        fn test_parse_turn_uri() {
+            let (scheme, addr) = parse_ice_server("turn:5.6.7.8:3478").unwrap();
+            assert_eq!(scheme, "turn");
+            assert_eq!(addr.port(), 3478);
+        }
+
+        #[test]
+        fn test_parse_stuns_uri() {
+            let (scheme, _addr) = parse_ice_server("stuns:1.2.3.4:5349").unwrap();
+            assert_eq!(scheme, "stuns");
+        }
+
+        #[test]
+        fn test_parse_turns_uri() {
+            let (scheme, _addr) = parse_ice_server("turns:1.2.3.4:5349").unwrap();
+            assert_eq!(scheme, "turns");
+        }
+
+        #[test]
+        fn test_parse_no_scheme_defaults_stun() {
+            let (scheme, addr) = parse_ice_server("1.2.3.4:3478").unwrap();
+            assert_eq!(scheme, "stun");
+            assert_eq!(addr.port(), 3478);
+        }
+
+        #[test]
+        fn test_parse_invalid_port() {
+            assert!(parse_ice_server("stun:1.2.3.4:abc").is_none());
+        }
+
+        #[test]
+        fn test_parse_with_leading_slash() {
+            let (_scheme, addr) = parse_ice_server("stun://1.2.3.4:3478").unwrap();
+            assert_eq!(addr.port(), 3478);
+        }
+    }
 }
 
 #[cfg(not(feature = "webrtc"))]
@@ -156,5 +212,16 @@ pub mod webrtc_stun {
         _timeout: std::time::Duration,
     ) -> Option<SocketAddr> {
         None
+    }
+}
+
+#[cfg(all(test, not(feature = "webrtc")))]
+mod tests {
+    use super::webrtc_stun::parse_ice_server;
+
+    #[test]
+    fn test_parse_stun_uri_no_webrtc_returns_none() {
+        // Without webrtc feature, parse_ice_server returns None
+        assert!(parse_ice_server("stun:1.2.3.4:19302").is_none());
     }
 }
