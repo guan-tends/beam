@@ -1,3 +1,11 @@
+//! Minimal example — create a Node, put a value, subscribe, and receive.
+//!
+//! No network, no storage — just the core pub/sub loop in memory.
+//!
+//! ```bash
+//! cargo run --example minimal
+//! ```
+
 use rod::{Node, adapters::*};
 
 #[tokio::main]

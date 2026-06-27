@@ -1,4 +1,12 @@
-// Standalone: does Rod handle flat keys?
+//! Flat vs nested key test — explores Rod's data model.
+//!
+//! Compares flat keys (`db.get("a")`) vs nested keys (`db.get("x").get("y")`)
+//! for both `once()` and `on()` subscription patterns.
+//!
+//! ```bash
+//! cargo run --example flat_test
+//! ```
+
 #[tokio::main]
 async fn main() {
     use rod::Node;
