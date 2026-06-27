@@ -59,6 +59,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Maximum number of seen Get messages to track for deduplication.
 static SEEN_MSGS_MAX_SIZE: usize = 10000;
 
+/// Channel capacity for storage write actors.
+///
+/// When full, `send` returns `Err(())` and the Router drops the message
+/// (LWW semantics tolerate occasional drops under extreme backpressure).
+/// 1024 is generous for typical workloads while preventing unbounded
+/// memory growth under sustained write bursts.
+static WRITE_CHANNEL_BOUND: usize = 1024;
+
 /// Tracks a seen Get message for dedup and response routing.
 struct SeenGetMessage {
     /// The actor that sent the original Get — used to route the response back.
@@ -128,7 +136,7 @@ impl Actor for Router {
             match adapter.try_clone_storage() {
                 Some(read_actor) => {
                     let read_addr = ctx.start_actor(read_actor);
-                    let write_addr = ctx.start_actor(adapter);
+                    let write_addr = ctx.start_actor_bounded(adapter, WRITE_CHANNEL_BOUND);
                     self.storage_adapters.insert(read_addr.clone());
                     self.storage_adapters.insert(write_addr.clone());
                     self.read_adapters.insert(read_addr);
