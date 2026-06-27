@@ -19,12 +19,25 @@
 //! # Architecture
 //!
 //! ```text
-//!   Node ──→ Router ──→ Storage Adapters (MemoryStorage, RedbStorage)
-//!     ↑                   ↓
+//!   Node ──→ Router ──→ Storage Read Adapters  (Get)
+//!     ↑    ──→ Router ──→ Storage Write Adapters (Put, BatchPut, Flush)
+//!     │                   ↓
 //!     └──→ Router ──→ Network Adapters (WsConn, WsServer, WebRtcPeer)
 //!                        ↓
 //!                    Remote Peers
 //! ```
+//!
+//! # CQRS Storage Split
+//!
+//! Each storage adapter is started as two actors sharing the same underlying
+//! data store:
+//! - **Read actor** — handles `Get` messages, processes concurrently
+//! - **Write actor** — handles `Put`, `BatchPut`, `Flush` in sequential order
+//!
+//! This separates read latency from write throughput: a slow `fsync` in the
+//! write actor never blocks a concurrent `Get` in the read actor. Both actors
+//! share the same `Arc<Database>` (redb) or `Arc<RwLock<HashMap>>` (memory),
+//! so reads see committed writes immediately via MVCC snapshots.
 //!
 //! # Deduplication
 //!
@@ -45,6 +58,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Maximum number of seen Get messages to track for deduplication.
 static SEEN_MSGS_MAX_SIZE: usize = 10000;
+
+/// Channel capacity for storage write actors.
+///
+/// When full, `send` returns `Err(())` and the Router drops the message
+/// (LWW semantics tolerate occasional drops under extreme backpressure).
+/// 1024 is generous for typical workloads while preventing unbounded
+/// memory growth under sustained write bursts.
+static WRITE_CHANNEL_BOUND: usize = 1024;
 
 /// Tracks a seen Get message for dedup and response routing.
 struct SeenGetMessage {
@@ -76,7 +97,22 @@ pub struct Router {
     config: Config,
     known_peers: HashSet<Addr>,
     peer_addrs: HashMap<String, Addr>,
+    /// Addresses of all storage adapter actors (both read and write).
+    ///
+    /// Used for echo-suppression checks (e.g. `put.from == *addr`).
     storage_adapters: HashSet<Addr>,
+    /// Addresses of storage read actors — receive `Get` messages only.
+    ///
+    /// These actors share the same underlying database as the corresponding
+    /// write actors, but process reads concurrently without waiting for
+    /// pending writes.
+    read_adapters: HashSet<Addr>,
+    /// Addresses of storage write actors — receive `Put`, `BatchPut`, `Flush`.
+    ///
+    /// Write actors commit inside `spawn_blocking` (for redb) so fsync
+    /// never blocks the async runtime. Messages are processed sequentially
+    /// within each write actor, preserving write ordering.
+    write_adapters: HashSet<Addr>,
     network_adapters: HashSet<Addr>,
     storage_adapter_actors: Vec<Box<dyn Actor>>,
     network_adapter_actors: Vec<Box<dyn Actor>>,
@@ -92,9 +128,27 @@ impl Actor for Router {
     /// Starts storage and network adapter actors, registers them, and
     /// optionally begins stats reporting.
     async fn pre_start(&mut self, ctx: &ActorContext) {
+        // Start storage adapters, splitting each into a concurrent read
+        // actor and a serialized write actor when the adapter supports it.
+        // Both actors share the same underlying store (Arc<Database> or
+        // Arc<RwLock<HashMap>>), so reads see committed writes immediately.
         while let Some(adapter) = self.storage_adapter_actors.pop() {
-            let addr = ctx.start_actor(adapter);
-            self.storage_adapters.insert(addr);
+            match adapter.try_clone_storage() {
+                Some(read_actor) => {
+                    let read_addr = ctx.start_actor(read_actor);
+                    let write_addr = ctx.start_actor_bounded(adapter, WRITE_CHANNEL_BOUND);
+                    self.storage_adapters.insert(read_addr.clone());
+                    self.storage_adapters.insert(write_addr.clone());
+                    self.read_adapters.insert(read_addr);
+                    self.write_adapters.insert(write_addr);
+                }
+                None => {
+                    let addr = ctx.start_actor(adapter);
+                    self.storage_adapters.insert(addr.clone());
+                    self.read_adapters.insert(addr.clone());
+                    self.write_adapters.insert(addr);
+                }
+            }
         }
         while let Some(adapter) = self.network_adapter_actors.pop() {
             let subscribe_to_everything = adapter.subscribe_to_everything();
@@ -186,6 +240,8 @@ impl Router {
             known_peers: HashSet::new(),
             peer_addrs: HashMap::new(),
             storage_adapters: HashSet::new(),
+            read_adapters: HashSet::new(),
+            write_adapters: HashSet::new(),
             network_adapters: HashSet::new(),
             storage_adapter_actors,
             network_adapter_actors,
@@ -236,8 +292,8 @@ impl Router {
             .or_default()
             .insert(get.from.clone());
 
-        // Ask storage
-        for addr in self.storage_adapters.iter() {
+        // Ask storage read actors
+        for addr in self.read_adapters.iter() {
             let _ = addr.send(Message::Get(get.clone()));
         }
 
@@ -354,13 +410,13 @@ impl Router {
                 }
             }
             _ => {
-                // Forward to storage adapter(s)
-                for addr in self.storage_adapters.iter() {
+                // Forward to storage write adapter(s)
+                for addr in self.write_adapters.iter() {
                     if put.from == *addr {
                         continue;
                     }
                     let _ = addr.send(Message::Put(put.clone()));
-                    debug!("sent to adapter {}", addr);
+                    debug!("sent to write adapter {}", addr);
                 }
                 // Network relay is handled by handle_put_relay for batching
                 self.handle_put_relay(&put);
@@ -454,8 +510,8 @@ impl Router {
     /// This preserves atomic multi-write semantics for storage adapters while
     /// still doing per-message dedup and network relay.
     fn handle_batch_put(&mut self, batch: BatchPut) {
-        // Forward BatchPut to storage — preserves single-transaction semantics
-        for addr in self.storage_adapters.iter() {
+        // Forward BatchPut to storage write adapters — preserves single-transaction semantics
+        for addr in self.write_adapters.iter() {
             if batch.from == *addr {
                 continue;
             }
@@ -497,7 +553,7 @@ impl Router {
     /// persistence. The flush is not relayed to network peers.
     fn handle_flush(&mut self, flush: Flush) {
         let mut sent = HashSet::new();
-        for addr in self.storage_adapters.iter() {
+        for addr in self.write_adapters.iter() {
             if flush.from == *addr {
                 continue;
             }
@@ -507,7 +563,7 @@ impl Router {
             sent.insert(addr.clone());
             let _ = addr.send(Message::Flush(flush.clone()));
         }
-        debug!("forwarded flush to {} storage adapters", sent.len());
+        debug!("forwarded flush to {} storage write adapters", sent.len());
     }
 
     /// Checks if a message ID has been seen, and tracks it if not.
@@ -536,7 +592,8 @@ mod tests {
         let storage = vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
         let router = Router::new(config, storage, vec![]);
         assert!(router.known_peers.is_empty());
-        assert!(router.storage_adapters.is_empty());
+        assert!(router.read_adapters.is_empty());
+        assert!(router.write_adapters.is_empty());
         assert!(router.network_adapters.is_empty());
     }
 
