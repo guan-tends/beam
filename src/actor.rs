@@ -97,6 +97,22 @@ pub trait Actor: Send + Sync + 'static {
     fn subscribe_to_everything(&self) -> bool {
         false
     }
+
+    /// Attempts to produce a clone of this actor for storage read/write
+    /// splitting.
+    ///
+    /// Storage adapters override this to return a boxed clone, enabling the
+    /// [`crate::router::Router`] to start separate read and write actors that
+    /// share the same underlying database. Non-storage actors return `None`
+    /// (the default).
+    ///
+    /// When the Router receives `Some`, it starts two actors: one registered
+    /// in `read_adapters` (receives only `Get`), one in `write_adapters`
+    /// (receives `Put`, `BatchPut`, `Flush`). Both share the same underlying
+    /// data store via `Arc`, so reads see committed writes immediately.
+    fn try_clone_storage(&self) -> Option<Box<dyn Actor>> {
+        None
+    }
 }
 
 impl dyn Actor {
