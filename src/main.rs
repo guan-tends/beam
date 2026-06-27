@@ -1,3 +1,44 @@
+//! Rod — a Rust implementation of the Gun.js P2P synchronized graph database.
+//!
+//! This is the command-line entry point for running a Rod node server. It
+//! configures storage and network adapters, then starts the node until
+//! interrupted with Ctrl-C.
+//!
+//! # Usage
+//!
+//! ```bash
+//! # Start with defaults (redb storage, websocket server on default port)
+//! cargo run --bin rod
+//!
+//! # Start with custom port and outgoing peers
+//! cargo run --bin rod -- start --port 8080 --peers wss://peer1.example.com,wss://peer2.example.com
+//!
+//! # Start with TLS
+//! cargo run --bin rod -- start --cert-path /path/cert.pem --key-path /path/key.pem
+//!
+//! # Use in-memory storage only (no persistence)
+//! cargo run --bin rod -- start --memory-storage true --redb-storage false
+//!
+//! # Disable public space (require content-hash addressing or user signatures)
+//! cargo run --bin rod -- start --allow-public-space false
+//! ```
+//!
+//! # Environment Variables
+//!
+//! All CLI options can also be set via environment variables (uppercase, with
+//! underscores). CLI flags take precedence over env vars.
+//!
+//! | Flag | Env Var | Default |
+//! |------|---------|---------|
+//! | `--port` | `PORT` | 8443 |
+//! | `--ws-server` | `WS_SERVER` | true |
+//! | `--peers` | `PEERS` | (none) |
+//! | `--multicast` | `MULTICAST` | false |
+//! | `--redb-storage` | `REDB_STORAGE` | true |
+//! | `--redb-path` | `REDB_PATH` | rod.redb |
+//! | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true |
+//! | `--stats` | `STATS` | true |
+
 extern crate clap;
 use clap::{App, Arg, SubCommand};
 use rod::actor::Actor;
@@ -125,7 +166,8 @@ async fn main() {
         .get_matches();
 
     if let Some(matches) = matches.subcommand_matches("start") {
-        // TODO: write fn to convert matches into Config
+        // Note: a future refactor could extract match → Config conversion into a
+        // dedicated function for testability. See GitHub issue tracker.
         let mut outgoing_websocket_peers = Vec::new();
         if let Some(peers) = matches.value_of("peers") {
             outgoing_websocket_peers = peers.split(",").map(|s| s.to_string()).collect();
@@ -146,7 +188,7 @@ async fn main() {
             ..Config::default()
         };
 
-        // TODO init adapters here
+        // Initialize adapters based on CLI flags
         if matches.value_of("multicast").unwrap() == "true" {
             network_adapters.push(Box::new(Multicast::new(config.clone())));
         }
