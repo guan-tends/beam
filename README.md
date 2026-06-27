@@ -1,339 +1,427 @@
 # Rod
 
-> **BEAM Maintained Fork** — v0.2.5 | Rust 2024 | MSRV 1.85
+**A Rust implementation of [Gun.js](https://gun.eco/) — a real-time, decentralized, P2P-synced graph database with end-to-end encryption.**
 
-Rust Object Database.
-
-Rod powers decentralized graph synchronization. For an example application built on Rod, see [Iris-messenger](https://github.com/irislib/iris-messenger) (upstream demo, not included in BEAM).
-
-## Use
-
-Install [Rust](https://doc.rust-lang.org/book/ch01-01-installation.html) first.
-
-### Install & run
-
-```
-cargo install rod
-rod start --redb-storage --redb-path my-node.redb
-```
-
-With memory (ephemeral, for testing):
-```
-rod start --memory-storage
-```
-
-### Library
-
-```rust
-use rod::{Node, Config, Value};
-use rod::adapters::*;
-
-#[tokio::main]
-async fn main() {
-    let config = Config::default();
-    let ws_client = OutgoingWebsocketManager::new(
-        config.clone(),
-        vec!["ws://localhost:4944/ws".to_string()],
-    );
-    let mut db = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
-
-    let mut sub = db.get("greeting").on();
-    db.get("greeting").put("Hello World!".into());
-    if let Value::Text(str) = sub.recv().await.unwrap() {
-        assert_eq!(&str, "Hello World!");
-        println!("{}", &str);
-    }
-    db.stop();
-}
-```
-
-With disk-backed (`RedbStorage`) and flush for durability:
-```rust
-use rod::{Node, Config, Value};
-use rod::adapters::RedbStorage;
-
-#[tokio::main]
-async fn main() {
-    let config = Config::default();
-    let redb = RedbStorage::new_with_config(config.clone(), "rod.redb");
-    let mut db = Node::new_with_config(config, vec![Box::new(redb)], vec![]);
-
-    db.get("greeting").put("Hello World!".into());
-    db.flush_storage(Some(Duration::from_secs(5))).await.unwrap();
-    
-    if let Value::Text(str) = db.get("greeting").once(None).await.unwrap() {
-        println!("{}", &str);
-    }
-    db.stop();
-}
-```
-
-## Status
-
-**BEAM Maintained Fork** (2026-05-18): This is a maintained fork for the Mnemos agent memory system. Key divergences from upstream: redb replaces sled as default storage, flush protocol guarantees durability, edition 2024 / rust-version 1.85.
-
-Original status (15/5/2022):
-
-- [x] Basic graph primitives (get/put/on/map/set)
-- [x] CLI for running the server (`rod start`)
-- [x] Incoming websockets
-- [x] Outgoing websockets (`PEERS=wss://...`)
-- [x] Multicast (65KB size limit)
-- [x] In-memory storage
-- [x] **Disk storage via [redb](https://github.com/cberner/redb)** (ACID, MVCC, default)
-- [x] Disk storage via [sled.rs](https://sled.rs) (legacy, deprecated)
-- [x] TLS support (`CERT_PATH`, `KEY_PATH`)
-- [x] Advanced deduplication of network messages
-- [x] Publish & subscribe
-- [x] Hash verification (`#` namespace)
-- [x] Signature verification (`~` namespace)
-- [x] **Flush protocol** — `db.flush_storage()` guarantees fsync durability
-- [x] **BEAM SEA** — Encryption, session storage, keypair management
-- [ ] Encryption for P2P message relay (not yet; client-side only)
-
-### SEA.certify — Capability Certificates
-
-SEA now supports capability certificates for delegated authorization.
-An authority signs a certificate naming specific certificants and optional
-policies (read, write, expiry). Others verify the certificate against the
-authority's public key before trusting the delegation.
-
-```rust
-use rod::sea::{certify, verify_certificate, generate_pair};
-use serde_json::json;
-
-#[tokio::main]
-async fn main() {
-    let authority = generate_pair().await.unwrap();
-    let alice = generate_pair().await.unwrap();
-
-    let policies = Some(json!({"e": 9999999999999.0, "r": ".*", "w": "skills/"}));
-    let certificants = vec![alice.pub_key.clone()];
-    let signed = certify(&certificants, policies.as_ref(), &authority).await.unwrap();
-
-    // Verifier side
-    let payload = verify_certificate(&signed, &authority.pub_key).unwrap();
-    assert!(payload["c"].as_array().unwrap().contains(&alice.pub_key.into());
-}
-```
-
-### Requirements
-
-- Rust ≥ 1.85 (edition 2024)
-- `BEAM_SEA_SESSION_KEY` for production session encryption
-
-### Issues
-
-- Multicast doesn't relay large messages like social posts with photos
-
-## Develop
-
-```
-cargo install cargo-watch
-RUST_LOG=debug cargo watch -x 'run -- start'
-```
-
-```
-cargo test
-```
-
-Watch for code changes and re-run tests that contain the word "stats":
-```
-RUST_LOG=debug cargo watch -x 'test stats'
-```
-
-```
-cargo bench
-```
-
-## Run on Heroku
-
-```
-heroku create --buildpack emk/rust
-git push heroku master
-```
-
-or:
-
-[![Deploy](assets/herokubutton.svg)](https://heroku.com/deploy?template=https://github.com/mmalmi/rod)
+[![Rust Edition](https://img.shields.io/badge/edition-2024-orange.svg)](https://doc.rust-lang.org/edition-guide/)
+[![Rust Version](https://img.shields.io/badge/rust-≥1.85-blue.svg)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-178%20unit%20%7C%209%20integration%20%7C%207%20doc-brightgreen.svg)](#testing)
 
 ---
 
-## BEAM SEA: Authentication, Encryption & Authorization
+## What Is Rod?
 
-BEAM SEA provides Gun.js-compatible user authentication with production-grade session security for Rust server environments.
+Rod is a distributed graph database where every node holds a partial replica of the graph and synchronizes with peers in real time. Data flows over WebSocket relays, UDP multicast, or direct WebRTC connections. All cryptographic operations — signatures, key exchange, encryption — use the SEA layer (Security, Encryption, Authorization), providing Gun.js-compatible wire protocol and cryptographic semantics.
 
-### Quick Start
+Rod is a from-scratch Rust port of [Gun.js](https://github.com/amark/gun), maintaining wire-format compatibility so Rod nodes can interop with Gun.js peers.
+
+### Key Properties
+
+- **Decentralized** — no central server; any peer can relay data to any other
+- **Real-time** — `on()` subscriptions deliver updates as they propagate through the mesh
+- **Eventually consistent** — last-write-wins conflict resolution via timestamps (matching Gun.js)
+- **Encrypted** — SEA layer provides Ed25519 signing, X25519 ECDH, and AES-256-GCM encryption
+- **Persistent** — `redb` embedded database for disk-backed storage, or in-memory for ephemeral use
+- **Multi-transport** — WebSocket (relay), UDP multicast (LAN discovery), WebRTC (direct P2P)
+
+---
+
+## Quick Start
+
+### Build
+
+```bash
+cargo build --release
+```
+
+### Run a Node
+
+```bash
+# Start with defaults: redb storage, WebSocket server on port 4944
+cargo run --release -- --port 4944
+
+# With WebRTC support (direct P2P connections)
+cargo run --release --features webrtc -- --port 4944
+
+# Connect to existing peers
+cargo run --release -- --port 4944 --peers wss://relay1.example.com:8080/ws,wss://relay2.example.com:8080/ws
+
+# With TLS
+cargo run --release -- --port 4944 --cert-path /path/cert.pem --key-path /path/key.pem
+
+# In-memory only (no persistence)
+cargo run --release -- --port 4944 --memory-storage true --redb-storage false
+
+# Restrict to signed data only (disable public space)
+cargo run --release -- --port 4944 --allow-public-space false
+```
+
+### Generate a SEA Key Pair
+
+```bash
+# Generate a 32-byte base64-encoded session key
+cargo run --release --bin beam-sea-keygen
+```
+
+### Use as a Library
 
 ```rust
 use rod::{Node, Value};
-use rod::sea::session::{EncryptedFileSessionStorage, InMemorySessionStorage};
-use rod::sea::User;
 
 #[tokio::main]
 async fn main() {
     let mut db = Node::new();
 
-    // Create a user
-    let user = db.user().create("alice", "secret123").await.unwrap();
-    println!("Created: {}", user.pub_key());
+    // Write
+    db.get("greeting").put("Hello World!".into());
 
-    // Authenticate later
-    let auth = db.user().auth("alice", "secret123").await.unwrap();
-    assert!(auth.is_authenticated());
+    // Subscribe to live updates
+    let mut sub = db.get("greeting").on();
+    if let Value::Text(s) = sub.recv().await.unwrap() {
+        println!("{}", s); // "Hello World!"
+    }
 
-    // Log out (invalidates all clones)
-    auth.leave();
-    assert!(!auth.is_authenticated());
+    // Read once
+    let val = db.get("greeting").once(None).await;
+    assert_eq!(val, Some(Value::Text("Hello World!".into())));
+
+    db.stop();
 }
 ```
 
-### User API Reference
-
-`rod::sea::User` is the authenticated user handle. It wraps `Arc<RwLock<SessionState>>` so all clones share the same session — `leave()` on any clone invalidates all of them.
-
-| Method | Async | Description |
-|--------|-------|-------------|
-| `User::create(alias, pass, node)` | ✅ | Generates P-256 keypair, encrypts auth data, stores at `~@{alias}` in Rod |
-| `User::auth(alias, pass, node)` | ✅ | Derives proof from alias+password, decrypts stored auth, returns User |
-| `User::recall(alias, storage)` | ✅ | Loads cached keypair from session storage (no network, no password) |
-| `User::from_pair(pair, alias?)` | ❌ | Constructs User directly from an existing `KeyPair` |
-| `user.save_to(storage)` | ✅ | Encrypts and persists current keypair to session storage |
-| `user.pub_key()` | ❌ | Clone of signing pubkey string (`~`-prefixed base64) |
-| `user.pair()` | ❌ | Clone of full `KeyPair` struct (pub, priv, epub, epriv) |
-| `user.alias()` | ❌ | `Some(alias)` or `None` |
-| `user.is_authenticated()` | ❌ | `true` until `leave()` called |
-| `user.leave()` | ❌ | Zeroizes keys and marks unauthenticated (all clones die) |
-
-**Builder-style (via `Node`):**
-```rust
-// Create:  db.user().create("alice", "pass").await
-// Auth:    db.user().auth("alice", "pass").await
-```
-
-### Crypto Primitives
-
-| Function | Async | Description |
-|----------|-------|-------------|
-| `rod::sea::generate_pair()` | ✅ | Fresh P-256 signing + encryption keypair |
-| `rod::sea::sign(data, pair)` | ✅ | ECDSA-P256-SHA256 sign a JSON value |
-| `rod::sea::verify(signed, pub_key)` | ✅ | Verify ECDSA signature (sync wrapper) |
-| `rod::sea::verify_async(signed, pub_key)` | ✅ | Verify without blocking async executor |
-| `rod::sea::encrypt(data, pair, their_epub?)` | ✅ | AES-GCM encrypt (self-encrypt if `their_epub` is `None`) |
-| `rod::sea::decrypt(encrypted, pair, their_epub?)` | ✅ | AES-GCM decrypt |
-| `rod::sea::secret(their_epub, pair)` | ✅ | ECDH shared secret derivation |
-| `rod::sea::work(data, salt?, opts)` | ✅ | PBKDF2 (100K iters, SHA-256) or SHA-256 hash |
-
-### Session Persistence (Recall)
-
-Unlike Gun.js SEA's plaintext `sessionStorage`, BEAM encrypts session files with AES-256-GCM using a master key from your environment:
+### Connect Two Nodes Over WebSocket
 
 ```rust
-use rod::sea::session::EncryptedFileSessionStorage;
-use rod::sea::User;
+use rod::adapters::*;
+use rod::{Config, Node, Value};
 
 #[tokio::main]
 async fn main() {
-    let storage = EncryptedFileSessionStorage::new().unwrap();
+    let config = Config::default();
 
-    // After authenticating, save the session
-    let user = db.user().auth("alice", "secret123").await.unwrap();
-    user.save_to(&storage).await.unwrap();
+    // Peer 1: WebSocket server
+    let mut peer1 = Node::new_with_config(
+        config.clone(),
+        vec![],
+        vec![Box::new(WsServer::new(config.clone()))],
+    );
 
-    // Later, recall without re-typing password
-    let recalled = User::recall("alice", &storage).await.unwrap();
-    assert!(recalled.is_authenticated());
+    // Peer 2: WebSocket client connecting to peer 1
+    let client = OutgoingWebsocketManager::new(
+        config.clone(),
+        vec!["ws://localhost:4944/ws".to_string()],
+    );
+    let mut peer2 = Node::new_with_config(config, vec![], vec![Box::new(client)]);
+
+    // Wait for connection
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    // Peer 2 writes, peer 1 receives via mesh sync
+    peer2.get("hello").put("from peer 2".into());
+
+    let mut sub = peer1.get("hello").on();
+    if let Value::Text(s) = sub.recv().await.unwrap() {
+        println!("Peer 1 received: {}", s);
+    }
+
+    peer1.stop();
+    peer2.stop();
 }
 ```
 
-### Deployment: Generating the Session Key
+---
 
-**Required for production deployments.** The session key is never hardcoded or committed to git.
+## Architecture
+
+Rod is built on an actor model with a central router. Every component — storage, network, graph nodes — is an actor communicating via typed messages over Tokio channels.
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │                  Node (root)                   │
+                    │  uid=""  ← the root node owns the router       │
+                    │  get("key") → child Node (uid="key")           │
+                    │  put(value) → broadcasts to on() subscribers    │
+                    │                and sends Put to router          │
+                    └────────────────────┬────────────────────────────┘
+                                         │ Message::Put / Get / Flush
+                                         ▼
+                    ┌─────────────────────────────────────────────┐
+                    │                 Router                        │
+                    │  - Deduplication (Dup: 999 entries, 9s TTL)   │
+                    │  - Peer management (known_peers, server_peers) │
+                    │  - Topic subscriptions (subscribers_by_topic)  │
+                    │  - Put relay with anti-loop (peer_hop_list)     │
+                    │  - Get routing (storage → server → random)     │
+                    │  - RtcSignal routing to specific peers          │
+                    └──────┬──────────────┬──────────────┬──────────┘
+                           │              │              │
+                    ┌──────▼──────┐ ┌──────▼──────┐ ┌─────▼──────┐
+                    │  Storage    │ │  Network    │ │  WebRTC    │
+                    │  Adapters   │ │  Adapters   │ │  (opt)     │
+                    │             │ │             │ │            │
+                    │ MemoryStorage│ │ WsServer    │ │ WebRtcPeer │
+                    │ RedbStorage │ │ WsClient    │ │ (str0m)    │
+                    │             │ │ Multicast   │ │            │
+                    └─────────────┘ └─────────────┘ └────────────┘
+```
+
+### Module Map
+
+| Module | Lines | Responsibility |
+|--------|-------|---------------|
+| `types.rs` | 330 | Core data types: `Value` (Null/Bit/Number/Text/Link), `NodeData` (value + timestamp), `Children` (BTreeMap), JSON conversion |
+| `utils.rs` | 160 | `random_string()` (OS CSPRNG), `BoundedHashMap` (FIFO eviction for dedup tracking) |
+| `dup.rs` | 210 | `Dup` — Gun.js DAM-style message deduplication (TTL + bounded capacity, 999 entries / 9s default) |
+| `message.rs` | 817 | Wire protocol: `Get`, `Put`, `BatchPut`, `Flush`, `RtcSignal`, `Hi` — JSON serialization/deserialization, signature verification on inbound puts |
+| `actor.rs` | 197 | Actor framework: `Actor` trait, `ActorContext`, `Addr` (clonable, hashable address) — built on Tokio unbounded channels |
+| `node.rs` | 490 | Graph node API: `put()`, `get()`, `on()`, `once()`, `map()`, `batch_put()`, `connect_peer()`, `connect_webrtc_peer()`, `stop()` |
+| `router.rs` | 455 | Central router: dedup, Get/Put routing, peer management, topic subscriptions, anti-loop relay, flush forwarding, RtcSignal delivery |
+| `sea/pair.rs` | 75 | Key pair generation: ECDSA P-256 (signing) + ECDH P-256 (encryption), Gun.js `x.y` base64 format |
+| `sea/sign.rs` | 53 | Ed25519-style signature creation (uses P-256 ECDSA via `ring`) |
+| `sea/verify.rs` | 76 | Signature verification (sync + async variants) |
+| `sea/work.rs` | 75 | Proof-of-work / content hashing (PBKDF2, SHA-256, base64) |
+| `sea/secret.rs` | 85 | ECDH shared secret derivation between key pairs |
+| `sea/encrypt.rs` | 200 | AES-256-GCM encryption with PBKDF2 key derivation; symmetric and ECDH-based modes |
+| `sea/decrypt.rs` | 190 | AES-256-GCM decryption; shares `derive_aes_key_sync` with encrypt.rs (DRY) |
+| `sea/certify.rs` | 155 | Capability certificates: issue, verify, check certificant membership, expiry enforcement |
+| `sea/user.rs` | 523 | User identity: `create()`, `auth()`, `leave()`, `trust()`, `grant()`, `secret()`, `is()` — Gun.js `user.is` semantics |
+| `sea/session/` | 516 | Session persistence: `MemorySessionStorage` (ephemeral) and `EncryptedFileSessionStorage` (disk, AES-GCM) |
+| `adapters/memory_storage.rs` | 124 | In-memory `HashMap<node_id, Children>` storage (ephemeral, default for `Node::new()`) |
+| `adapters/redb_storage.rs` | 261 | Persistent storage via `redb` embedded database — `BatchPut` atomic transactions, flush ack |
+| `adapters/ws_server.rs` | 223 | WebSocket server: accepts inbound connections, spawns `WsConn` per connection, optional TLS, web UI on port+1 |
+| `adapters/ws_client.rs` | 63 | `OutgoingWebsocketManager` — connects to remote WebSocket peers with retry |
+| `adapters/ws_conn.rs` | 76 | Per-connection WebSocket actor: bridges wire format ↔ Message types |
+| `adapters/multicast.rs` | 128 | UDP multicast LAN discovery (224.0.0.123:6969) — syncs with peers on local network |
+| `adapters/webrtc.rs` | 483 | WebRTC data channel P2P via `str0m` — ICE/DTLS/SCTP, STUN discovery, TURN relay (feature-gated) |
+| `stun.rs` | 171 | STUN Binding Request + TURN Allocate Request helpers (feature-gated) |
+| `main.rs` | 250 | CLI entry point: clap v2 argument parsing, adapter configuration, Ctrl-C graceful shutdown |
+| `bin/beam-sea-keygen.rs` | 30 | Utility binary: generates 32-byte random session key (base64-encoded) |
+
+---
+
+## Data Model
+
+Rod uses a **key-path graph** — a hierarchical tree of nodes addressed by `/`-separated paths:
+
+```
+root (uid="")
+  └── "users" (uid="users")
+      └── "alice" (uid="users/alice")
+          └── "profile" (uid="users/alice/profile")
+              └── "name" (uid="users/alice/profile/name")
+                  └── value = Value::Text("Alice")
+```
+
+### Node Operations
+
+| Method | Description |
+|--------|-------------|
+| `db.get("key")` | Traverse to child node (creates lazily if it doesn't exist) |
+| `node.put(value)` | Set a value on this node; propagates to parents and peers |
+| `node.batch_put(ops)` | Atomic multi-write: multiple `(path, value)` pairs in one storage transaction |
+| `node.on()` | Subscribe to value updates → `broadcast::Receiver<Value>` |
+| `node.once(timeout)` | Read current value once (queries storage + peers), returns `Option<Value>` |
+| `node.map()` | Subscribe to all children → `broadcast::Receiver<(String, Value)>` — replays existing children from storage |
+| `db.connect_peer(url)` | Add a WebSocket peer at runtime |
+| `db.connect_webrtc_peer(...)` | Bootstrap a WebRTC direct connection (requires `webrtc` feature) |
+| `db.flush_storage(timeout)` | Flush storage adapters to disk (durable persistence) |
+| `db.stop()` | Stop the node and all child actors/adapters |
+
+### Value Types
+
+Rod supports five wire-compatible leaf types, matching Gun.js:
+
+| Variant | JSON | Example |
+|---------|------|---------|
+| `Value::Null` | `null` | Absence of a value |
+| `Value::Bit(true)` | `true` | Boolean flag |
+| `Value::Number(42.0)` | `42` | Floating-point number |
+| `Value::Text("hello")` | `"hello"` | Unicode string |
+| `Value::Link("node/id")` | `{"#": "node/id"}` | Soul relation (graph edge) |
+
+---
+
+## SEA — Security, Encryption, Authorization
+
+The SEA layer provides Gun.js-compatible cryptographic operations:
+
+### Key Generation
+```rust
+let pair = rod::sea::generate_pair().await?;
+// pair.pub_key   = "x.y" (P-256 ECDSA public key, base64 coordinates)
+// pair.priv_key  = base64-encoded 32-byte scalar
+// pair.epub_key  = "x.y" (P-256 ECDH public key for encryption)
+// pair.epriv_key = base64-encoded 32-byte ECDH private scalar
+```
+
+### Signing & Verification
+```rust
+let signed = rod::sea::sign(&json!({"msg": "hello"}), &pair).await?;
+// signed = {"m": {...}, "s": "base64-signature"}
+let verified = rod::sea::verify_sync(&signed, &pair.pub_key)?;
+```
+
+### Encryption
+```rust
+// ECDH-based: derives shared secret from your epriv + their epub
+let encrypted = rod::sea::encrypt(&data, &my_pair, Some(&their_epub)).await?;
+let decrypted = rod::sea::decrypt(&encrypted, &my_pair, Some(&their_epub)).await?;
+
+// Symmetric: raw 32-byte AES-256 key
+let encrypted = rod::sea::encrypt_symmetric(&data, &key_bytes).await?;
+let decrypted = rod::sea::decrypt_symmetric(&encrypted, &key_bytes).await?;
+```
+
+### User Identity
+```rust
+let mut node = Node::new();
+let user = User::create("alice", "password123", &mut node).await?;
+user.trust(&bob_pub, Some("path/prefix"), &mut node).await?;
+user.grant(&bob_pub, &bob_epub, "path/secret", &mut node).await?;
+user.secret(&json!({"api_key": "..."}), "wallet/key", &mut node).await?;
+let identity = user.is(); // Some(Identity { alias, pub_key, epub_key })
+user.leave(); // zeroizes keys, invalidates all clones
+```
+
+### Three Data Spaces
+
+| Space | Who Can Write | Who Can Read | Node ID Prefix |
+|-------|--------------|-------------|----------------|
+| **Public** | Anyone (if `allow_public_space=true`) | Anyone | any (e.g. `"data"`) |
+| **User** | Key owner only (signature verified) | Anyone | `~{pub_key}` or `~{pub_key}/...` |
+| **Frozen** | Nobody (append-only, content-addressed) | Anyone | `#` (content hash = key) |
+
+When `allow_public_space=false`, the node rejects unsigned puts to public space — only user-signed data (`~{pub}`) and content-addressed data (`#` namespace) are accepted. This matches Gun.js `opt.enforce` semantics.
+
+---
+
+## Wire Protocol
+
+Rod uses Gun.js's JSON wire format. Messages are JSON objects with these fields:
+
+### Put
+```json
+{
+  "put": {
+    "node/id": {
+      "_": { "#": "node/id", ">": { "child_key": 1653465227430 } },
+      "child_key": "value"
+    }
+  },
+  "#": "msg_id_8chars",
+  "##": 123456789,
+  "><": "peer1,peer2"
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `put` | Map of node_id → {metadata, child values} |
+| `_` | Node metadata: `#` = soul (node ID), `>` = child timestamps |
+| `#` (top-level) | Message ID (8-char random, used for dedup) |
+| `##` | Content checksum (Java `hashCode` of `put` body) |
+| `><` | Peer hop list (anti-loop: comma-separated peer IDs already visited) |
+| `@` | Ack ID — if present, this Put is a response to a Get with this ID |
+
+### Get
+```json
+{
+  "get": { "#": "node/id", ".": "optional_child_key" },
+  "#": "msg_id_8chars"
+}
+```
+
+### Other Messages
+- `{"dam": "hi", "#": "peer_id"}` — peer introduction
+- `{"dam": "flush", "#": "flush_id"}` — flush storage to disk
+- `{"dam": "rtc", "id": "...", "offer": "...", "answer": "...", "candidate": "..."}` — WebRTC signaling
+
+---
+
+## Configuration
+
+### CLI Flags
+
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--port` | `PORT` | 4944 | WebSocket server port |
+| `--ws-server` | `WS_SERVER` | true | Enable WebSocket server |
+| `--cert-path` | `CERT_PATH` | — | TLS certificate path (enables WSS) |
+| `--key-path` | `KEY_PATH` | — | TLS private key path |
+| `--peers` | `PEERS` | — | Comma-separated peer WebSocket URLs |
+| `--multicast` | `MULTICAST` | false | Enable UDP multicast LAN discovery |
+| `--memory-storage` | `MEMORY_STORAGE` | false | Use in-memory storage (ephemeral) |
+| `--redb-storage` | `REDB_STORAGE` | true | Use redb persistent storage |
+| `--redb-path` | `REDB_PATH` | `rod.redb` | Path to redb database file |
+| `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true | Accept unsigned writes to public space |
+| `--stats` | `STATS` | true | Expose stats at `/stats` on web UI port |
+
+### Programmatic Config
+
+```rust
+let config = Config {
+    allow_public_space: false,   // Reject unsigned public writes
+    stats: true,                 // Expose stats endpoint
+    my_pub: Some("x.y".into()),  // Prioritize this public key's data
+    broadcast_buffer_size: 4096, // on()/map() channel capacity
+    ice_servers: vec!["stun:stun.l.google.com:19302".into()],
+};
+```
+
+---
+
+## Testing
 
 ```bash
-# Generate a fresh 32-byte key
-cargo run --quiet --bin beam-sea-keygen
-# → qGmUkJ5mZSg45XVzMHOKH9IxiamPI5wmqIAnwzASr/M=
+# Run all tests (178 unit + 9 integration + 7 doctests)
+cargo test
+
+# With WebRTC tests (186 unit + 9 integration + 7 doctests)
+cargo test --features webrtc
+
+# Lint (zero warnings required)
+cargo clippy -- -D warnings
+
+# Doctests only
+cargo test --doc
+
+# Benchmarks
+cargo bench
+
+# Run a specific integration test
+cargo test --test integration websocket_sync_over_relay_peer
 ```
 
-### Environment Variables
+### Integration Test Categories
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `BEAM_SEA_SESSION_KEY` | **Yes** (for file storage) | — | Base64-encoded 32-byte AES master key. Generate with `beam-sea-keygen`. |
-| `BEAM_SEA_SESSION_EXPIRY_DAYS` | No | 30 | Session file lifetime in days. Expired files are reaped on load. |
+| Test | What It Verifies |
+|------|-----------------|
+| `it_doesnt_error` | Node creation, basic get — no panics |
+| `first_get_then_put` | Subscribe-then-write ordering |
+| `first_put_then_get` | Write-then-subscribe with storage replay |
+| `once_returns_value_or_none` | Read-after-write consistency, Null vs absent |
+| `connect_and_sync_over_websocket` | Two-node mesh sync over WS (direct) |
+| `websocket_sync_over_relay_peer` | Three-node sync via relay (1 hop) |
+| `websocket_sync_over_2_relay_peers` | Four-node sync via 2 relays (2 hops) — may be slow on CI |
+| `redb_storage_persists` | Data survives restart with redb storage |
+| `redb_storage_flush_returns_ok` | Flush ack protocol |
 
-**Safe fallback:** If `BEAM_SEA_SESSION_KEY` is unset, `EncryptedFileSessionStorage` silently skips persistence — no panic, no crash. This is intentional for development and test environments.
+---
 
-### DevOps Examples
+## Features
 
-#### systemd (with `ProtectHome`)
+| Feature | Default | Enables |
+|---------|---------|---------|
+| `webrtc` | No | `dep:str0m`, `dep:stun` — direct P2P connections via WebRTC data channels |
 
-```ini
-[Service]
-Environment="BEAM_SEA_SESSION_KEY=$(/usr/local/bin/beam-sea-keygen)"
-Environment="BEAM_SEA_SESSION_EXPIRY_DAYS=7"
-ExecStart=/usr/local/bin/my-beam-agent
-ReadWritePaths=%h/.config/beam/sessions
-```
+Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (functions return `None`).
 
-#### Docker Compose
+---
 
-```yaml
-services:
-  agent:
-    image: my-beam-agent
-    environment:
-      BEAM_SEA_SESSION_KEY: ${BEAM_SEA_SESSION_KEY}
-    volumes:
-      - beam-sessions:/root/.config/beam/sessions
-volumes:
-  beam-sessions:
-```
+## License
 
-#### Kubernetes (secret + deployment)
+MIT — see [LICENSE](LICENSE).
 
-```bash
-# Generate and create secret
-kubectl create secret generic beam-session-key \
-  --from-literal=BEAM_SEA_SESSION_KEY="$(cargo run --quiet --bin beam-sea-keygen)"
-```
+## Origin
 
-```yaml
-# deployment.yaml snippet
-spec:
-  containers:
-  - name: beam-agent
-    envFrom:
-    - secretRef:
-        name: beam-session-key
-```
-
-### Security Model
-
-| Feature | Implementation |
-|---------|---------------|
-| **At rest** | AES-256-GCM encrypted JSON files in `~/.config/beam/sessions/` |
-| **In memory** | `zeroize` crate scrubs private keys on `User::leave()` and `Drop` |
-| **Clone invalidation** | `Arc<RwLock<SessionState>>` — all clones die when `leave()` is called |
-| **Expiry** | Automatic reaping on `load()`; no background daemon needed |
-| **Permissions** | Session directory created with `0700` (owner-only) |
-
-For full architecture details, see `docs/adr/004-session-storage.md`.
-
-### Architecture
-
-```
-rod::sea::User          ← Arc<RwLock<SessionState>> ← shared invalidation
-       │
-       ├── save_to(storage) ──→ SessionStorage::save(alias, KeyPair)
-       │
-       ├── recall(alias, storage) ←── SessionStorage::load(alias)
-       │
-       └── leave() ──→ zeroize priv/epriv keys → is_authenticated = false
-
-SessionStorage trait:
-  ├── InMemorySessionStorage         (ephemeral, test-safe)
-  ├── EncryptedFileSessionStorage    (production, AES-256-GCM, default path)
-  └── EncryptedFileSessionStorage::with_session_dir(path)  (production, explicit path)
-```
+Rod is a Rust port of [Gun.js](https://github.com/amark/gun) by Martti Malmi. The original Gun.js project is maintained by Mark Nadal.
