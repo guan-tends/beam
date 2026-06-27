@@ -8,6 +8,19 @@
 //! - [`MemoryStorage`] — in-memory `HashMap`-backed storage (default)
 //! - [`RedbStorage`] — persistent embedded storage via [`redb`]
 //!
+//! # Storage Read/Write Split
+//!
+//! Storage adapters that implement [`Actor::try_clone_storage`] are started
+//! as two actors by the Router: a read actor (receives `Get`) and a write
+//! actor (receives `Put`, `BatchPut`, `Flush`). Both share the same
+//! underlying store via `Arc`, so reads see committed writes immediately.
+//!
+//! - [`RedbStorage`] splits — the write actor's `spawn_blocking` fsync no
+//!   longer blocks the read actor's concurrent `Get` queries.
+//! - [`MemoryStorage`] does not split — in-memory writes are synchronous
+//!   (no fsync), so splitting provides no benefit and would break
+//!   read-after-write ordering.
+//!
 //! # Network Adapters
 //!
 //! - [`OutgoingWebsocketManager`] — outgoing WebSocket client manager

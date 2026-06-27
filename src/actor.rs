@@ -4,8 +4,8 @@
 //!
 //! This module provides a minimal actor system inspired by
 //! [Alice Ryhl's "Actors with Tokio"](https://ryhl.io/blog/actors-with-tokio/)
-//! guide. Actors communicate via typed messages over unbounded channels
-//! and run on the Tokio async runtime.
+//! guide. Actors communicate via typed messages over channels and run on the
+//! Tokio async runtime.
 //!
 //! # Architecture
 //!
@@ -14,15 +14,32 @@
 //!   child actor management
 //! - [`Addr`] — a clonable, hashable address for sending messages to an actor
 //!
+//! # Channel Types
+//!
+//! Actors can use either unbounded or bounded channels:
+//!
+//! - **Unbounded** (default) — [`ActorContext::start_actor`] creates an actor
+//!   with an unbounded channel. No backpressure; messages are always enqueued.
+//! - **Bounded** — [`ActorContext::start_actor_bounded`] creates an actor with
+//!   a bounded channel of the given capacity. When full, [`Addr::send`]
+//!   returns `Err(())`, applying backpressure. Used for storage write actors
+//!   where unbounded queue growth is undesirable.
+//!
+//! Both channel types are abstracted behind [`AddrSender`]/[`AddrReceiver`]
+//! enums, so callers use the same [`Addr::send`] API regardless of channel
+//! type.
+//!
 //! # Message Flow
 //!
 //! ```text
-//! Sender → Addr.send(msg) → UnboundedChannel → Actor.handle(msg, ctx)
-//!                                                ↓
-//!                                          Actor can:
-//!                                          - spawn child actors
-//!                                          - send to router
-//!                                          - spawn child tasks
+//! Sender → Addr.send(msg) → Channel (bounded or unbounded)
+//!                                ↓
+//!                          Actor.handle(msg, ctx)
+//!                                ↓
+//!                          Actor can:
+//!                          - spawn child actors
+//!                          - send to router
+//!                          - spawn child tasks
 //! ```
 //!
 //! # Shutdown
