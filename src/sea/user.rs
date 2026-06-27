@@ -15,7 +15,6 @@ use aes_gcm::{
 };
 use rand::RngCore;
 use serde_json::{Value as JsonValue, json};
-use sha2::{Digest, Sha256};
 
 impl User {
     /// Create a new user with alias and password.
@@ -244,17 +243,9 @@ async fn decrypt_pass(encrypted: &JsonValue, passphrase: &str) -> Result<JsonVal
     .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?
 }
 
-fn derive_key_sync(passphrase: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
-    // Match Gun.js aeskey.js: SHA-256(key_string + salt_bytes.toString('utf8'))
-    // aeskey.js: const combo = key + (salt || shim.random(8)).toString('utf8');
-    //            const hash = shim.Buffer.from(await sha256hash(combo), 'binary')
-    // Node.js Buffer.toString('utf8') replaces invalid sequences with U+FFFD,
-    // matching Rust's String::from_utf8_lossy.
-    let salt_str = String::from_utf8_lossy(salt);
-    let combo = format!("{}{}", passphrase, salt_str);
-    let hash = Sha256::digest(combo.as_bytes());
-    Ok(hash.to_vec())
-}
+// Passphrase-based key derivation uses the shared `derive_aes_key_sync` from
+// `encrypt.rs` — SHA-256(key_string + salt_utf8), matching Gun.js aeskey.js.
+use super::encrypt::derive_aes_key_sync as derive_key_sync;
 
 /// Builder for creating or authenticating users from a Node
 pub struct UserBuilder<'a> {

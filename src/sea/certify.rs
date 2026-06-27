@@ -80,3 +80,84 @@ pub fn is_certified(payload: &JsonValue, pubkey: &str) -> bool {
         .map(|arr| arr.iter().any(|v| v.as_str() == Some(pubkey)))
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sea::generate_pair;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_certify_basic() {
+        let authority = generate_pair().await.unwrap();
+        let alice = generate_pair().await.unwrap();
+        let cert = certify(&authority, &[alice.pub_key.clone()], None).await.unwrap();
+        let payload = verify_certificate(&cert, &authority.pub_key).unwrap();
+        assert!(is_certified(&payload, &alice.pub_key));
+    }
+
+    #[tokio::test]
+    async fn test_certify_with_policies() {
+        let authority = generate_pair().await.unwrap();
+        let alice = generate_pair().await.unwrap();
+        let policies = json!({"w": "skills/", "r": ".*"});
+        let cert = certify(
+            &authority,
+            &[alice.pub_key.clone()],
+            Some(&policies),
+        )
+        .await
+        .unwrap();
+        let payload = verify_certificate(&cert, &authority.pub_key).unwrap();
+        assert_eq!(payload["w"].as_str(), Some("skills/"));
+        assert_eq!(payload["r"].as_str(), Some(".*"));
+    }
+
+    #[tokio::test]
+    async fn test_certify_expired() {
+        let authority = generate_pair().await.unwrap();
+        let alice = generate_pair().await.unwrap();
+        let policies = json!({"e": 1000.0_f64}); // 1970
+        let cert = certify(&authority, &[alice.pub_key], Some(&policies)).await.unwrap();
+        assert!(verify_certificate(&cert, &authority.pub_key).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_certify_wrong_authority() {
+        let authority = generate_pair().await.unwrap();
+        let imposter = generate_pair().await.unwrap();
+        let alice = generate_pair().await.unwrap();
+        let cert = certify(&authority, &[alice.pub_key], None).await.unwrap();
+        assert!(verify_certificate(&cert, &imposter.pub_key).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_certify_multiple_certificants() {
+        let authority = generate_pair().await.unwrap();
+        let alice = generate_pair().await.unwrap();
+        let bob = generate_pair().await.unwrap();
+        let cert = certify(
+            &authority,
+            &[alice.pub_key.clone(), bob.pub_key.clone()],
+            None,
+        )
+        .await
+        .unwrap();
+        let payload = verify_certificate(&cert, &authority.pub_key).unwrap();
+        assert!(is_certified(&payload, &alice.pub_key));
+        assert!(is_certified(&payload, &bob.pub_key));
+        assert!(!is_certified(&payload, "unknown"));
+    }
+
+    #[test]
+    fn test_is_certified_missing_c_field() {
+        let payload = json!({"other": "data"});
+        assert!(!is_certified(&payload, "anykey"));
+    }
+
+    #[test]
+    fn test_is_certified_empty_array() {
+        let payload = json!({"c": []});
+        assert!(!is_certified(&payload, "anykey"));
+    }
+}

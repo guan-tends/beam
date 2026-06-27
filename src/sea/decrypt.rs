@@ -3,12 +3,12 @@
 //! Reverse of encrypt.rs
 
 use super::{KeyPair, SeaError};
+use super::encrypt::derive_aes_key_sync;
 use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
 };
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 /// Decrypt data using AES-256-GCM
 ///
@@ -95,13 +95,43 @@ pub async fn decrypt(
         .map_err(|e| SeaError::Decryption(format!("invalid JSON in plaintext: {}", e)))
 }
 
-/// Derive AES-256 key from secret material + salt via SHA-256 (synchronous)
-/// Matches Gun.js aeskey.js: SHA-256(key_string + salt_bytes.toString('utf8'))
-fn derive_aes_key_sync(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
-    let salt_str = String::from_utf8_lossy(salt);
-    let combo = format!("{}{}", secret_b64, salt_str);
-    let hash = Sha256::digest(combo.as_bytes());
-    Ok(hash.to_vec())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sea::generate_pair;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_decrypt_self_encrypted() {
+        let pair = generate_pair().await.unwrap();
+        let data = json!({"secret": "data"});
+        let encrypted = super::super::encrypt::encrypt(&data, &pair, None).await.unwrap();
+        let decrypted = decrypt(&encrypted, &pair, None).await.unwrap();
+        assert_eq!(decrypted, data);
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_wrong_key_fails() {
+        let alice = generate_pair().await.unwrap();
+        let bob = generate_pair().await.unwrap();
+        let data = json!("secret");
+        let encrypted = super::super::encrypt::encrypt(&data, &alice, None).await.unwrap();
+        assert!(decrypt(&encrypted, &bob, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_missing_field_fails() {
+        let pair = generate_pair().await.unwrap();
+        let bad_data = json!({"ct": "abc"}); // missing iv and s
+        assert!(decrypt(&bad_data, &pair, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_decrypt_symmetric_bad_key_length() {
+        let key = [0u8; 16]; // too short
+        let encrypted = json!({"ct": "abc", "iv": "def"});
+        assert!(decrypt_symmetric(&encrypted, &key).await.is_err());
+    }
 }
 
 /// Decrypt data using a raw symmetric key (AES-256-GCM, no ECDH/PBKDF2)
