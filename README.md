@@ -227,6 +227,146 @@ root (uid="")
 | `db.flush_storage(timeout)` | Flush storage adapters to disk (durable persistence) |
 | `db.stop()` | Stop the node and all child actors/adapters |
 
+### Path Depth and Data Access Semantics
+
+Rod's graph operations differ from Gun.js in important ways. Understanding these prevents confusion.
+
+#### One-Level Paths
+
+Both flat (one-level) and nested paths work in Rod:
+
+```rust
+// Flat path — works
+db.get("x").put("Hello World!".into());
+let mut sub = db.get("x").on();
+println!("{:?}", sub.recv().await.unwrap()); // Ok(Text("Hello World!"))
+
+// Nested path — also works
+db.get("x").get("y").put("Hello World!".into());
+let mut sub = db.get("x").get("y").on();
+println!("{:?}", sub.recv().await.unwrap()); // Ok(Text("Hello World!"))
+```
+
+> **Gun.js difference:** Gun.js prohibits saving primitive values at the root level — `Gun().put("oops")` and `Gun().get("odd").put("oops")` are errors. Rod does **not** enforce this restriction. Flat-key writes (`db.get("key").put(val)`) are valid and propagate to storage and peers normally.
+
+#### `on()` — Subscribing to a Single Value
+
+`on()` subscribes to a node's value and immediately requests the current value from storage (and peers, if connected). The broadcast receiver yields values in this order:
+
+1. **Local value first** — if a value was already `put()` on this node, it arrives before any remote updates
+2. **Streamed values** — new values from peers, storage replay, or subsequent `put()` calls
+
+```rust
+let mut db = Node::new();
+db.get("greeting").put("Hello".into());
+
+let mut sub = db.get("greeting").on();
+// First recv: local value
+assert_eq!(sub.recv().await.unwrap(), Value::Text("Hello".into()));
+
+// Subsequent puts produce new values on the same subscription
+db.get("greeting").put("World".into());
+assert_eq!(sub.recv().await.unwrap(), Value::Text("World".into()));
+```
+
+#### `on()` on Branch Nodes Returns `Value::Link`
+
+When a node has children, calling `on()` on that node returns a `Value::Link` to the node itself — **not** a reconstructed object containing the children. This is a key difference from Gun.js.
+
+```rust
+let mut db = Node::new();
+db.get("x").get("y").get("z").put("Hello World 1!".into());
+db.get("x").get("y").get("t").put("Hello World 2!".into());
+
+let mut sub = db.get("x").get("y").on();
+println!("{:?}", sub.recv().await.unwrap());
+// Rod:          Link("x/y")
+// Gun.js:       Object { z: "Hello World 1!", t: "Hello World 2!" }
+```
+
+Each `put()` on a descendant propagates up the parent chain via `add_parent_nodes()`, firing `on_sender` at every ancestor. This means `on()` at a branch node receives **one `Value::Link` event per child put** — not a single reconstructed object. These are granular change notifications, not partial data.
+
+To enumerate children of a branch node, use `map()` instead (see below).
+
+#### `once()` — Read Once With Timeout
+
+`once()` is a convenience wrapper around `on()` + `tokio::time::timeout`. It subscribes, waits for the first value, and returns:
+
+- `Some(value)` — if a value arrives within the timeout
+- `None` — if no value arrives (timeout elapsed), equivalent to Gun.js's `undefined`
+
+```rust
+let mut db = Node::new();
+
+// Missing value → None (timeout)
+assert!(db.get("missing").once(None).await.is_none());
+
+// Existing value → Some
+db.get("key").put("value".into());
+assert_eq!(
+    db.get("key").once(None).await,
+    Some(Value::Text("value".into()))
+);
+
+// Explicitly set to Null → Some(Null), NOT None
+db.get("nulled").put(Value::Null);
+assert_eq!(
+    db.get("nulled").once(None).await,
+    Some(Value::Null)
+);
+
+// Branch node → Some(Link)
+db.get("x").get("y").get("z").put("val".into());
+assert_eq!(
+    db.get("x").get("y").once(None).await,
+    Some(Value::Link("x/y".into()))
+);
+```
+
+The default timeout is **66ms** (matching Gun.js's `opt.wait` default of 99ms, adjusted for Rust's async runtime). Pass a custom `Duration` to override:
+
+```rust
+// Wait up to 5 seconds for a value from a remote peer
+let val = node.once(Some(Duration::from_secs(5))).await;
+```
+
+#### Why No Debounce?
+
+Gun.js implements a debounce timer in `once()` that keeps resetting itself until the received data passes `Gun.valid()` (i.e., a complete primitive or relation arrives). This is necessary because Gun.js's `on()` at a branch node **accumulates partial object data** — `{ z: "a" }` arrives, then `{ z: "a", t: "b" }` — and the debounce waits for the object to settle before delivering.
+
+Rod does **not** implement debounce because `on()` at branch nodes returns `Value::Link` — a **complete, valid primitive** on every delivery. There is nothing partial to accumulate. Each `Link` event is a complete value representing a change notification, not an incomplete snapshot. The 66ms timeout in `once()` is sufficient: it either receives a value or it doesn't.
+
+#### `map()` — Listing Children
+
+`map()` subscribes to all children of a node and replays existing children from storage. It yields `(child_key, value)` tuples. The value type depends on whether the child is itself a branch (has its own children) or a leaf:
+
+```rust
+let mut db = Node::new();
+db.get("x").get("y").get("z").put("Hello World 1!".into());
+db.get("x").get("y").get("t").put("Hello World 2!".into());
+
+// map() at x/y (children are leaves) — yields actual values
+let mut sub = db.get("x").get("y").map();
+// → ("z", Text("Hello World 1!"))
+// → ("t", Text("Hello World 2!"))
+// → ("__rod_replay_complete__", Null)  ← sentinel: replay finished
+
+// map() at x (children are branches) — yields Links
+let mut sub2 = db.get("x").map();
+// → ("y", Link("x/y"))
+// → ("__rod_replay_complete__", Null)
+```
+
+The `__rod_replay_complete__` sentinel signals that all existing children have been replayed from storage. Subsequent values on the receiver are **new** children added after subscription. To read a child's actual value, call `on()` or `once()` on the child node directly.
+
+#### Summary: `on()` vs `map()` vs `once()`
+
+| Method | Returns | Leaf Node | Branch Node |
+|--------|---------|-----------|-------------|
+| `on()` | `Receiver<Value>` | Actual value (Text, Number, Null, Bit) | `Value::Link("node_id")` — one event per descendant put |
+| `once(timeout)` | `Option<Value>` | `Some(actual_value)` or `None` | `Some(Link("node_id"))` or `None` |
+| `map()` | `Receiver<(String, Value)>` | N/A (no children) | `("key", actual_value)` for leaf children, `("key", Link)` for branch children |
+
 ### Value Types
 
 Rod supports five wire-compatible leaf types, matching Gun.js:
