@@ -91,9 +91,13 @@ pub async fn encrypt(
     }))
 }
 
-/// Derive AES-256 key from secret material + salt via SHA-256 (synchronous)
-/// Matches Gun.js aeskey.js: SHA-256(key_string + salt_bytes.toString('utf8'))
-fn derive_aes_key_sync(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
+/// Derive AES-256 key from secret material + salt via SHA-256 (synchronous).
+///
+/// Matches Gun.js `aeskey.js`: `SHA-256(key_string + salt_bytes.toString('utf8'))`.
+///
+/// This is the shared KDF used by [`encrypt`], [`crate::sea::decrypt::decrypt`],
+/// and [`crate::sea::user`] passphrase-based encryption.
+pub(crate) fn derive_aes_key_sync(secret_b64: &str, salt: &[u8]) -> Result<Vec<u8>, SeaError> {
     let salt_str = String::from_utf8_lossy(salt);
     let combo = format!("{}{}", secret_b64, salt_str);
     let hash = Sha256::digest(combo.as_bytes());
@@ -151,4 +155,78 @@ pub async fn encrypt_symmetric(data: &Value, key: &[u8]) -> Result<Value, SeaErr
         "ct": ct_b64,
         "iv": iv_b64
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sea::generate_pair;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_encrypt_decrypt_roundtrip() {
+        let pair = generate_pair().await.unwrap();
+        let data = json!({"message": "hello"});
+        let encrypted = encrypt(&data, &pair, None).await.unwrap();
+        let decrypted = super::super::decrypt::decrypt(&encrypted, &pair, None).await.unwrap();
+        assert_eq!(decrypted, data);
+    }
+
+    #[tokio::test]
+    async fn test_encrypt_with_their_epub() {
+        let alice = generate_pair().await.unwrap();
+        let bob = generate_pair().await.unwrap();
+        let data = json!("secret data");
+        let encrypted = encrypt(&data, &alice, bob.epub_key.as_deref()).await.unwrap();
+        let decrypted = super::super::decrypt::decrypt(
+            &encrypted,
+            &bob,
+            alice.epub_key.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(decrypted, data);
+    }
+
+    #[tokio::test]
+    async fn test_encrypt_symmetric_roundtrip() {
+        let key = [0x42u8; 32];
+        let data = json!({"key": "value"});
+        let encrypted = encrypt_symmetric(&data, &key).await.unwrap();
+        let decrypted = super::super::decrypt::decrypt_symmetric(&encrypted, &key).await.unwrap();
+        assert_eq!(decrypted, data);
+    }
+
+    #[tokio::test]
+    async fn test_encrypt_symmetric_wrong_key_fails() {
+        let key = [0x42u8; 32];
+        let wrong_key = [0x99u8; 32];
+        let data = json!("secret");
+        let encrypted = encrypt_symmetric(&data, &key).await.unwrap();
+        assert!(super::super::decrypt::decrypt_symmetric(&encrypted, &wrong_key).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_encrypt_symmetric_bad_key_length() {
+        let key = [0u8; 16]; // too short
+        let data = json!("test");
+        assert!(encrypt_symmetric(&data, &key).await.is_err());
+    }
+
+    #[test]
+    fn test_derive_aes_key_sync_deterministic() {
+        let salt = b"salt123";
+        let key1 = derive_aes_key_sync("secret", salt).unwrap();
+        let key2 = derive_aes_key_sync("secret", salt).unwrap();
+        assert_eq!(key1, key2);
+        assert_eq!(key1.len(), 32); // SHA-256 = 32 bytes
+    }
+
+    #[test]
+    fn test_derive_aes_key_sync_different_inputs() {
+        let salt = b"salt";
+        let key1 = derive_aes_key_sync("secret1", salt).unwrap();
+        let key2 = derive_aes_key_sync("secret2", salt).unwrap();
+        assert_ne!(key1, key2);
+    }
 }

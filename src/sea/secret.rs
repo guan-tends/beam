@@ -83,3 +83,56 @@ fn parse_epub(epub: &str) -> Result<p256::PublicKey, SeaError> {
     // Import as public key
     p256::PublicKey::from_sec1_bytes(&pub_bytes).map_err(|_| SeaError::InvalidKey)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sea::generate_pair;
+
+    #[tokio::test]
+    async fn test_secret_symmetric() {
+        // Alice.secret(Bob.epub) == Bob.secret(Alice.epub)
+        let alice = generate_pair().await.unwrap();
+        let bob = generate_pair().await.unwrap();
+
+        let alice_secret = secret(
+            bob.epub_key.as_ref().unwrap(),
+            &alice,
+        )
+        .await
+        .unwrap();
+
+        let bob_secret = secret(
+            alice.epub_key.as_ref().unwrap(),
+            &bob,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(alice_secret, bob_secret, "ECDH shared secrets must match");
+    }
+
+    #[tokio::test]
+    async fn test_secret_sync_matches_async() {
+        let alice = generate_pair().await.unwrap();
+        let bob = generate_pair().await.unwrap();
+
+        let async_result = secret(bob.epub_key.as_ref().unwrap(), &alice).await.unwrap();
+        let sync_result = secret_sync(bob.epub_key.as_ref().unwrap(), &alice).unwrap();
+        assert_eq!(async_result, sync_result);
+    }
+
+    #[tokio::test]
+    async fn test_secret_invalid_epub_format() {
+        let pair = generate_pair().await.unwrap();
+        assert!(secret_sync("invalid_key", &pair).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_secret_missing_epriv() {
+        let mut pair = generate_pair().await.unwrap();
+        pair.epriv_key = None;
+        let bob = generate_pair().await.unwrap();
+        assert!(secret_sync(bob.epub_key.as_ref().unwrap(), &pair).is_err());
+    }
+}
