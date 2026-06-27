@@ -562,6 +562,16 @@ Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (fu
 
 MIT — see [LICENSE](LICENSE).
 
-## Origin
+## Credits
 
-Rod is a Rust port of [Gun.js](https://github.com/amark/gun) by Martti Malmi. The original Gun.js project is maintained by Mark Nadal.
+Rod was originally created by [Martti Malmi](https://github.com/mmalmi) as a from-scratch Rust port of [Gun.js](https://github.com/amark/gun) by Mark Nadal. The original Gun.js project is maintained by Mark Nadal.
+
+This is an actively maintained fork with continued development by **Guan** (2026–present). Contributions include:
+
+- **Full production review pass** — security audit, comprehensive inline documentation (module-level `//!`, item-level `///`, doctests), and test coverage across all 39 source files (178 unit + 9 integration + 7 doctests)
+- **Warning cleanup** — zero clippy warnings, zero compiler warnings, idiomatic Rust throughout
+- **Documentation regeneration** — README, COMPASS (developer guide), and DEPLOY (operations guide) all written from code truth
+- **Data model semantics** — documented and verified the `on()`/`map()`/`once()` behavior model, including the key divergence from Gun.js's object reconstruction
+- **Bug fixes** — root-level children propagation, `once()` timeout semantics, storage replay sentinel, redb adapter warm schema
+
+Deep gratitude to Martti for the original implementation and to Mark Nadal for Gun.js itself — a visionary approach to decentralized data. This fork carries that work forward.
