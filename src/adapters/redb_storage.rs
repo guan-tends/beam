@@ -30,6 +30,8 @@
 //!
 //! The `Database` handle is `Arc`-wrapped and safe to share. Reads use
 //! `begin_read()` (concurrent) and writes use `begin_write()` (exclusive).
+//! Write commits run inside `spawn_blocking` so the fsync never blocks the
+//! async runtime's worker threads.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -66,8 +68,9 @@ macro_rules! unwrap_or_return {
 /// redb-backed persistent storage adapter for Rod.
 ///
 /// Stores the graph in a single redb database file. Each `Put` commits
-/// inline (ACID). Reads are concurrent. Flush is a no-op ack (puts already
-/// fsync on commit).
+/// inline (ACID) inside `spawn_blocking` so the fsync does not block the
+/// async runtime. Reads are concurrent. Flush is an immediate ack (puts
+/// already fsync on commit).
 ///
 /// # Example
 ///
@@ -282,13 +285,27 @@ impl Actor for RedbStorage {
         match message {
             Message::Get(get) => self.handle_get(get, ctx),
             Message::Put(put) => {
-                if let Err(e) = self.handle_put_internal(put) {
-                    error!("redb put commit failed: {:?}", e);
+                let storage = self.clone();
+                match tokio::task::spawn_blocking(move || {
+                    storage.handle_put_internal(put)
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => error!("redb put commit failed: {:?}", e),
+                    Err(e) => error!("redb put task panicked: {:?}", e),
                 }
             }
             Message::BatchPut(batch) => {
-                if let Err(e) = self.handle_batch_put(batch) {
-                    error!("redb batch_put commit failed: {:?}", e);
+                let storage = self.clone();
+                match tokio::task::spawn_blocking(move || {
+                    storage.handle_batch_put(batch)
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => error!("redb batch_put commit failed: {:?}", e),
+                    Err(e) => error!("redb batch_put task panicked: {:?}", e),
                 }
             }
             Message::Flush(flush) => {
