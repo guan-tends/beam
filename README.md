@@ -566,12 +566,28 @@ MIT — see [LICENSE](LICENSE).
 
 Rod was originally created by [Martti Malmi](https://github.com/mmalmi) as a from-scratch Rust port of [Gun.js](https://github.com/amark/gun) by Mark Nadal. The original Gun.js project is maintained by Mark Nadal.
 
-This is an actively maintained fork with continued development by **Guan** (2026–present). Contributions include:
+This is an actively maintained fork with continued development by **Guan** (2026–present), comprising 109 commits across features, fixes, tests, and documentation.
 
-- **Full production review pass** — security audit, comprehensive inline documentation (module-level `//!`, item-level `///`, doctests), and test coverage across all 39 source files (178 unit + 9 integration + 7 doctests)
-- **Warning cleanup** — zero clippy warnings, zero compiler warnings, idiomatic Rust throughout
-- **Documentation regeneration** — README, COMPASS (developer guide), and DEPLOY (operations guide) all written from code truth
-- **Data model semantics** — documented and verified the `on()`/`map()`/`once()` behavior model, including the key divergence from Gun.js's object reconstruction
-- **Bug fixes** — root-level children propagation, `once()` timeout semantics, storage replay sentinel, redb adapter warm schema
+### Major Contributions
+
+**SEA Crypto Layer** (11 phases, `src/sea/`) — Implemented from stubs to full Gun.js-compatible crypto stack: ECDSA P-256 key generation, signing, verification, proof-of-work, ECDH shared secrets, AES-256-GCM encryption/decryption, capability certificates, and the full User system (`create`, `auth`, `trust`, `grant`, `secret`, `is`) with session persistence (memory + encrypted file storage). Includes `beam-sea-keygen` binary.
+
+**WebRTC P2P Transport** (`src/adapters/webrtc.rs`) — Built str0m-based WebRTC data channel support behind a feature flag: STUN discovery, TURN relay allocation, `connect_webrtc_peer()` public API, `RtcSignal` message variant for signaling, and peer ID collision guards. Resolved 10+ integration bugs including ICE starvation, offer-miss races, and cross-node signal routing.
+
+**Persistent Storage** (`src/adapters/redb_storage.rs`) — Added redb embedded database adapter with atomic `BatchPut` transactions, flush acknowledgement protocol, CLI flags (`--redb-storage`, `--redb-path`), and warm-schema startup to prevent `TableDoesNotExist` on first read.
+
+**DAM Protocol Parity** — Implemented Gun.js's deduplication protocol: `Dup` TTL cache (999 entries / 9s), `##` checksum dedup for ack responses, `><` peer-hop lists for anti-loop relay. Removed dead `BoundedHashSet` code.
+
+**Runtime Peer Addition** — `Node::connect_peer()` for dynamic WebSocket peer connections at runtime with exponential backoff retry.
+
+**Flush Protocol** — `Flush` message variant with oneshot ack channels, `flush_storage()` API, and `__rod_replay_complete__` sentinel for deterministic `map()` replay termination.
+
+**BatchPut** — `Message::BatchPut` variant and `Node::batch_put()` for multi-value single-transaction writes, with router forwarding and storage adapter support.
+
+**Bug Fixes** — Root-level children propagation in `add_parent_nodes`, `RwLock` self-deadlock in `Node::get`, synchronous redb Put for ACID ordering, AES key derivation alignment with Gun.js `aeskey.js`, and broadcast buffer configurability.
+
+**Production Review Pass** — Security audit, comprehensive inline documentation (module-level `//!`, item-level `///`, doctests), and test coverage across all 39 source files (178 unit + 9 integration + 7 doctests). Zero clippy warnings, zero compiler warnings. README, COMPASS (developer guide), and DEPLOY (operations guide) regenerated from code truth.
+
+**Data Model Semantics** — Documented and verified the `on()`/`map()`/`once()` behavior model, including the key divergence from Gun.js's object reconstruction and the rationale for omitting debounce.
 
 Deep gratitude to Martti for the original implementation and to Mark Nadal for Gun.js itself — a visionary approach to decentralized data. This fork carries that work forward.
