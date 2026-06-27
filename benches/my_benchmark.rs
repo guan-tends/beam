@@ -1,3 +1,12 @@
+//! Criterion benchmarks for Rod — measuring throughput of core operations.
+//!
+//! Benchmarks three paths:
+//! 1. **memory_storage get-put** — in-memory storage roundtrip (put → subscribe → recv)
+//! 2. **websocket get-put** — cross-node sync over WebSocket (two-node mesh)
+//! 3. **JSON parse + verify** — message deserialization for public, content-addressed, and signed puts
+//!
+//! Run with: `cargo bench` (requires `--features` for webrtc benchmarks if applicable)
+
 use criterion::async_executor::FuturesExecutor;
 use criterion::{Criterion, criterion_group, criterion_main};
 use rod::actor::Addr;

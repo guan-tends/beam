@@ -1,3 +1,14 @@
+//! Hello World example — connect to a running Rod node and send a greeting.
+//!
+//! Requires a Rod node running with a WebSocket server on port 4944:
+//! ```bash
+//! cargo run --bin rod -- start --port 4944
+//! ```
+//! Then run this example:
+//! ```bash
+//! cargo run --example hello
+//! ```
+
 use rod::adapters::*;
 use rod::{Config, Node, Value};
 

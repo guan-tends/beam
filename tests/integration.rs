@@ -1,3 +1,23 @@
+//! Integration tests for Rod — the Rust Gun Protocol implementation.
+//!
+//! These tests exercise the full stack: Node + adapters + network protocols.
+//! They spin up real WebSocket servers on localhost and verify mesh sync,
+//! storage persistence, and peer-to-peer data propagation.
+//!
+//! # Test Categories
+//!
+//! - **Smoke**: `it_doesnt_error` — minimal Node creation, no panics
+//! - **Pub/Sub**: `first_get_then_put`, `first_put_then_get` — subscription ordering
+//! - **Storage**: `once_returns_value_or_none` — read-after-write consistency
+//! - **WebSocket mesh**: `connect_and_sync_over_websocket`, `websocket_sync_over_relay_peer`,
+//!   `websocket_sync_over_2_relay_peers` — multi-hop sync over WS relay
+//! - **Persistence**: `redb_storage_persists`, `redb_storage_flush_returns_ok` — disk storage
+//!
+//! # Known Flaky Test
+//!
+//! `websocket_sync_over_2_relay_peers` may time out on slow CI. It uses a 30s
+//! timeout per subscription receive. If it fails, re-run before investigating.
+
 #[cfg(test)]
 mod tests {
     use log::info;

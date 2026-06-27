@@ -1,3 +1,11 @@
+//! Dump redb storage — inspect on-disk contents of a Rod redb database.
+//!
+//! Usage:
+//! ```bash
+//! cargo run --example dump_redb -- /path/to/rod.redb
+//! ```
+//! Prints all node IDs, their children, update timestamps, and value types.
+
 use redb::{Database, ReadableTable, TableDefinition};
 use redb::{ReadableDatabase, ReadableTableMetadata};
 
