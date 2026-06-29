@@ -153,16 +153,27 @@ impl User {
     }
 
     /// Save current session to storage.
+    ///
+    /// Note: clones the [`KeyPair`] and alias out of the session lock
+    /// before awaiting `storage.save(...)` to keep the future `Send`.
+    /// Holding the `std::sync::RwLock` read guard across an `.await`
+    /// would make the returned future non-`Send` (the std guard is not
+    /// `Send`), which breaks callers that need to await auth flows
+    /// while holding a tokio lock (e.g. the MCP `identity_auth` tool).
     pub async fn save_to(&self, storage: &dyn SessionStorage) -> Result<(), SeaError> {
-        let inner = self
-            .inner
-            .read()
-            .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
-        if !inner.is_authenticated {
-            return Err(SeaError::NotAuthenticated);
-        }
-        let alias = inner.alias.as_ref().ok_or(SeaError::NotAuthenticated)?;
-        storage.save(alias, &inner.pair).await
+        let (alias, pair) = {
+            let inner = self
+                .inner
+                .read()
+                .map_err(|_| SeaError::SessionStorage("lock poisoned".to_string()))?;
+            if !inner.is_authenticated {
+                return Err(SeaError::NotAuthenticated);
+            }
+            let alias = inner.alias.clone().ok_or(SeaError::NotAuthenticated)?;
+            let pair = inner.pair.clone();
+            (alias, pair)
+        }; // guard dropped here, before any await
+        storage.save(&alias, &pair).await
     }
 }
 
