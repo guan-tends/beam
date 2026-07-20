@@ -39,7 +39,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::Config;
-use crate::actor::{Actor, ActorContext};
+use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
 
@@ -180,7 +180,14 @@ impl RedbStorage {
         let mut put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
         put.to_string(); // compute checksum
 
-        if put.checksum != get.checksum {
+        // Ack replies (those with `in_response_to`) MUST always be sent,
+        // regardless of checksum match. The client uses the reply's
+        // presence to drive its `__rod_replay_complete__` sentinel-drain;
+        // a silent ack would hang the drain forever. The checksum-match
+        // optimization is reserved for live broadcasts where the caller
+        // already has the data.
+        let is_ack = put.in_response_to.is_some();
+        if is_ack || put.checksum != get.checksum {
             let _ = get.from.send(Message::Put(put));
         } else {
             debug!("redb get: checksum match, not replying");
@@ -285,20 +292,20 @@ impl Actor for RedbStorage {
         match message {
             Message::Get(get) => self.handle_get(get, ctx),
             Message::Put(put) => {
+                let put_id = put.id.clone();
+                let put_from = put.from.clone();
                 let storage = self.clone();
-                match tokio::task::spawn_blocking(move || storage.handle_put_internal(put)).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => error!("redb put commit failed: {:?}", e),
-                    Err(e) => error!("redb put task panicked: {:?}", e),
-                }
+                let result =
+                    tokio::task::spawn_blocking(move || storage.handle_put_internal(put)).await;
+                self.send_put_ack_after_commit(&put_id, &put_from, &result, ctx);
             }
             Message::BatchPut(batch) => {
+                let batch_id = batch.id.clone();
+                let batch_from = batch.from.clone();
                 let storage = self.clone();
-                match tokio::task::spawn_blocking(move || storage.handle_batch_put(batch)).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => error!("redb batch_put commit failed: {:?}", e),
-                    Err(e) => error!("redb batch_put task panicked: {:?}", e),
-                }
+                let result =
+                    tokio::task::spawn_blocking(move || storage.handle_batch_put(batch)).await;
+                self.send_batch_put_ack_after_commit(&batch_id, &batch_from, &result, ctx);
             }
             Message::Flush(flush) => {
                 let flush_id = flush.id.clone();
@@ -337,6 +344,159 @@ impl Actor for RedbStorage {
     }
 }
 
+impl RedbStorage {
+    /// Sends a put-ack back to the originating node after `spawn_blocking`
+    /// returns. The ack payload uses the same `_ack`/`_err` sentinel as
+    /// the Flush ack and as memory_storage — so `Node::handle_put` drains
+    /// `pending_puts` uniformly across both adapters.
+    ///
+    /// Fires AFTER the commit returns from `spawn_blocking` — that's the
+    /// contract. If the commit failed or the task panicked, we send `_err`
+    /// and the awaiting caller learns the failure.
+    fn send_put_ack_after_commit(
+        &self,
+        put_id: &str,
+        put_from: &Addr,
+        result: &Result<Result<(), redb::Error>, tokio::task::JoinError>,
+        ctx: &ActorContext,
+    ) {
+        let (ack_children, err_msg) = match result {
+            Ok(Ok(())) => (
+                vec![(
+                    "_ack".to_string(),
+                    NodeData {
+                        value: Value::Text("ok".to_string()),
+                        updated_at: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64,
+                    },
+                )]
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+                None,
+            ),
+            Ok(Err(e)) => {
+                error!("redb put commit failed: {:?}", e);
+                (
+                    vec![(
+                        "_err".to_string(),
+                        NodeData {
+                            value: Value::Text(format!("{:?}", e)),
+                            updated_at: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    Some(format!("redb put commit failed: {:?}", e)),
+                )
+            }
+            Err(e) => {
+                error!("redb put task panicked: {:?}", e);
+                (
+                    vec![(
+                        "_err".to_string(),
+                        NodeData {
+                            value: Value::Text(format!("task panicked: {:?}", e)),
+                            updated_at: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    Some(format!("redb put task panicked: {:?}", e)),
+                )
+            }
+        };
+        let mut nodes = BTreeMap::new();
+        nodes.insert("_ack".to_string(), ack_children);
+        let ack = Put::new(nodes, Some(put_id.to_string()), ctx.addr.clone());
+        let _ = put_from.send(Message::Put(ack));
+        if err_msg.is_some() {
+            debug!("redb put ack sent with _err for {}", put_id);
+        }
+    }
+
+    /// Sends a batch_put ack back to the originating node after commit.
+    ///
+    /// Mirrors `send_put_ack_after_commit` but for the batch case. Uses the
+    /// same `_ack`/`_err` sentinel so the originating `Node::handle_put`
+    /// drains `pending_puts` keyed by `batch.id`.
+    fn send_batch_put_ack_after_commit(
+        &self,
+        batch_id: &str,
+        batch_from: &Addr,
+        result: &Result<Result<(), redb::Error>, tokio::task::JoinError>,
+        ctx: &ActorContext,
+    ) {
+        let (ack_children, err_msg) = match result {
+            Ok(Ok(())) => (
+                vec![(
+                    "_ack".to_string(),
+                    NodeData {
+                        value: Value::Text("ok".to_string()),
+                        updated_at: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                                .as_millis() as f64,
+                    },
+                )]
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+                None,
+            ),
+            Ok(Err(e)) => {
+                error!("redb batch_put commit failed: {:?}", e);
+                (
+                    vec![(
+                        "_err".to_string(),
+                        NodeData {
+                            value: Value::Text(format!("{:?}", e)),
+                            updated_at: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    Some(format!("redb batch_put commit failed: {:?}", e)),
+                )
+            }
+            Err(e) => {
+                error!("redb batch_put task panicked: {:?}", e);
+                (
+                    vec![(
+                        "_err".to_string(),
+                        NodeData {
+                            value: Value::Text(format!("task panicked: {:?}", e)),
+                            updated_at: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    Some(format!("redb batch_put task panicked: {:?}", e)),
+                )
+            }
+        };
+        let mut nodes = BTreeMap::new();
+        nodes.insert("_ack".to_string(), ack_children);
+        let ack = Put::new(nodes, Some(batch_id.to_string()), ctx.addr.clone());
+        let _ = batch_from.send(Message::Put(ack));
+        if err_msg.is_some() {
+            debug!("redb batch_put ack sent with _err for {}", batch_id);
+        }
+    }
+}
+
 impl Default for RedbStorage {
     fn default() -> Self {
         Self::new()
@@ -371,5 +531,102 @@ mod tests {
         let cloned = storage.clone();
         assert_eq!(storage.path, cloned.path);
         let _ = std::fs::remove_file(&storage.path);
+    }
+
+    /// Sentinel-drain protocol test: storage MUST always reply when
+    /// `in_response_to` is set on the Get, regardless of checksum match.
+    ///
+    /// # Why this test exists
+    ///
+    /// Rod's `Node::handle_put` only sends the `__rod_replay_complete__`
+    /// sentinel after a Put with `in_response_to` is received. If storage
+    /// stays silent when checksum matches, the client's `drain_until_sentinel`
+    /// hangs forever. The mnemos use case doesn't pre-set checksum (so this
+    /// bug is latent), but ANY future caller who caches checksums would hit
+    /// it.
+    ///
+    /// This test forces the bug by pre-computing the reply's checksum and
+    /// putting it on the Get — exactly the pattern a caching client would
+    /// use.
+    #[tokio::test]
+    async fn test_redb_get_always_replies_when_in_response_to_set() {
+        use crate::actor::{Actor, ActorContext};
+        use crate::message::Put;
+        use std::collections::BTreeMap;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let mut storage = create_test_storage("ack-always");
+        let ctx = ActorContext::new("test".to_string());
+
+        // Pre-populate: store a child under node "n1" via the Actor entry point.
+        let mut children = BTreeMap::new();
+        children.insert(
+            "k".to_string(),
+            NodeData {
+                value: Value::Text("v".to_string()),
+                updated_at: 0.0,
+            },
+        );
+        let mut nodes = BTreeMap::new();
+        nodes.insert("n1".to_string(), children.clone());
+        let seed_put = Put::new(nodes, None, ctx.addr.clone());
+        Actor::handle(&mut storage, Message::Put(seed_put), &ctx).await;
+
+        // Build a buffered `from` address so we can read the reply.
+        let (tx, mut rx) = unbounded_channel::<Message>();
+        let from_addr = crate::actor::Addr::new(tx);
+
+        // Compute the checksum the storage will produce for the reply.
+        let mut reply = Put::new(
+            {
+                let mut m = BTreeMap::new();
+                m.insert("n1".to_string(), children.clone());
+                m
+            },
+            Some("get-id-42".to_string()),
+            ctx.addr.clone(),
+        );
+        reply.to_string(); // sets reply.checksum
+        let matching_checksum = reply.checksum;
+
+        // Construct a Get with checksum pre-set to MATCH the reply's
+        // checksum. In the buggy code this triggers the no-reply branch.
+        let get = Get {
+            id: "get-id-42".to_string(),
+            from: from_addr.clone(),
+            recipients: None,
+            node_id: "n1".to_string(),
+            checksum: matching_checksum,
+            child_key: None,
+            json_str: None,
+        };
+
+        Actor::handle(&mut storage, Message::Get(get), &ctx).await;
+
+        // Bug: with the old code, no reply arrives (timeout would be required).
+        // Fix: redb_storage MUST always reply when in_response_to is Some.
+        let received = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            rx.recv(),
+        )
+        .await;
+
+        let _ = std::fs::remove_file(&storage.path);
+
+        match received {
+            Ok(Some(Message::Put(reply_put))) => {
+                assert_eq!(
+                    reply_put.in_response_to.as_deref(),
+                    Some("get-id-42"),
+                    "reply must carry in_response_to so client can drain sentinel"
+                );
+            }
+            Ok(Some(other)) => panic!("expected Put reply, got {:?}", other),
+            Ok(None) => panic!("sender closed before reply sent"),
+            Err(_) => panic!(
+                "BUG: redb_storage stayed silent despite matching in_response_to. \
+                 This hangs drain_until_sentinel forever."
+            ),
+        }
     }
 }
