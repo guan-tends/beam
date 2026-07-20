@@ -553,8 +553,8 @@ mod tests {
         use rod::adapters::RedbStorage;
         use std::time::Duration;
 
-        let temp_path = std::env::temp_dir()
-            .join(format!("rod-flush-barrier-{}.redb", std::process::id()));
+        let temp_path =
+            std::env::temp_dir().join(format!("rod-flush-barrier-{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&temp_path);
 
         let config = Config::default();

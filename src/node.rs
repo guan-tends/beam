@@ -693,9 +693,7 @@ mod tests {
     async fn test_node_batch_put() {
         let mut node = Node::new();
         let mut sub = node.get("a").on();
-        node.batch_put(vec![
-            (vec!["a".to_string()], Value::Text("x".into())),
-        ]);
+        node.batch_put(vec![(vec!["a".to_string()], Value::Text("x".into()))]);
         let val = tokio::time::timeout(Duration::from_secs(2), sub.recv())
             .await
             .expect("timeout")

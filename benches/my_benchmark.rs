@@ -17,8 +17,8 @@ use rod::actor::Addr;
 use rod::adapters::{MemoryStorage, OutgoingWebsocketManager, RedbStorage, WsServer};
 use rod::message::Message;
 use rod::{Config, Node};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::runtime::Runtime;
 use tokio::time::{Duration, sleep};
 
@@ -178,8 +178,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("redb read during write", |b| {
         rt.block_on(async {
-            let temp_path = std::env::temp_dir()
-                .join(format!("rod-bench-{}.redb", std::process::id()));
+            let temp_path =
+                std::env::temp_dir().join(format!("rod-bench-{}.redb", std::process::id()));
             let _ = std::fs::remove_file(&temp_path);
 
             let config = Config::default();
@@ -209,9 +209,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         break;
                     }
                     let n = writer_counter_clone.fetch_add(1, Ordering::Relaxed);
-                    writer_db
-                        .get("write_load")
-                        .put(format!("val-{n}").into());
+                    writer_db.get("write_load").put(format!("val-{n}").into());
                     // Small yield to avoid saturating the channel.
                     tokio::task::yield_now().await;
                 }
@@ -221,10 +219,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.to_async(FuturesExecutor).iter(|| {
                 let mut db = db.clone();
                 async move {
-                    let _ = db
-                        .get("bench_key")
-                        .once(Some(Duration::from_secs(2)))
-                        .await;
+                    let _ = db.get("bench_key").once(Some(Duration::from_secs(2))).await;
                 }
             });
 

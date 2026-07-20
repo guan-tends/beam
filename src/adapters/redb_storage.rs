@@ -286,11 +286,7 @@ impl Actor for RedbStorage {
             Message::Get(get) => self.handle_get(get, ctx),
             Message::Put(put) => {
                 let storage = self.clone();
-                match tokio::task::spawn_blocking(move || {
-                    storage.handle_put_internal(put)
-                })
-                .await
-                {
+                match tokio::task::spawn_blocking(move || storage.handle_put_internal(put)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => error!("redb put commit failed: {:?}", e),
                     Err(e) => error!("redb put task panicked: {:?}", e),
@@ -298,11 +294,7 @@ impl Actor for RedbStorage {
             }
             Message::BatchPut(batch) => {
                 let storage = self.clone();
-                match tokio::task::spawn_blocking(move || {
-                    storage.handle_batch_put(batch)
-                })
-                .await
-                {
+                match tokio::task::spawn_blocking(move || storage.handle_batch_put(batch)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => error!("redb batch_put commit failed: {:?}", e),
                     Err(e) => error!("redb batch_put task panicked: {:?}", e),

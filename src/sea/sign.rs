@@ -97,8 +97,14 @@ mod tests {
         let data = json!({"hello": "world"});
         let signed = sign(&data, &pair).await.unwrap();
 
-        assert!(signed.get("m").is_some(), "signed output should have 'm' field");
-        assert!(signed.get("s").is_some(), "signed output should have 's' field");
+        assert!(
+            signed.get("m").is_some(),
+            "signed output should have 'm' field"
+        );
+        assert!(
+            signed.get("s").is_some(),
+            "signed output should have 's' field"
+        );
     }
 
     #[tokio::test]
@@ -146,8 +152,7 @@ mod tests {
         let pair = generate_pair().await.unwrap();
         let mut bad_pair = pair.clone();
         // 16 bytes instead of 32
-        bad_pair.priv_key =
-            base64::encode_config([0u8; 16], base64::STANDARD_NO_PAD);
+        bad_pair.priv_key = base64::encode_config([0u8; 16], base64::STANDARD_NO_PAD);
         let data = json!({"test": 1});
         assert!(sign(&data, &bad_pair).await.is_err());
     }

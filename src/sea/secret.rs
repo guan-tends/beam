@@ -95,19 +95,13 @@ mod tests {
         let alice = generate_pair().await.unwrap();
         let bob = generate_pair().await.unwrap();
 
-        let alice_secret = secret(
-            bob.epub_key.as_ref().unwrap(),
-            &alice,
-        )
-        .await
-        .unwrap();
+        let alice_secret = secret(bob.epub_key.as_ref().unwrap(), &alice)
+            .await
+            .unwrap();
 
-        let bob_secret = secret(
-            alice.epub_key.as_ref().unwrap(),
-            &bob,
-        )
-        .await
-        .unwrap();
+        let bob_secret = secret(alice.epub_key.as_ref().unwrap(), &bob)
+            .await
+            .unwrap();
 
         assert_eq!(alice_secret, bob_secret, "ECDH shared secrets must match");
     }
@@ -117,7 +111,9 @@ mod tests {
         let alice = generate_pair().await.unwrap();
         let bob = generate_pair().await.unwrap();
 
-        let async_result = secret(bob.epub_key.as_ref().unwrap(), &alice).await.unwrap();
+        let async_result = secret(bob.epub_key.as_ref().unwrap(), &alice)
+            .await
+            .unwrap();
         let sync_result = secret_sync(bob.epub_key.as_ref().unwrap(), &alice).unwrap();
         assert_eq!(async_result, sync_result);
     }

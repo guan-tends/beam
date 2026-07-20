@@ -168,7 +168,9 @@ mod tests {
         let pair = generate_pair().await.unwrap();
         let data = json!({"message": "hello"});
         let encrypted = encrypt(&data, &pair, None).await.unwrap();
-        let decrypted = super::super::decrypt::decrypt(&encrypted, &pair, None).await.unwrap();
+        let decrypted = super::super::decrypt::decrypt(&encrypted, &pair, None)
+            .await
+            .unwrap();
         assert_eq!(decrypted, data);
     }
 
@@ -177,14 +179,12 @@ mod tests {
         let alice = generate_pair().await.unwrap();
         let bob = generate_pair().await.unwrap();
         let data = json!("secret data");
-        let encrypted = encrypt(&data, &alice, bob.epub_key.as_deref()).await.unwrap();
-        let decrypted = super::super::decrypt::decrypt(
-            &encrypted,
-            &bob,
-            alice.epub_key.as_deref(),
-        )
-        .await
-        .unwrap();
+        let encrypted = encrypt(&data, &alice, bob.epub_key.as_deref())
+            .await
+            .unwrap();
+        let decrypted = super::super::decrypt::decrypt(&encrypted, &bob, alice.epub_key.as_deref())
+            .await
+            .unwrap();
         assert_eq!(decrypted, data);
     }
 
@@ -193,7 +193,9 @@ mod tests {
         let key = [0x42u8; 32];
         let data = json!({"key": "value"});
         let encrypted = encrypt_symmetric(&data, &key).await.unwrap();
-        let decrypted = super::super::decrypt::decrypt_symmetric(&encrypted, &key).await.unwrap();
+        let decrypted = super::super::decrypt::decrypt_symmetric(&encrypted, &key)
+            .await
+            .unwrap();
         assert_eq!(decrypted, data);
     }
 
@@ -203,7 +205,11 @@ mod tests {
         let wrong_key = [0x99u8; 32];
         let data = json!("secret");
         let encrypted = encrypt_symmetric(&data, &key).await.unwrap();
-        assert!(super::super::decrypt::decrypt_symmetric(&encrypted, &wrong_key).await.is_err());
+        assert!(
+            super::super::decrypt::decrypt_symmetric(&encrypted, &wrong_key)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

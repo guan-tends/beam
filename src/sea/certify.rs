@@ -91,7 +91,9 @@ mod tests {
     async fn test_certify_basic() {
         let authority = generate_pair().await.unwrap();
         let alice = generate_pair().await.unwrap();
-        let cert = certify(&authority, &[alice.pub_key.clone()], None).await.unwrap();
+        let cert = certify(&authority, &[alice.pub_key.clone()], None)
+            .await
+            .unwrap();
         let payload = verify_certificate(&cert, &authority.pub_key).unwrap();
         assert!(is_certified(&payload, &alice.pub_key));
     }
@@ -101,13 +103,9 @@ mod tests {
         let authority = generate_pair().await.unwrap();
         let alice = generate_pair().await.unwrap();
         let policies = json!({"w": "skills/", "r": ".*"});
-        let cert = certify(
-            &authority,
-            &[alice.pub_key.clone()],
-            Some(&policies),
-        )
-        .await
-        .unwrap();
+        let cert = certify(&authority, &[alice.pub_key.clone()], Some(&policies))
+            .await
+            .unwrap();
         let payload = verify_certificate(&cert, &authority.pub_key).unwrap();
         assert_eq!(payload["w"].as_str(), Some("skills/"));
         assert_eq!(payload["r"].as_str(), Some(".*"));
@@ -118,7 +116,9 @@ mod tests {
         let authority = generate_pair().await.unwrap();
         let alice = generate_pair().await.unwrap();
         let policies = json!({"e": 1000.0_f64}); // 1970
-        let cert = certify(&authority, &[alice.pub_key], Some(&policies)).await.unwrap();
+        let cert = certify(&authority, &[alice.pub_key], Some(&policies))
+            .await
+            .unwrap();
         assert!(verify_certificate(&cert, &authority.pub_key).is_err());
     }
 
