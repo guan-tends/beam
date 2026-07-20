@@ -322,9 +322,18 @@ mod tests {
 
     #[test]
     fn test_nodedata_partial_eq() {
-        let a = NodeData { value: Value::Text("x".into()), updated_at: 1.0 };
-        let b = NodeData { value: Value::Text("x".into()), updated_at: 1.0 };
-        let c = NodeData { value: Value::Text("y".into()), updated_at: 1.0 };
+        let a = NodeData {
+            value: Value::Text("x".into()),
+            updated_at: 1.0,
+        };
+        let b = NodeData {
+            value: Value::Text("x".into()),
+            updated_at: 1.0,
+        };
+        let c = NodeData {
+            value: Value::Text("y".into()),
+            updated_at: 1.0,
+        };
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
@@ -563,11 +572,17 @@ mod tests {
         let mut children: Children = BTreeMap::new();
         children.insert(
             "key1".to_string(),
-            NodeData { value: Value::Text("v1".into()), updated_at: 1.0 },
+            NodeData {
+                value: Value::Text("v1".into()),
+                updated_at: 1.0,
+            },
         );
         children.insert(
             "key2".to_string(),
-            NodeData { value: Value::Text("v2".into()), updated_at: 2.0 },
+            NodeData {
+                value: Value::Text("v2".into()),
+                updated_at: 2.0,
+            },
         );
         // BTreeMap is sorted
         let keys: Vec<&String> = children.keys().collect();

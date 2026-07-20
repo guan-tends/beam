@@ -202,7 +202,10 @@ impl Actor for Router {
                 );
                 if let Some(to_peer_id) = &rtc.to {
                     if let Some(addr) = self.peer_addrs.get(to_peer_id) {
-                        debug!("RtcSignal delivering to local addr for peer_id={}", to_peer_id);
+                        debug!(
+                            "RtcSignal delivering to local addr for peer_id={}",
+                            to_peer_id
+                        );
                         let _ = addr.send(Message::RtcSignal(rtc));
                     } else {
                         debug!(

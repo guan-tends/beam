@@ -2,8 +2,8 @@
 //! AES-GCM decryption
 //! Reverse of encrypt.rs
 
-use super::{KeyPair, SeaError};
 use super::encrypt::derive_aes_key_sync;
+use super::{KeyPair, SeaError};
 use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
@@ -105,7 +105,9 @@ mod tests {
     async fn test_decrypt_self_encrypted() {
         let pair = generate_pair().await.unwrap();
         let data = json!({"secret": "data"});
-        let encrypted = super::super::encrypt::encrypt(&data, &pair, None).await.unwrap();
+        let encrypted = super::super::encrypt::encrypt(&data, &pair, None)
+            .await
+            .unwrap();
         let decrypted = decrypt(&encrypted, &pair, None).await.unwrap();
         assert_eq!(decrypted, data);
     }
@@ -115,7 +117,9 @@ mod tests {
         let alice = generate_pair().await.unwrap();
         let bob = generate_pair().await.unwrap();
         let data = json!("secret");
-        let encrypted = super::super::encrypt::encrypt(&data, &alice, None).await.unwrap();
+        let encrypted = super::super::encrypt::encrypt(&data, &alice, None)
+            .await
+            .unwrap();
         assert!(decrypt(&encrypted, &bob, None).await.is_err());
     }
 

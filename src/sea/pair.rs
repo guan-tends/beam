@@ -121,22 +121,15 @@ mod tests {
         assert_eq!(parts.len(), 2, "pub_key should have exactly one dot");
         // Each part should be valid base64 (no padding)
         for part in &parts {
-            assert!(
-                !part.is_empty(),
-                "pub_key components should not be empty"
-            );
-            assert!(
-                !part.contains('='),
-                "pub_key should use base64 no-pad"
-            );
+            assert!(!part.is_empty(), "pub_key components should not be empty");
+            assert!(!part.contains('='), "pub_key should use base64 no-pad");
         }
     }
 
     #[tokio::test]
     async fn test_priv_key_is_32_bytes() {
         let pair = generate_pair().await.unwrap();
-        let priv_bytes =
-            base64::decode_config(&pair.priv_key, base64::STANDARD_NO_PAD).unwrap();
+        let priv_bytes = base64::decode_config(&pair.priv_key, base64::STANDARD_NO_PAD).unwrap();
         assert_eq!(priv_bytes.len(), 32, "P-256 private key is 32 bytes");
     }
 
@@ -156,8 +149,7 @@ mod tests {
     async fn test_epriv_key_is_32_bytes() {
         let pair = generate_pair().await.unwrap();
         let epriv = pair.epriv_key.unwrap();
-        let epriv_bytes =
-            base64::decode_config(&epriv, base64::STANDARD_NO_PAD).unwrap();
+        let epriv_bytes = base64::decode_config(&epriv, base64::STANDARD_NO_PAD).unwrap();
         assert_eq!(epriv_bytes.len(), 32, "P-256 ECDH private key is 32 bytes");
     }
 

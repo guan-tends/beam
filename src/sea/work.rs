@@ -151,9 +151,7 @@ mod tests {
         let a = work(b"password", Some(b"salt_a"), opts.clone())
             .await
             .unwrap();
-        let b = work(b"password", Some(b"salt_b"), opts)
-            .await
-            .unwrap();
+        let b = work(b"password", Some(b"salt_b"), opts).await.unwrap();
         assert_ne!(a, b, "different salts should produce different outputs");
     }
 
@@ -163,9 +161,7 @@ mod tests {
         let a = work(b"password", Some(b"same_salt"), opts.clone())
             .await
             .unwrap();
-        let b = work(b"password", Some(b"same_salt"), opts)
-            .await
-            .unwrap();
+        let b = work(b"password", Some(b"same_salt"), opts).await.unwrap();
         assert_eq!(a, b, "same salt should produce same output");
     }
 
