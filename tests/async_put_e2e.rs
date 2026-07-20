@@ -129,14 +129,22 @@ async fn e2e_memory_storage_roundtrip() {
 #[tokio::test]
 async fn e2e_redb_put_await_durability() {
     use rod::adapters::RedbStorage;
-    use tempfile::TempDir;
+    use std::env;
 
-    use rod::config::Config;
-    let tmp = TempDir::new().expect("tempdir");
-    let path = tmp.path().join("rod.redb");
+    use rod::Config;
+    // Manual tmpdir to avoid pulling in the `tempfile` crate.
+    let tmp_path = env::temp_dir().join(format!(
+        "rod-redb-{}-{}.redb",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let path = tmp_path.to_str().expect("temp path");
     // `new_with_config` is infallible — it panics on failure rather than
     // returning a Result. This matches the existing rod API.
-    let storage = RedbStorage::new_with_config(Config::default(), &path, None);
+    let storage = RedbStorage::new_with_config(Config::default(), path, None);
     let mut node = Node::new_with_config(
         Config::default(),
         vec![Box::new(storage) as Box<dyn Actor>],
@@ -158,7 +166,7 @@ async fn e2e_redb_put_await_durability() {
     // Tear down the node, recreate it against the same path. The value
     // should still be there — proof that ack fired AFTER fsync, not before.
     drop(node);
-    let storage2 = RedbStorage::new_with_config(Config::default(), &path, None);
+    let storage2 = RedbStorage::new_with_config(Config::default(), path, None);
     let mut node2 = Node::new_with_config(
         Config::default(),
         vec![Box::new(storage2) as Box<dyn Actor>],
