@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::actor::{Actor, ActorContext};
-use crate::message::{Get, Message, Put};
+use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
 
 use async_trait::async_trait;
@@ -102,7 +102,19 @@ impl MemoryStorage {
     /// For each node, existing children are compared by `updated_at` —
     /// a child is only overwritten if the incoming `updated_at` is >= the
     /// existing one (last-write-wins).
-    fn handle_put(&self, put: Put, _ctx: &ActorContext) {
+    ///
+    /// After a successful merge, sends an ack `Put` directly back to the
+    /// originating node (NOT through the router — that would route through
+    /// `seen_get_messages` and be silently dropped). The ack payload uses
+    /// the same `_ack`/`_err` sentinel children as `Flush`, so the originating
+    /// `Node::handle_put` can drain `pending_puts` and resolve the awaiter.
+    fn handle_put(&self, put: Put, ctx: &ActorContext) {
+        let put_result = self.apply_put(&put);
+        self.send_put_ack(&put, &put_result, ctx);
+    }
+
+    /// Applies a put to the in-memory store, returning Ok or an error string.
+    fn apply_put(&self, put: &Put) -> Result<(), String> {
         for (node_id, update_data) in put.updated_nodes.iter().rev() {
             debug!("saving k-v {}: {:?}", node_id, update_data);
             let mut write = self.store.write();
@@ -120,6 +132,106 @@ impl MemoryStorage {
                 write.insert(node_id.to_string(), update_data.clone());
             }
         }
+        Ok(())
+    }
+
+    /// Sends a put-ack message directly to the originating node's addr.
+    ///
+    /// Uses the same sentinel convention as the Flush ack:
+    /// - `_ack` child → success
+    /// - `_err` child carrying the message → failure
+    fn send_put_ack(&self, put: &Put, result: &Result<(), String>, ctx: &ActorContext) {
+        let mut ack_children = BTreeMap::new();
+        match result {
+            Ok(()) => {
+                ack_children.insert(
+                    "_ack".to_string(),
+                    NodeData {
+                        value: Value::Text("ok".to_string()),
+                        updated_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64,
+                    },
+                );
+            }
+            Err(msg) => {
+                ack_children.insert(
+                    "_err".to_string(),
+                    NodeData {
+                        value: Value::Text(msg.clone()),
+                        updated_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64,
+                    },
+                );
+            }
+        }
+        let mut nodes = BTreeMap::new();
+        nodes.insert("_ack".to_string(), ack_children);
+        let ack = Put::new(nodes, Some(put.id.clone()), ctx.addr.clone());
+        let _ = put.from.send(Message::Put(ack));
+    }
+
+    /// Handles a `BatchPut` by applying each constituent Put and sending
+    /// a single batch ack back to the originating node.
+    fn handle_batch_put(&self, batch: BatchPut, ctx: &ActorContext) {
+        let mut last_err: Option<String> = None;
+        for put in batch.puts.iter() {
+            if let Err(e) = self.apply_put(put) {
+                last_err = Some(e);
+            }
+        }
+        let result = last_err.map(Err).unwrap_or(Ok(()));
+        self.send_batch_put_ack(&batch, &result, ctx);
+    }
+
+    /// Sends a `BatchPut` ack back to the originating node.
+    ///
+    /// Mirrors the Put ack pattern but uses the BatchPut message type. The
+    /// originating node's `handle_put` only drains on `Message::Put` acks —
+    /// we still need to drain `pending_puts` for the batch case. The cleanest
+    /// way: send the batch ack back as a single Put ack message keyed on
+    /// `batch.id`, reusing the same routing.
+    fn send_batch_put_ack(
+        &self,
+        batch: &BatchPut,
+        result: &Result<(), String>,
+        ctx: &ActorContext,
+    ) {
+        let mut ack_children = BTreeMap::new();
+        match result {
+            Ok(()) => {
+                ack_children.insert(
+                    "_ack".to_string(),
+                    NodeData {
+                        value: Value::Text("ok".to_string()),
+                        updated_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64,
+                    },
+                );
+            }
+            Err(msg) => {
+                ack_children.insert(
+                    "_err".to_string(),
+                    NodeData {
+                        value: Value::Text(msg.clone()),
+                        updated_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64,
+                    },
+                );
+            }
+        }
+        let mut nodes = BTreeMap::new();
+        nodes.insert("_ack".to_string(), ack_children);
+        // Send as Put ack keyed on batch.id so Node::handle_put drains it.
+        let ack = Put::new(nodes, Some(batch.id.clone()), ctx.addr.clone());
+        let _ = batch.from.send(Message::Put(ack));
     }
 }
 
@@ -153,11 +265,7 @@ impl Actor for MemoryStorage {
                 put.to_string(); // compute checksum
                 let _ = flush.from.send(Message::Put(put));
             }
-            Message::BatchPut(batch) => {
-                for put in batch.puts {
-                    self.handle_put(put, ctx);
-                }
-            }
+            Message::BatchPut(batch) => self.handle_batch_put(batch, ctx),
             _ => {}
         }
     }

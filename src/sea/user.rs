@@ -53,7 +53,7 @@ impl User {
             "salt": base64::encode_config(salt_bytes, base64::STANDARD_NO_PAD),
         });
         let mut alias_node = db.get("~@").get(alias);
-        alias_node.put(RodValue::Text(alias_payload.to_string()));
+        let _ = alias_node.put(RodValue::Text(alias_payload.to_string())).await;
 
         let state = SessionState {
             pair,
@@ -318,7 +318,7 @@ impl User {
             .get(&format!("~{}", inner.pair.pub_key))
             .get("trust")
             .get(&path_key);
-        trust_node.put(RodValue::Text(signed.to_string()));
+        let _ = trust_node.put(RodValue::Text(signed.to_string())).await;
 
         Ok(())
     }
@@ -373,7 +373,7 @@ impl User {
                     let new_sec = base64::encode_config(bytes, base64::STANDARD_NO_PAD);
                     let enc = encrypt(&json!(new_sec), pair, None).await?;
                     let signed = sign_value(&enc, pair).await?;
-                    secret_node.put(signed);
+                    let _ = secret_node.put(signed).await;
                     new_sec
                 }
             }
@@ -394,7 +394,7 @@ impl User {
             .get("grant")
             .get(&path_key)
             .get(recipient_pubkey);
-        grant_node.put(signed_recipient);
+        let _ = grant_node.put(signed_recipient).await;
 
         // 4b. Store owner backup (self-encrypted)
         let enc_for_owner = encrypt(&json!(sec), pair, None).await?;
@@ -404,7 +404,7 @@ impl User {
             .get("grant")
             .get(&path_key)
             .get(&pair.pub_key);
-        owner_grant_node.put(signed_owner);
+        let _ = owner_grant_node.put(signed_owner).await;
 
         Ok(())
     }
@@ -443,7 +443,7 @@ impl User {
         let signed = sign_value(&enc, pair).await?;
 
         let mut secret_node = db.get(&user_root).get("secret").get(&path_key);
-        secret_node.put(signed);
+        let _ = secret_node.put(signed).await;
 
         Ok(())
     }

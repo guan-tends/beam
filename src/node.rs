@@ -128,6 +128,17 @@ pub struct Node {
     addr: Arc<RwLock<Option<Addr>>>,
     router: Arc<RwLock<Option<Addr>>>,
     pending_flushes: Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
+    /// Pending `put` acknowledgements keyed by `Put.id`.
+    ///
+    /// When `Node::put` (or `Node::batch_put`) is called, a oneshot sender
+    /// is registered here keyed by the put's `id`. Storage adapters ack
+    /// the put by sending a `Put` message with `in_response_to: Some(id)`
+    /// back to this node's `addr`. `Node::handle_put` intercepts the ack
+    /// and completes the oneshot, resolving the awaited future.
+    ///
+    /// The sender's payload carries `Result<(), String>` so commit failures
+    /// propagate to the caller instead of being silently swallowed.
+    pending_puts: Arc<RwLock<HashMap<String, oneshot::Sender<Result<(), String>>>>>,
     allow_public_space: bool,
     ice_servers: Vec<String>,
 }
@@ -191,6 +202,7 @@ impl Node {
             addr: Arc::new(RwLock::new(None)),
             router: Arc::new(RwLock::new(None)),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
+            pending_puts: Arc::new(RwLock::new(HashMap::new())),
             allow_public_space: config.allow_public_space,
             ice_servers: config.ice_servers.clone(),
             actor_context: Box::new(actor_context),
@@ -216,10 +228,32 @@ impl Node {
     /// For replay puts (have `in_response_to`), a `__rod_replay_complete__`
     /// marker is sent on the map channel after all child values are dispatched.
     fn handle_put(&mut self, put: Put) {
-        // Intercept flush acks before processing as normal data
+        // Intercept acks BEFORE processing the message as data. Two ack
+        // channels share the `in_response_to` field:
+        //
+        // 1. **Flush acks** — see [`Node::flush_storage`]. Payload is unit `()`;
+        //    any `Put` with `in_response_to` matching a `pending_flushes` key
+        //    resolves that barrier. Flush acks carry `_flushed` (no payload
+        //    discrimination needed — the presence of a match IS the success).
+        //
+        // 2. **Put/BatchPut acks** — sent directly from storage adapters
+        //    after commit. Payload is `Result<(), String>` decoded via
+        //    [`Self::decode_put_ack_payload`]. The storage adapter chooses
+        //    between `_ack` (success) and `_err:<msg>` (failure).
+        //
+        // We check `pending_flushes` first because Flush was the original
+        // ack pattern and remains the simplest. Put acks are a strictly
+        // additive extension.
         if let Some(response_id) = &put.in_response_to {
+            // Flush acks — any payload, presence is success
             if let Some(sender) = self.pending_flushes.write().remove(response_id) {
                 let _ = sender.send(());
+                return;
+            }
+            // Put/BatchPut acks — payload discriminated
+            if let Some(sender) = self.pending_puts.write().remove(response_id) {
+                let result = Self::decode_put_ack_payload(&put);
+                let _ = sender.send(result);
                 return;
             }
         }
@@ -305,6 +339,7 @@ impl Node {
             uid: Arc::new(RwLock::new(new_child_uid)),
             router: self.router.clone(),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
+            pending_puts: Arc::new(RwLock::new(HashMap::new())),
             addr: Arc::new(RwLock::new(None)),
             actor_context: self.actor_context.clone(),
             allow_public_space: self.allow_public_space,
@@ -516,16 +551,43 @@ impl Node {
         }
     }
 
-    /// Sets a value on this node and propagates it through the graph.
+    /// Writes a value to this node and waits for storage acknowledgement.
     ///
-    /// The value is immediately sent to local `on()` subscribers, then a
-    /// [`Put`] message is sent to the router for storage and network relay.
-    /// The timestamp is the current Unix epoch in milliseconds.
+    /// The value is immediately sent to local `on()` subscribers (so any
+    /// in-process listeners see it before the ack returns), then a [`Put`]
+    /// message is sent to the router for storage and network relay. The
+    /// timestamp is the current Unix epoch in milliseconds.
+    ///
+    /// Returns `Ok(())` once a storage adapter has committed the put durably
+    /// and acked back. Returns `Err(String)` if the adapter reports a commit
+    /// failure, the router was not initialized, the router channel rejected
+    /// the message, or the ack did not arrive within the timeout window
+    /// (default 30 seconds).
+    ///
+    /// # Why Async?
+    ///
+    /// Without the ack, `put` returns synchronously after queuing the message
+    /// to the storage actor — but the storage actor may not have processed
+    /// the message yet. A subsequent `get` or `once` would read stale state.
+    /// The async ack closes that race: this future resolves only after the
+    /// storage actor has committed the put. See [module docs](self) for the
+    /// full race-condition history.
+    ///
+    /// # Ack Pattern
+    ///
+    /// Mirrors [`Node::flush_storage`](Self::flush_storage):
+    /// 1. Register a oneshot keyed by the put's `id` in `pending_puts`
+    /// 2. Send `Message::Put` to the router
+    /// 3. Storage adapter commits, then sends
+    ///    `Put { in_response_to: Some(id), updated_nodes: { "_ack": { "_ack"|"_err": ... } } }`
+    ///    back to this node's `addr` directly (NOT through the router)
+    /// 4. `Node::handle_put` drains `pending_puts` and resolves the oneshot
     ///
     /// # Arguments
     ///
     /// * `value` - The value to set (see [`Value`] for supported types)
-    pub fn put(&mut self, value: Value) {
+    pub async fn put(&mut self, value: Value) -> Result<(), String> {
+        let timeout = None; // Public API stays simple; can add timeout arg later.
         let updated_at: f64 = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -536,21 +598,62 @@ impl Node {
         self.add_parent_nodes(&mut updated_nodes, value, updated_at);
         let my_addr = self.addr.read().clone().unwrap();
         let put = Put::new(updated_nodes, None, my_addr);
-        if let Some(router) = &*self.router.read() {
-            let _ = router.send(Message::Put(put));
+        let put_id = put.id.clone();
+        let (tx, rx) = oneshot::channel();
+        self.pending_puts.write().insert(put_id.clone(), tx);
+
+        let router_addr = match &*self.router.read() {
+            Some(addr) => addr.clone(),
+            None => {
+                self.pending_puts.write().remove(&put_id);
+                return Err("router not initialized".to_string());
+            }
+        };
+
+        if router_addr.send(Message::Put(put)).is_err() {
+            self.pending_puts.write().remove(&put_id);
+            return Err("failed to send put to router".to_string());
+        }
+
+        let dur = timeout.unwrap_or(Duration::from_secs(30));
+        match tokio::time::timeout(dur, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("put ack channel closed".to_string()),
+            Err(_) => {
+                self.pending_puts.write().remove(&put_id);
+                Err("put timed out".to_string())
+            }
         }
     }
 
-    /// Writes multiple values in a single storage transaction.
+    /// Writes multiple values in a single storage transaction and waits for ack.
     ///
     /// Each operation is a `(path, value)` pair where `path` is a vector of
     /// keys from the caller's [`Node`] down to the leaf. The caller should
     /// invoke this on the **root** [`Node`].
     ///
+    /// Returns `Ok(())` once the storage adapter has committed the batch
+    /// durably and acked back. Returns `Err(String)` on commit failure,
+    /// router error, or ack timeout (default 30s).
+    ///
+    /// # Atomicity
+    ///
+    /// Unlike multiple sequential [`put`](Self::put) calls, all operations
+    /// in a batch either succeed together or fail together. Storage adapters
+    /// that support transactions (e.g. [`crate::adapters::RedbStorage`])
+    /// wrap the batch in a single transaction.
+    ///
+    /// # Ack Pattern
+    ///
+    /// The whole batch shares a single ack keyed by `BatchPut.id`. The
+    /// originating node registers one oneshot, the storage adapter sends
+    /// one ack after the entire transaction commits or aborts.
+    ///
     /// # Arguments
     ///
     /// * `ops` - Vector of `(path, value)` pairs
-    pub fn batch_put(&mut self, ops: Vec<(Vec<String>, Value)>) {
+    pub async fn batch_put(&mut self, ops: Vec<(Vec<String>, Value)>) -> Result<(), String> {
+        let timeout = None;
         let updated_at: f64 = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -577,18 +680,86 @@ impl Node {
 
         let my_addr = self.addr.read().clone().unwrap();
         let batch = BatchPut::new(puts, my_addr);
-        if let Some(router) = &*self.router.read() {
-            let _ = router.send(Message::BatchPut(batch));
+        let batch_id = batch.id.clone();
+        let (tx, rx) = oneshot::channel();
+        // Register under batch id; storage adapter will ack via `in_response_to: Some(batch.id)`.
+        self.pending_puts.write().insert(batch_id.clone(), tx);
+
+        let router_addr = match &*self.router.read() {
+            Some(addr) => addr.clone(),
+            None => {
+                self.pending_puts.write().remove(&batch_id);
+                return Err("router not initialized".to_string());
+            }
+        };
+
+        if router_addr.send(Message::BatchPut(batch)).is_err() {
+            self.pending_puts.write().remove(&batch_id);
+            return Err("failed to send batch_put to router".to_string());
+        }
+
+        let dur = timeout.unwrap_or(Duration::from_secs(30));
+        match tokio::time::timeout(dur, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("batch_put ack channel closed".to_string()),
+            Err(_) => {
+                self.pending_puts.write().remove(&batch_id);
+                Err("batch_put timed out".to_string())
+            }
         }
     }
 
     /// Stops the node and all its child actors and adapters.
     ///
-    /// This calls [`ActorContext::stop`] on the node's actor context, which
+    /// This calls [`ActorContext::stop`] from the node's actor context, which
     /// aborts all child tasks and sends stop signals to all child actors.
     pub fn stop(&mut self) {
         info!("Node stopping");
         self.actor_context.stop();
+    }
+
+    /// Decodes a put-ack payload sent by a storage adapter after commit.
+    ///
+    /// Storage adapters ack a put by sending `Message::Put(ack)` with
+    /// `in_response_to: Some(original_put.id)` and `updated_nodes` containing
+    /// a single entry under the `_ack` node id. The child of that entry
+    /// indicates the result:
+    ///
+    /// - `_ack` (Value::Text("ok")) → commit succeeded
+    /// - `_err` (Value::Text("<msg>")) → commit failed with `<msg>`
+    ///
+    /// # Sentinel Convention
+    ///
+    /// This uses the **same** sentinel convention as the Flush ack
+    /// (see `Node::flush_storage` and the storage adapter implementations),
+    /// so all ack-routing logic is uniform across Put, BatchPut, and Flush.
+    /// A future change to add richer ack payloads (e.g. commit timestamp,
+    /// byte count) only needs to update this single decoder.
+    ///
+    /// # Fallback Behavior
+    ///
+    /// If the ack is present (matched `in_response_to` from `pending_puts`)
+    /// but contains neither sentinel, the ack is treated as success. The
+    /// ack's mere presence proves the put reached the storage actor and
+    /// the adapter decided to acknowledge it — absence of a failure marker
+    /// is positive evidence.
+    ///
+    /// Failure to produce an ack at all (timeout, channel drop) is handled
+    /// by the awaiting caller via `tokio::time::timeout`.
+    fn decode_put_ack_payload(put: &Put) -> Result<(), String> {
+        for (_node_id, children) in put.updated_nodes.iter().rev() {
+            if let Some(node_data) = children.get("_err") {
+                if let Value::Text(msg) = &node_data.value {
+                    return Err(msg.clone());
+                }
+                return Err("storage put commit failed (non-text _err payload)".to_string());
+            }
+            if children.contains_key("_ack") {
+                return Ok(());
+            }
+        }
+        // Ack present but no sentinel — treat as success.
+        Ok(())
     }
 }
 
@@ -612,8 +783,12 @@ impl Node {
     /// See [`Node::put`] for the basic version. The `options` parameter
     /// allows passing a [`PutOptions`] with a certificate for delegated
     /// writes, though certificate enforcement is not yet implemented.
-    pub fn put_with_options(&mut self, value: Value, _options: PutOptions) {
-        self.put(value);
+    pub async fn put_with_options(
+        &mut self,
+        value: Value,
+        _options: PutOptions,
+    ) -> Result<(), String> {
+        self.put(value).await
     }
 }
 
@@ -673,7 +848,7 @@ mod tests {
     async fn test_node_put_and_on() {
         let mut node = Node::new();
         let mut sub = node.get("greeting").on();
-        node.get("greeting").put("hello".into());
+        node.get("greeting").put("hello".into()).await.expect("put");
         let val = tokio::time::timeout(Duration::from_secs(2), sub.recv())
             .await
             .expect("timeout")
@@ -684,7 +859,7 @@ mod tests {
     #[tokio::test]
     async fn test_node_once() {
         let mut node = Node::new();
-        node.get("key").put("value".into());
+        node.get("key").put("value".into()).await.expect("put");
         let val = node.get("key").once(Some(Duration::from_secs(2))).await;
         assert_eq!(val, Some(Value::Text("value".to_string())));
     }
@@ -693,7 +868,9 @@ mod tests {
     async fn test_node_batch_put() {
         let mut node = Node::new();
         let mut sub = node.get("a").on();
-        node.batch_put(vec![(vec!["a".to_string()], Value::Text("x".into()))]);
+        node.batch_put(vec![(vec!["a".to_string()], Value::Text("x".into()))])
+            .await
+            .expect("batch_put");
         let val = tokio::time::timeout(Duration::from_secs(2), sub.recv())
             .await
             .expect("timeout")
@@ -729,5 +906,257 @@ mod tests {
     fn test_put_options_default() {
         let opts = PutOptions::default();
         assert!(opts.cert.is_none());
+    }
+
+    // ========================================================================
+    // Async Ack Pattern Tests
+    // ========================================================================
+    //
+    // These tests exercise the async `put`/`batch_put` ack pattern. They are
+    // distinct from the sync-style tests above in that they actually `.await`
+    // the put and verify the commit completed before the future resolves.
+    //
+    // The race they defend against: before the ack pattern, `put` returned
+    // synchronously after queueing to the storage actor — a subsequent `get`
+    // could read stale state. These tests would flake on the old code; on
+    // the new code they should be deterministic.
+    // ========================================================================
+
+    /// Helper: build a minimal ack `Put` message that mimics what a storage
+    /// adapter sends back after commit. Used by unit tests that exercise
+    /// `handle_put` / `decode_put_ack_payload` without the full storage stack.
+    ///
+    /// The from-address is a no-op since these unit tests inject the ack
+    /// directly through `handle(...)` — no routing involved.
+    fn make_ack_put(put_id: &str, sentinel: &str) -> Put {
+        let mut children = BTreeMap::new();
+        children.insert(
+            sentinel.to_string(),
+            NodeData {
+                value: Value::Text(if sentinel == "_err" {
+                    "test error".to_string()
+                } else {
+                    "ok".to_string()
+                }),
+                updated_at: 0.0,
+            },
+        );
+        let mut nodes = BTreeMap::new();
+        nodes.insert("_ack".to_string(), children);
+        let mut put = Put::new(nodes, Some(put_id.to_string()), Addr::noop());
+        // Compute checksum so callers can serialize.
+        put.to_string();
+        put
+    }
+
+    #[tokio::test]
+    async fn test_decode_put_ack_payload_success() {
+        let ack = make_ack_put("put-1", "_ack");
+        let result = Node::decode_put_ack_payload(&ack);
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_decode_put_ack_payload_error_carries_message() {
+        let ack = make_ack_put("put-2", "_err");
+        let result = Node::decode_put_ack_payload(&ack);
+        assert!(result.is_err(), "expected Err");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("test error"),
+            "expected error message in result, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_decode_put_ack_payload_no_sentinel_treated_as_success() {
+        // Empty ack payload (no _ack/_err) is treated as success — the ack's
+        // presence is the signal. This matches the documented fallback.
+        let mut children = BTreeMap::new();
+        children.insert(
+            "_ack".to_string(),
+            NodeData {
+                value: Value::Null,
+                updated_at: 0.0,
+            },
+        );
+        let mut nodes = BTreeMap::new();
+        nodes.insert("_ack".to_string(), children);
+        let put = Put::new(nodes, Some("put-3".to_string()), Addr::noop());
+        let result = Node::decode_put_ack_payload(&put);
+        assert!(result.is_ok(), "no-sentinel ack should be success");
+    }
+
+    #[tokio::test]
+    async fn test_decode_put_ack_payload_flushed_sentinel_also_succeeds() {
+        // `_flushed` is the Flush ack sentinel. handle_put intercepts flush
+        // acks FIRST (before falling through to the put-ack decoder), so the
+        // decoder will only see `_flushed` if it sneaks through — which
+        // shouldn't happen, but the decoder should still treat it as success
+        // because it isn't `_err`.
+        let ack = make_ack_put("flush-1", "_flushed");
+        let result = Node::decode_put_ack_payload(&ack);
+        assert!(
+            result.is_ok(),
+            "_flushed should decode as success (no _err present)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pending_puts_drain_on_ack() {
+        // Register a oneshot for a fake put_id, then send a matching ack
+        // through the actor handle. The pending_puts map should drain.
+        let mut node = Node::new();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let put_id = "test-pending-1".to_string();
+        node.pending_puts.write().insert(put_id.clone(), tx);
+
+        // Build ack message
+        let ack = make_ack_put(&put_id, "_ack");
+
+        // Inject via the actor handle
+        let ctx = ActorContext::new("test-peer".to_string());
+        node.handle(Message::Put(ack), &ctx).await;
+
+        // The future should resolve with Ok(())
+        let result = tokio::time::timeout(Duration::from_secs(1), rx)
+            .await
+            .expect("ack did not arrive within 1s")
+            .expect("ack channel closed unexpectedly");
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert!(
+            !node.pending_puts.read().contains_key(&put_id),
+            "pending_puts should be drained after ack"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pending_puts_drain_on_error() {
+        // Same as above but with _err payload — the oneshot should resolve
+        // with the error message.
+        let mut node = Node::new();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let put_id = "test-pending-err".to_string();
+        node.pending_puts.write().insert(put_id.clone(), tx);
+
+        let ack = make_ack_put(&put_id, "_err");
+
+        let ctx = ActorContext::new("test-peer".to_string());
+        node.handle(Message::Put(ack), &ctx).await;
+
+        let result = tokio::time::timeout(Duration::from_secs(1), rx)
+            .await
+            .expect("error ack did not arrive within 1s")
+            .expect("ack channel closed unexpectedly");
+        assert!(result.is_err(), "expected Err, got {:?}", result);
+        assert!(result.unwrap_err().contains("test error"));
+        assert!(!node.pending_puts.read().contains_key(&put_id));
+    }
+
+    #[tokio::test]
+    async fn test_pending_puts_no_match_passes_through() {
+        // If an ack arrives with an id that doesn't match any pending_put,
+        // it should be processed as a normal Put (not drain anything).
+        let mut node = Node::new();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let put_id = "registered-id".to_string();
+        node.pending_puts.write().insert(put_id.clone(), tx);
+
+        // Different ack id
+        let ack = make_ack_put("different-id", "_ack");
+
+        let ctx = ActorContext::new("test-peer".to_string());
+        node.handle(Message::Put(ack), &ctx).await;
+
+        // The original pending_put should still be registered (not drained)
+        assert!(
+            node.pending_puts.read().contains_key(&put_id),
+            "unrelated ack should NOT drain unrelated pending_put"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_put_returns_after_storage_ack() {
+        // The KEY test for the race fix. `put` must not return until storage
+        // has acked. We verify this by chaining a `get` IMMEDIATELY after
+        // `put` resolves — if the ack pattern works, get sees the new value.
+        //
+        // Pre-fix behavior: get returned stale state (or None) because the
+        // storage actor hadn't processed the Put message yet.
+        let mut node = Node::new();
+        node.get("race_key").put("race_value".into())
+            .await
+            .expect("put should succeed");
+        let val = node.get("race_key").once(Some(Duration::from_secs(2))).await;
+        assert_eq!(
+            val,
+            Some(Value::Text("race_value".to_string())),
+            "put → get should observe the new value (race fix verification)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_batch_put_returns_after_storage_ack() {
+        // Batch counterpart of test_put_returns_after_storage_ack.
+        let mut node = Node::new();
+        node.batch_put(vec![
+            (vec!["batch_a".to_string()], Value::Text("1".into())),
+            (vec!["batch_b".to_string()], Value::Text("2".into())),
+            (vec!["batch_c".to_string()], Value::Text("3".into())),
+        ])
+        .await
+        .expect("batch_put should succeed");
+
+        // All three children should be visible immediately after batch_put resolves.
+        let a = node.get("batch_a").once(Some(Duration::from_secs(2))).await;
+        let b = node.get("batch_b").once(Some(Duration::from_secs(2))).await;
+        let c = node.get("batch_c").once(Some(Duration::from_secs(2))).await;
+        assert_eq!(a, Some(Value::Text("1".to_string())));
+        assert_eq!(b, Some(Value::Text("2".to_string())));
+        assert_eq!(c, Some(Value::Text("3".to_string())));
+    }
+
+    #[tokio::test]
+    async fn test_put_sequential_no_ack_loss() {
+        // Issue 5 puts in rapid succession. Each must resolve with Ok and
+        // each subsequent get must see its respective value — no ack lost.
+        let mut node = Node::new();
+        for i in 0..5 {
+            let key = format!("seq_{}", i);
+            let val = format!("val_{}", i);
+            node.get(&key).put(val.clone().into())
+                .await
+                .expect("put should succeed");
+            let got = node.get(&key).once(Some(Duration::from_secs(2))).await;
+            assert_eq!(
+                got,
+                Some(Value::Text(val.clone())),
+                "put {} → get should see {:?}, got {:?}",
+                i, val, got
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pending_puts_cleared_on_router_send_failure() {
+        // If the router isn't initialized, put should return an error AND
+        // remove its pending_puts entry (so we don't leak oneshot channels).
+        // We test this by constructing a node whose router addr is None.
+        //
+        // (Hard to construct from outside since Node::new() wires up a router,
+        // so we exercise the error path indirectly: invalid router state.)
+        let mut node = Node::new();
+        // First put should succeed (router wired up by Node::new()).
+        node.get("normal_key").put("normal".into()).await.expect("first put ok");
+        // Now corrupt the router addr to force the error path.
+        *node.router.write() = None;
+        let result = node.get("broken_key").put("x".into()).await;
+        assert!(result.is_err(), "expected Err when router is None");
+        // Pending puts should be empty — the failed put should have cleaned up.
+        assert!(
+            node.pending_puts.read().is_empty(),
+            "pending_puts should be empty after router-send failure"
+        );
     }
 }

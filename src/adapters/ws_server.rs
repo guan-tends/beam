@@ -155,7 +155,7 @@ impl WsServer {
 
     /// Periodically reports WebSocket connection count to the stats graph.
     async fn update_stats(ctx: ActorContext, mut stats: Node) {
-        stats.put("a".into());
+        let _ = stats.put("a".into()).await;
         let mut conns: usize = 0;
         loop {
             sleep(Duration::from_millis(1000)).await;
@@ -164,7 +164,7 @@ impl WsServer {
                 continue;
             }
             conns = conns_new;
-            stats.get("ws_server_connections").put(conns.into());
+            let _ = stats.get("ws_server_connections").put(conns.into()).await;
         }
     }
 }
