@@ -143,6 +143,10 @@ pub struct BatchPut {
     pub id: String,
     pub puts: Vec<Put>,
     pub from: Addr,
+    /// If set, this BatchPut is a reply to a previous ack request — storage
+    /// sends it back to the originating node with the original BatchPut.id
+    /// in this field, mirroring Put::in_response_to for the single-put case.
+    pub in_response_to: Option<String>,
 }
 
 impl BatchPut {
@@ -151,6 +155,7 @@ impl BatchPut {
             id: random_string(8),
             puts,
             from,
+            in_response_to: None,
         }
     }
 
