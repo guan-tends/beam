@@ -37,6 +37,7 @@ use crate::ack::{AckPolicy, ReplicationStatus, QUORUM_MET_SENTINEL};
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::MemoryStorage;
 use crate::message::{BatchPut, Flush, Get, Message, Put};
+use crate::metrics::Metrics;
 use crate::router::Router;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
@@ -142,6 +143,13 @@ pub struct Node {
     pending_puts: Arc<RwLock<HashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>>,
     allow_public_space: bool,
     ice_servers: Vec<String>,
+    /// Shared lock-free observability counters.
+    ///
+    /// Cloned via `Arc` to the [`Router`] at construction time so the
+    /// Router's internal `try_send_or_log` calls and any external
+    /// observer (e.g. e2e tests, telemetry exporter) share the same
+    /// underlying atomic counters. See [`crate::metrics::Metrics`].
+    metrics: Arc<Metrics>,
 }
 
 #[async_trait]
@@ -213,6 +221,11 @@ impl Node {
         storage_adapters: Vec<Box<dyn Actor>>,
         network_adapters: Vec<Box<dyn Actor>>,
     ) -> Self {
+        // Shared observability handle — cloned to Router so both observe
+        // the same atomic counters. External observers reach this via
+        // `Node::metrics()`.
+        let metrics = Arc::new(Metrics::new());
+
         let actor_context = ActorContext::new(random_string(16));
         let mut node = Self {
             path: vec![],
@@ -229,18 +242,37 @@ impl Node {
             allow_public_space: config.allow_public_space,
             ice_servers: config.ice_servers.clone(),
             actor_context: Box::new(actor_context),
+            metrics: metrics.clone(),
         };
 
         node.actor_context.node = Some(node.clone());
         let addr = node.actor_context.start_actor(Box::new(node.clone()));
         *node.addr.write() = Some(addr);
 
-        let router = Box::new(Router::new(config, storage_adapters, network_adapters));
+        let router = Box::new(Router::new(
+            config,
+            storage_adapters,
+            network_adapters,
+            metrics,
+        ));
         let router_addr = node.actor_context.start_router(router);
         node.actor_context.router = router_addr.clone();
         *node.router.write() = Some(router_addr);
 
         node
+    }
+
+    /// Returns a clone of the shared `Arc<Metrics>` handle.
+    ///
+    /// The returned Arc points to the same atomic counters as the
+    /// Router's internal field. External observers (tests, telemetry
+    /// exporters) read counters via [`crate::metrics::Metrics::snapshot`]
+    /// or record events via [`crate::metrics::Metrics::record_dropped_send`].
+    ///
+    /// Cloning the Arc is cheap (refcount bump); the atomic counters
+    /// are shared across all clones.
+    pub fn metrics(&self) -> Arc<Metrics> {
+        self.metrics.clone()
     }
 
     /// Handles incoming [`Put`] messages by dispatching values to subscribers.
@@ -379,6 +411,9 @@ impl Node {
             actor_context: self.actor_context.clone(),
             allow_public_space: self.allow_public_space,
             ice_servers: self.ice_servers.clone(),
+            // Children share the parent's metrics Arc so all nodes in a
+            // tree aggregate drops into the same counters.
+            metrics: self.metrics.clone(),
         };
         let addr = self.actor_context.start_actor(Box::new(node.clone()));
         *node.addr.write() = Some(addr);

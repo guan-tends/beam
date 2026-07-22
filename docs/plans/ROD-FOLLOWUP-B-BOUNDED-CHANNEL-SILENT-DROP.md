@@ -1020,3 +1020,267 @@ The five-runs discipline catches flakes. The idempotent design means tests don't
 
 **Plan status**: LOCKED. Awaiting "begin" signal from Freeman.
 
+---
+
+# ⚠️ SUBSTRATE REVISION — 2026-07-22 (post-recon)
+
+**Author**: Guan (substrate recon during Follow-up A wrap-up)
+**Severity**: MAJOR — the original plan solves a problem that does not exist in this codebase.
+
+## What Substrate Recon Discovered
+
+The original plan assumed:
+1. There are 13 silent-send sites that need fixing
+2. Rod's `Addr::send` is unbounded and needs bounded wrapping
+3. We need a new `BoundedChannel` abstraction layer
+
+**All three assumptions are wrong.**
+
+### Finding 1: There are 3 silent-send sites, not 13
+
+A grep of `let _ = .send()` across `src/router.rs` produces 14 hits, but only 3 are the silent-drop pattern this plan targets. The other 11 are legitimate fire-and-forget by design:
+
+| Site count | Pattern | Why legitimate |
+|------------|---------|----------------|
+| ~7 | Loop iterations sending to many peers (`for addr in self.server_peers.iter() { let _ = addr.send(...) }`) | Peer fanout is best-effort. Blocking on one slow peer would stall the whole fanout. |
+| ~2 | Reaper/self-messages (`let _ = ctx_addr.send(Message::CheckQuorumTimeouts)`) | Sending to self; can never be closed. |
+| ~2 | Quorum ack replies (`let _ = entry.requester.send(...)`) | Best-effort notification. Requester's drain plumbing handles timeouts. |
+
+**The 3 sites that need fixing** are the ones outside loops/reapers where the silent drop actually loses a critical message. These are the sites where `Addr::send` is called once for a specific destination and `let _ =` drops the `Err(())` signal.
+
+### Finding 2: `Addr::send` IS already bounded
+
+Verified from `src/actor.rs:408`:
+
+```rust
+pub fn send(&self, msg: Message) -> Result<(), ()> {
+    match &self.sender {
+        AddrSender::Unbounded(s) => s.send(msg).map_err(|_| ()),
+        AddrSender::Bounded(s) => s.try_send(msg).map_err(|_| ()),
+    }
+}
+```
+
+`Addr` is an enum over either unbounded OR bounded `tokio::sync::mpsc` senders. The bounded variant uses `try_send` which returns `Err(())` on full channel. **The signal already exists** — the codebase just throws it away with `let _ =`.
+
+**There is no need to introduce a new `BoundedChannel` wrapper.** The signal is `Result<(), ()>` from `Addr::send`. The fix is observability on this existing signal.
+
+### Finding 3: New abstraction layer violates suckless philosophy
+
+Per `suckless_philosophy_for_guan`: "Before wrapping, ask: does this already work through an existing channel?" Yes — `Addr::send()` returns the signal we need. We just need to listen.
+
+A `BoundedChannel` wrapper would:
+- Duplicate the bounded-channel logic that `Addr` already has
+- Add a new public type to maintain
+- Hide what's actually happening (signal lost in wrapper layer)
+- Violate Composition-Root IoC (the wrapper would need to be threaded through every actor)
+
+## Revised Plan (DRY / Suckless / Idiomatic Rust)
+
+### Architecture Decision: Observability on existing pattern, not new infrastructure
+
+**Replace**:
+```rust
+let _ = addr.send(msg);  // Silent drop. No metric. No signal.
+```
+
+**With**:
+```rust
+if addr.send(msg).is_err() {
+    metrics.record_dropped_send();
+    tracing::debug!(target: "rod::send", ctx = ?ctx, "actor mailbox full, dropped message");
+}
+```
+
+Or as a helper in `src/utils.rs`:
+```rust
+/// Send a message and record the drop if the receiver is unavailable.
+///
+/// This is the canonical pattern for fire-and-forget sends in Rod.
+/// Unlike `let _ = addr.send(msg)`, this surfaces drops via metrics
+/// and tracing, making backpressure visible without changing the
+/// fire-and-forget semantics.
+pub(crate) fn try_send_or_log(
+    addr: &Addr,
+    msg: Message,
+    metrics: &Metrics,
+    ctx: &'static str,
+) {
+    if addr.send(msg).is_err() {
+        metrics.dropped_sends.fetch_add(1, Ordering::Relaxed);
+        tracing::debug!(
+            target: "rod::send",
+            ctx = ctx,
+            "actor mailbox unavailable, dropped message"
+        );
+    }
+}
+```
+
+### Revised Implementation — 4 Phases, ~350L net code
+
+#### Phase 1: Metrics substrate (~60L + 4 tests, 1 commit)
+
+**File**: `src/metrics.rs` (NEW)
+
+```rust
+//! Lock-free metrics for Rod actor send/fanout observability.
+//!
+//! Counters use `AtomicU64` with `Relaxed` ordering — they are advisory
+//! observation, not synchronization primitives. Snapshot reads may be
+//! slightly stale but are guaranteed monotonic.
+//!
+//! All counters are cumulative for the lifetime of the `Metrics` instance.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Lock-free counters for Rod actor sends and drops.
+///
+/// Cheap to clone via `Arc<Metrics>`. Designed to be passed via
+/// `ActorContext` (Composition-Root IoC) so any actor can record
+/// metrics without coupling to a global registry.
+#[derive(Debug, Default)]
+pub struct Metrics {
+    /// Times a `let _ = addr.send(msg)` would have silently dropped
+    /// (mailbox closed or full). This is the primary "silent drop is
+    /// no longer invisible" counter.
+    dropped_sends: AtomicU64,
+    /// Times a quorum entry was reaped due to timeout.
+    reaped_quorums: AtomicU64,
+    /// Put acks received by Node from any source.
+    put_acks_seen: AtomicU64,
+    /// Put acks that completed a quorum (triggered `__quorum_met__`).
+    put_acks_quorum: AtomicU64,
+}
+
+/// Plain-old-data snapshot of `Metrics` for safe export across threads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetricsSnapshot {
+    pub dropped_sends: u64,
+    pub reaped_quorums: u64,
+    pub put_acks_seen: u64,
+    pub put_acks_quorum: u64,
+}
+
+impl Metrics {
+    pub fn new() -> Self { Self::default() }
+
+    pub fn record_dropped_send(&self) {
+        self.dropped_sends.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_reaped_quorum(&self) {
+        self.reaped_quorums.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_put_ack(&self) {
+        self.put_acks_seen.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_quorum_ack(&self) {
+        self.put_acks_quorum.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Read all counters as a plain struct.
+    ///
+    /// Snapshot is non-atomic across counters — values may be slightly
+    /// inconsistent (one counter advanced, another not yet). This is
+    /// acceptable for telemetry; don't use for control flow.
+    pub fn snapshot(&self) -> MetricsSnapshot {
+        MetricsSnapshot {
+            dropped_sends: self.dropped_sends.load(Ordering::Relaxed),
+            reaped_quorums: self.reaped_quorums.load(Ordering::Relaxed),
+            put_acks_seen: self.put_acks_seen.load(Ordering::Relaxed),
+            put_acks_quorum: self.put_acks_quorum.load(Ordering::Relaxed),
+        }
+    }
+}
+```
+
+**Tests** (in `metrics.rs::tests`):
+- `default_is_all_zero`
+- `snapshot_reflects_increments`
+- `snapshot_is_independent_of_subsequent_increments`
+- `counters_are_monotonic`
+
+#### Phase 2: `try_send_or_log` helper + refactor 3 sites (~40L + 3 tests, 1 commit)
+
+**File**: `src/utils.rs` (EXTEND) — add helper at the bottom.
+
+**Refactor target sites** (verified locations, exact lines pending on resume):
+- `src/router.rs` ~line 541 — `handle_get` to a specific `seen_get_message.from`
+- `src/router.rs` ~line 791 — flush forward to a specific write_adapter
+- `src/router.rs` ~line 853 — quorum ack reply to specific requester
+
+**Sites that STAY `let _ =` (legitimate)**:
+- All loop iterations over `server_peers`, `subscribers_by_topic` (peer fanout is best-effort by design)
+- All reaper self-messages
+- All `RtcSignal` broadcasts
+
+#### Phase 3: E2E test for graceful degradation (~150L + 1 test, 1 commit)
+
+**File**: `tests/send_metrics_e2e.rs` (NEW)
+
+Test that fills an actor mailbox, sends burst, asserts:
+- No panic
+- `dropped_sends` counter increments correctly
+- System continues to function for other actors
+
+#### Phase 4: ADR-012 + clean runs (~100L, 1 commit)
+
+**File**: `docs/adr/012-send-metrics-observability.md` (NEW)
+
+Capture:
+- Why we did NOT introduce `BoundedChannel` wrapper
+- Why we chose observability over error propagation
+- Trade-off: hidden backpressure → visible backpressure (no behavior change)
+- Future work: error propagation if observability proves insufficient
+
+### Comparison: Original vs Revised
+
+| Aspect | Original Plan | Revised Plan |
+|--------|---------------|--------------|
+| New types | `RouterError`, `RouterMetrics`, `RouterMetricsSnapshot`, `SharedMetrics`, `BoundedChannel` (5) | `Metrics`, `MetricsSnapshot` (2) |
+| Code added | ~700L | ~350L |
+| Behavior change | Returns `Result<(), RouterError>` to callers (BREAKING) | No behavior change — observability only |
+| Tests added | 24 | 8 |
+| Risk to mnemos-palace | High (signature changes) | None (internal change) |
+| Phases | 6 epics | 4 phases |
+
+### Verification Protocol (Revised)
+
+```bash
+cd /home/guan/src/rod
+
+# After each phase:
+cargo check -p rod && cargo test -p rod --lib
+
+# After all 4 phases (3 consecutive clean runs):
+for i in 1 2 3; do
+  echo "=== Run $i ==="
+  cargo test -p rod --lib 2>&1 | tail -3
+done
+```
+
+### Why This Revision Is Better
+
+1. **DRY**: No new abstraction layer. Reuses existing `Addr::send` signal.
+2. **Suckless**: No new dependencies. No new types beyond `Metrics`.
+3. **Unix philosophy**: `Metrics` does one thing well. `try_send_or_log` does one thing well.
+4. **Industry standard**: `tracing` + `AtomicU64` is canonical Rust observability.
+5. **No breaking changes**: Existing callers see no behavior change.
+6. **Composition-Root IoC**: `Metrics` passed via `ActorContext`, not global.
+
+### Open Questions (Resolved)
+
+1. ~~Fail-fast vs continue-fanout~~ — N/A. We're not returning errors, just observing.
+2. ~~Backpressure timeout~~ — N/A. We don't block. We observe the drop.
+3. ~~`RouterMetrics` vs `MetricsHandle` actor~~ — Resolved: `Arc<Metrics>` shared handle, not actor.
+4. ~~Best-effort sends `try_send` vs `send`~~ — Resolved: keep existing `Addr::send` (already non-blocking for bounded via `try_send` internally).
+
+---
+
+**Revision status**: LOCKED. The original plan above (Phases E1-E6) is **superseded** by this revision. The substrate recon revealed the plan was solving the wrong problem.
+
+**Built-in mirror**: `rod_followup_b_revised_plan_2026_07_22`
+

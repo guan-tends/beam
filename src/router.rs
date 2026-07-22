@@ -51,12 +51,13 @@ use crate::actor::{Actor, ActorContext, Addr};
 use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::types::{Children, NodeData, Value};
-use crate::utils::BoundedHashMap;
+use crate::utils::{try_send_or_log, BoundedHashMap};
 use async_trait::async_trait;
 use log::{debug, error, info};
 use rand::{seq::IteratorRandom, thread_rng};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -170,6 +171,14 @@ impl QuorumEntry {
 /// Get message tracking. Response dedup uses checksum comparison.
 pub struct Router {
     config: Config,
+    /// Lock-free observability counters for actor mailbox drops and other
+    /// async events of interest. See [`crate::metrics::Metrics`].
+    ///
+    /// Wrapped in `Arc<Metrics>` so the owning [`crate::node::Node`] can hold
+    /// the same handle and expose counters to external observers (tests,
+    /// diagnostics, telemetry exporters). Cloning the `Arc` shares the
+    /// underlying atomic counters — both handles observe the same events.
+    metrics: Arc<crate::metrics::Metrics>,
     known_peers: HashSet<Addr>,
     peer_addrs: HashMap<String, Addr>,
     /// Addresses of all storage adapter actors (both read and write).
@@ -350,13 +359,21 @@ impl Router {
     /// * `config` - Node configuration
     /// * `storage_adapter_actors` - Storage actors to be started
     /// * `network_adapter_actors` - Network actors to be started
+    /// Constructs a new Router with the provided configuration, adapters, and
+    /// shared `Arc<Metrics>` handle.
+    ///
+    /// The `metrics` Arc is shared with the owning Node so both observe the
+    /// same counters. The Router records drops internally; the Node exposes
+    /// the snapshot to external observers via `Node::metrics()`.
     pub fn new(
         config: Config,
         storage_adapter_actors: Vec<Box<dyn Actor>>,
         network_adapter_actors: Vec<Box<dyn Actor>>,
+        metrics: Arc<crate::metrics::Metrics>,
     ) -> Self {
         Self {
             config,
+            metrics,
             known_peers: HashSet::new(),
             peer_addrs: HashMap::new(),
             storage_adapters: HashSet::new(),
@@ -372,6 +389,19 @@ impl Router {
             msg_counter: AtomicUsize::new(0),
             quorum_entries: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
         }
+    }
+
+    /// Returns a clone of the shared `Arc<Metrics>` handle.
+    ///
+    /// The returned `Arc` points to the same atomic counters as the
+    /// Router's internal field and the owning Node's field. Recording
+    /// an event via the returned handle is visible from any other clone
+    /// (including `Node::metrics()`).
+    ///
+    /// Cloning the `Arc` is cheap (refcount bump); the atomic counters
+    /// are shared across all clones.
+    pub fn metrics(&self) -> Arc<crate::metrics::Metrics> {
+        self.metrics.clone()
     }
 
     /// Stats reporting placeholder.
@@ -548,7 +578,12 @@ impl Router {
                             "quorum met for {} ({} acks)",
                             in_response_to, count
                         );
-                        let _ = entry.requester.send(Message::Put(reply));
+                        try_send_or_log(
+                            &entry.requester,
+                            Message::Put(reply),
+                            &self.metrics,
+                            "router:quorum-met",
+                        );
                         // Drop the entry — quorum satisfied, drain complete.
                         self.quorum_entries.take(in_response_to);
                     }
@@ -563,7 +598,12 @@ impl Router {
                         return;
                     }
                     seen_get_message.last_reply_checksum = put.checksum;
-                    let _ = seen_get_message.from.send(Message::Put(put));
+                    try_send_or_log(
+                        &seen_get_message.from,
+                        Message::Put(put),
+                        &self.metrics,
+                        "router:get-reply",
+                    );
                 }
             }
             _ => {
@@ -755,7 +795,12 @@ impl Router {
                 entry.requester.clone(),
             );
             reply.in_response_to = Some(put_id.clone());
-            let _ = entry.requester.send(Message::Put(reply));
+            try_send_or_log(
+                &entry.requester,
+                Message::Put(reply),
+                &self.metrics,
+                "router:quorum-timeout",
+            );
             debug!(
                 "quorum reaper: notified requester of timeout for put_id={}",
                 put_id
@@ -798,7 +843,12 @@ impl Router {
                         continue;
                     }
                     seen_get_message.last_reply_checksum = put.checksum;
-                    let _ = seen_get_message.from.send(Message::Put(put));
+                    try_send_or_log(
+                        &seen_get_message.from,
+                        Message::Put(put),
+                        &self.metrics,
+                        "router:get-reply",
+                    );
                 }
                 continue;
             }
@@ -845,12 +895,14 @@ mod tests {
     use std::time::Duration;
     use super::*;
     use crate::adapters::MemoryStorage;
+    use crate::metrics::Metrics;
 
     #[test]
     fn test_router_new() {
         let config = Config::default();
         let storage = vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
-        let router = Router::new(config, storage, vec![]);
+        let metrics = Arc::new(Metrics::new());
+        let router = Router::new(config, storage, vec![], metrics);
         assert!(router.known_peers.is_empty());
         assert!(router.read_adapters.is_empty());
         assert!(router.write_adapters.is_empty());
@@ -859,14 +911,16 @@ mod tests {
 
     #[test]
     fn test_router_default_dedup() {
-        let router = Router::new(Config::default(), vec![], vec![]);
+        let metrics = Arc::new(Metrics::new());
+        let router = Router::new(Config::default(), vec![], vec![], metrics);
         assert_eq!(router.dup.max(), 999);
         assert_eq!(router.dup.age(), std::time::Duration::from_secs(9));
     }
 
     #[test]
     fn test_router_seen_msg_capacity() {
-        let router = Router::new(Config::default(), vec![], vec![]);
+        let metrics = Arc::new(Metrics::new());
+        let router = Router::new(Config::default(), vec![], vec![], metrics);
         // The seen_get_messages BoundedHashMap should have capacity SEEN_MSGS_MAX_SIZE
         assert_eq!(SEEN_MSGS_MAX_SIZE, 10000);
         let _ = router; // just verify it constructs
@@ -874,7 +928,8 @@ mod tests {
 
     #[test]
     fn test_router_msg_counter_starts_zero() {
-        let router = Router::new(Config::default(), vec![], vec![]);
+        let metrics = Arc::new(Metrics::new());
+        let router = Router::new(Config::default(), vec![], vec![], metrics);
         assert_eq!(router.msg_counter.load(Ordering::Relaxed), 0);
     }
     // ========================================================================

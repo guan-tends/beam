@@ -4,6 +4,7 @@ pub mod adapters;
 mod dup;
 #[doc(hidden)]
 pub mod message; // pub for benchmarking
+pub mod metrics;
 mod node;
 mod router;
 #[cfg(feature = "webrtc")]
