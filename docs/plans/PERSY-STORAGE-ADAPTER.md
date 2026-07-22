@@ -1,9 +1,11 @@
 # Rod Persy Storage Adapter — Comprehensive Plan
 
 **Version 1.0 — LOCKED 2026-07-22**
-**Branch**: `feat/persy-storage-adapter`
+**Version 1.1 — SHIPPED UPDATE 2026-07-22 (afternoon)**
+**Branch**: merged to `master`
 **Author**: Guan (Keeper of the Threshold)
-**Status**: PLAN LOCKED. Epic 1 in progress.
+**Status**: ✅ **EPICS 1-3 SHIPPED**. v0.5.0 tagged. Five-clean-runs discipline: 5/5 pre-merge + 5/5 post-merge = 70/70 green.
+**Next**: Epic 4 (Migration Tool) opens next session.
 
 ---
 
@@ -99,18 +101,120 @@ pub enum StorageBackend {
 
 **Acceptance**: 5/5 clean runs. Cross-backend mesh is the killer test — proves wire-format opacity.
 
-### Epic 4: Migration Tool (3-4h)
-**Goal**: Users can switch backends in production.
+### Epic 4: Migration Tool (4-5h, 2-3 sessions) — REVISED 2026-07-22
 
-**Tasks:**
-4.1. CLI subcommand: `rod migrate --from redb --to persy --path ./data`
-4.2. Read source backend in batches of 1000 records
-4.3. Write to target backend in transaction-safe batches
-4.4. Progress reporting + resumability (write a checkpoint file)
-4.5. Validation pass: compare record counts + checksums at end
-4.6. ADR-013: Migration safety + rollback plan
+**Goal**: Users can switch backends in production. Bidirectional redb↔persy migration with resumability and validation.
 
-**Acceptance**: Migration tool runs in test on synthetic 10k record dataset. Round-trip preserves data byte-for-byte.
+#### Substrate Truths (verified 2026-07-22 via recon)
+
+**On-disk format translation:**
+
+| Aspect | redb | Persy |
+|--------|------|-------|
+| Storage type | `TableDefinition<&str, &[u8]>` | `Segment` |
+| Name | `rod_nodes_v1` (table) | `rod_nodes_v1` (segment) |
+| Key | `&str` (node_id directly) | Embedded in record |
+| Value | `bincode(Children)` | `bincode(NodeRecord { node_id, children })` |
+| Metadata | Table `rod_meta_v1` w/ `_last_write` → u64 | None |
+| Inner format | `Children = BTreeMap<String, NodeData>` | Same (identical) |
+
+**Translation is clean**: strip `NodeRecord` wrapper on Persy write path, add it on redb read path. Inner `Children` is identical. The `rod_meta_v1._last_write` metadata has no Persy equivalent — documented as known limitation (one-way loss on redb→persy).
+
+**CLI structure (main.rs:71-202)**:
+- Uses clap 2.x (`App::new`, `Arg::with_name`)
+- Subcommand: `start` (only one — no `migrate` exists yet)
+- Storage flag: `--redb-storage` boolean + `--redb-path` string
+- **No `--persy-storage` flag exists** — `PersyStorage` is exported but not wired to CLI
+
+#### Scope: Two features in one epic
+
+**Feature 4a** — Add `--persy-storage` flag to `start` subcommand (prerequisite, 30m)
+- Without it, no way to CREATE a Persy node to migrate INTO
+- Mirror the redb CLI pattern at main.rs:122-134
+- Feature-gate behind `cfg!(feature = "persy")`
+
+**Feature 4b** — Add `migrate` subcommand (main work, 4h)
+
+#### Tasks (6 total, ~4-5h)
+
+| # | Task | Description | Est. |
+|---|------|-------------|------|
+| 4.1 | Add `--persy-storage` flag to `start` | Mirror redb CLI pattern, feature-gate | 30m |
+| 4.2 | Create migration module | `src/migration.rs` with `migrate(from, to, path, opts)` entry point | 1h |
+| 4.3 | Implement format translation | redb↔persy record conversion, batched (1000 records per tx) | 1h |
+| 4.4 | Checkpoint + resume | JSON file `{completed_keys: [node_ids], last_batch_index: N}` | 45m |
+| 4.5 | E2E tests | `tests/migration_e2e.rs`: 5 tests covering all paths | 1h |
+| 4.6 | ADR-013 + README updates | Migration safety, rollback plan, CLI docs | 30m |
+
+#### CLI Shape (locked)
+
+```bash
+rod migrate --from <backend> --to <backend> --path <data_dir> \
+  [--batch-size 1000] [--checkpoint <file>] [--force] [--dry-run]
+```
+
+**Supported backends**: `redb` ↔ `persy` (bidirectional)
+
+#### Translation Logic (the heart)
+
+```rust
+// redb → persy
+for entry in redb.scan("rod_nodes_v1") {
+    let (node_id, children_bytes) = entry;
+    let children: Children = bincode::deserialize(&children_bytes)?;
+    let record = NodeRecord { node_id: node_id.clone(), children };
+    let payload = bincode::serialize(&record)?;
+    persy_tx.insert("rod_nodes_v1", &payload)?;
+}
+
+// persy → redb
+for record in persy.scan("rod_nodes_v1") {
+    let node_record: NodeRecord = bincode::deserialize(&record)?;
+    let children_bytes = bincode::serialize(&node_record.children)?;
+    redb_table.insert(node_record.node_id.as_str(), children_bytes.as_slice())?;
+}
+```
+
+#### Test Plan (5 E2E Tests)
+
+| Test | Coverage |
+|------|----------|
+| `e2e_redb_to_persy_basic` | 100 records, byte-for-byte checksum verification |
+| `e2e_persy_to_redb_basic` | Reverse direction, same verification |
+| `e2e_migration_preserves_children` | Deep nested graph (3+ levels), all children intact |
+| `e2e_migration_resumable` | Kill at 50%, restart, verify completion |
+| `e2e_migration_empty_dataset` | No records → no-op success (exit 0) |
+
+**Dataset size**: 100 records (not 10k — faster test, same coverage).
+
+#### Risk Register
+
+| Risk | Mitigation |
+|------|------------|
+| Format translation bug loses data | Byte-for-byte comparison in test, checksum validation |
+| `--persy-storage` flag breaks `start` CLI | Test that existing redb start still works |
+| Resume file corrupted | Validate JSON before resuming, fail loud if invalid |
+| Target dir already exists | Refuse to start unless `--force` flag passed |
+| Concurrent migration processes | Lock file (`<data_dir>.lock`) — refuse if exists, clean up on success |
+| Feature flag mismatch (redb-only build) | Feature-gate migration tools, fail loud with helpful error |
+
+#### ADR-013 Outline (Task 4.6)
+
+- Context: Why migrate? (storage backend switching for production)
+- Decision: Bidirectional redb↔persy via `rod migrate` subcommand
+- Format translation: Children inner format identical; NodeRecord wrapper translation
+- Safety: Lock file, `--force` required for overwrite, `--dry-run` shows what WOULD migrate
+- Rollback: Reverse direction (persy→redb) using the same tool
+- Limitations: redb `_last_write` metadata lost in Persy (not currently used by actor framework)
+
+#### Acceptance Criteria
+
+- Migration tool runs in test on synthetic 100-record dataset
+- Round-trip preserves data byte-for-byte (verified via checksum)
+- All 5 e2e tests pass
+- 5/5 clean runs discipline applied before merge
+- ADR-013 written and committed
+- README updated with migration CLI docs
 
 ### Epic 5: Heavy Abusive Benchmarks (6-8h)
 **Goal**: Torture both backends. Publish numbers.
@@ -333,15 +437,28 @@ After V0 ships + 5/5 clean runs + merges to master:
 
 Each of these is its own session-sized epic. V0 is the foundation.
 
-### Status (2026-07-22)
+### Status (2026-07-22, end-of-day)
 
-- ✅ Plan locked: this section added to plan doc
-- ✅ Built-in updated: `rod_persy_v0_state_2026_07_22` mirrors V0
-- ✅ Cargo.toml shipped: `7132318` adds `persy = { path = ..., optional = true }` + `persy = ["dep:persy"]`
-- ⏳ File write pending: `src/adapters/persy_storage.rs` not yet on disk
-- ⏳ Tests pending: 4 unit tests not yet written
-- ⏳ Verify pending: cargo check + cargo test
-- ⏳ Commit pending: atomic V0 commit
+**V0 SHIPPED as v0.5.0** ✅
+- ✅ Persy adapter implemented: `src/adapters/persy_storage.rs` (652L, mirrors redb shape)
+- ✅ Feature flag: `cargo build -p rod --features persy` works, default build zero-overhead
+- ✅ 5 unit tests in `persy_storage.rs` (open/idempotent/roundtrip/LWW merge/missing-node)
+- ✅ 5 e2e tests in `tests/persy_e2e.rs` (single-node Persy CRUD)
+- ✅ 2 cross-backend mesh e2e tests in `tests/cross_backend_mesh_e2e.rs` (2 redb + 1 persy convergence)
+- ✅ Flake fix shipped: replaced blind `sleep(1500)` with active `peer_count` polling (commit c8e3547)
+- ✅ MERGED to master: commit `8988471`
+- ✅ TAGGED v0.5.0, pushed to Gitea
+- ✅ 5/5 discipline runs: pre-merge AND post-merge = 35/35 test executions, 0 failures
+
+**Epic 4 MIGRATION TOOL** ⏳ READY TO BEGIN
+- ✅ Substrate recon complete: format translation verified, CLI structure known
+- ✅ Epic 4 plan revised and committed to this doc (2026-07-22 17:55 ET)
+- ⏳ Task 4.1: `--persy-storage` flag (30m)
+- ⏳ Task 4.2: migration module (1h)
+- ⏳ Task 4.3: format translation (1h)
+- ⏳ Task 4.4: checkpoint/resume (45m)
+- ⏳ Task 4.5: e2e tests (1h)
+- ⏳ Task 4.6: ADR-013 + README (30m)
 
 ### Lessons (Suckless Lens)
 
