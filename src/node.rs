@@ -33,6 +33,7 @@
 //! // sub.recv().await == Some(Value::Text("Hello World!"))
 //! ```
 
+use crate::ack::{AckPolicy, ReplicationStatus, QUORUM_MET_SENTINEL};
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::MemoryStorage;
 use crate::message::{BatchPut, Flush, Get, Message, Put};
@@ -138,7 +139,7 @@ pub struct Node {
     ///
     /// The sender's payload carries `Result<(), String>` so commit failures
     /// propagate to the caller instead of being silently swallowed.
-    pending_puts: Arc<RwLock<HashMap<String, oneshot::Sender<Result<(), String>>>>>,
+    pending_puts: Arc<RwLock<HashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>>,
     allow_public_space: bool,
     ice_servers: Vec<String>,
 }
@@ -150,6 +151,28 @@ impl Actor for Node {
             self.handle_put(put)
         }
     }
+}
+
+/// Internal enum: discriminates ack strategy for the unified put drain.
+///
+/// Both [`Node::put`] and [`Node::put_quorum`] register oneshots in the
+/// same `pending_puts` map keyed by `Put.id`. The drain in
+/// [`Node::handle_put`] branches on which sentinel the reply carries:
+///
+/// - `Local` waits for the storage adapter's `_ack`/`_err` reply.
+/// - `Quorum(policy)` waits for the Router's `__quorum_met__` sentinel
+///   after the configured number of peer acks arrive.
+///
+/// Decoding happens in two sibling functions:
+/// [`Node::decode_put_ack_payload`] for local, [`Node::decode_quorum_payload`]
+/// for quorum. The drain tries quorum first because the sentinel is more
+/// specific than `_ack` and a misclassification would be a subtle bug.
+#[derive(Debug, Clone, Copy)]
+enum AckKind {
+    /// Wait for storage adapter's `_ack` / `_err` reply.
+    Local,
+    /// Wait for Router's `__quorum_met__` sentinel after N peer acks.
+    Quorum(AckPolicy),
 }
 
 impl Node {
@@ -250,9 +273,21 @@ impl Node {
                 let _ = sender.send(());
                 return;
             }
-            // Put/BatchPut acks — payload discriminated
+            // Put/BatchPut acks — try quorum sentinel first, fall back to _ack/_err
             if let Some(sender) = self.pending_puts.write().remove(response_id) {
-                let result = Self::decode_put_ack_payload(&put);
+                let result = if let Some(quorum_result) = Node::decode_quorum_payload(&put) {
+                    // Router fired __quorum_met__ — either peer-ack quorum
+                    // satisfied (Ok) or cleanup reaper timed us out (Err).
+                    quorum_result
+                } else {
+                    // Local storage _ack/_err reply — wrap as minimal status
+                    Self::decode_put_ack_payload(&put).map(|()| ReplicationStatus {
+                        put_id: response_id.clone(),
+                        acked_by: 1,
+                        quorum_met: true,
+                        elapsed: Duration::ZERO,
+                    })
+                };
                 let _ = sender.send(result);
                 return;
             }
@@ -586,6 +621,183 @@ impl Node {
     /// # Arguments
     ///
     /// * `value` - The value to set (see [`Value`] for supported types)
+    /// Writes a value and waits for it to be replicated to N peers per
+    /// the given [`AckPolicy`].
+    ///
+    /// Resolves with a [`ReplicationStatus`] when the policy threshold is
+    /// satisfied, or `Err(String)` on timeout, router failure, or unrecoverable
+    /// storage error.
+    ///
+    /// # Wire-level flow
+    ///
+    /// 1. Build a [`Put`] and register a oneshot in `pending_puts`
+    /// 2. Send `Message::RegisterQuorum { put_id, requester, policy }` to Router
+    ///    (this creates a tracked [`crate::router::QuorumEntry`])
+    /// 3. Send `Message::Put(put)` to Router for relay to peers
+    /// 4. Peers eventually reply with `Put { @: put_id, .. }`
+    /// 5. Router's `handle_put` ack branch counts each peer ack in the QuorumEntry
+    /// 6. When `acked_by >= policy.quorum`, Router sends a sentinel
+    ///    `Put { @: put_id, updated_nodes: { "__quorum_met__": ack_count } }`
+    ///    back to this Node
+    /// 7. This Node's `handle_put` drain decodes the sentinel via
+    ///    [`Node::decode_quorum_payload`] and resolves the oneshot with the
+    ///    [`ReplicationStatus`]
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rod::{Node, Value, AckPolicy};
+    ///
+    /// let node = Node::new();
+    /// let policy = AckPolicy::for_peer_count(3); // majority of 3 peers
+    /// let status = node.put_quorum(Value::Text("hello".into()), policy).await?;
+    /// assert!(status.quorum_met);
+    /// assert!(status.acked_by >= 2);
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The value to set (see [`Value`] for supported types)
+    /// * `policy` - The [`AckPolicy`] describing how many peer acks are required
+    ///   and how long to wait
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` if:
+    /// - The router is not initialized
+    /// - The Router fails to receive the `RegisterQuorum` or `Put` message
+    /// - The policy timeout elapses before quorum is met
+    /// - The ack channel closes (Router dropped us)
+    pub async fn put_quorum(
+        &mut self,
+        value: Value,
+        policy: AckPolicy,
+    ) -> Result<ReplicationStatus, String> {
+        let updated_at: f64 = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as f64;
+        debug!("put_quorum (required: {} peers)", policy.quorum);
+        self.on_sender.send(value.clone()).ok();
+        let mut updated_nodes = BTreeMap::new();
+        self.add_parent_nodes(&mut updated_nodes, value, updated_at);
+        let my_addr = self.addr.read().clone().unwrap();
+        let put = Put::new(updated_nodes, None, my_addr.clone());
+        let put_id = put.id.clone();
+        let (tx, rx) = oneshot::channel();
+        self.pending_puts.write().insert(put_id.clone(), tx);
+
+        let router_addr = match &*self.router.read() {
+            Some(addr) => addr.clone(),
+            None => {
+                self.pending_puts.write().remove(&put_id);
+                return Err("router not initialized".to_string());
+            }
+        };
+
+        // Register the quorum BEFORE sending the put — Router must know about
+        // the put_id before peer acks start arriving, or the first ack will
+        // be missed (no QuorumEntry to increment).
+        if router_addr
+            .send(Message::RegisterQuorum {
+                put_id: put_id.clone(),
+                requester: my_addr,
+                policy,
+            })
+            .is_err()
+        {
+            self.pending_puts.write().remove(&put_id);
+            return Err("failed to send RegisterQuorum to router".to_string());
+        }
+
+        if router_addr.send(Message::Put(put)).is_err() {
+            self.pending_puts.write().remove(&put_id);
+            return Err("failed to send put to router".to_string());
+        }
+
+        match tokio::time::timeout(policy.timeout, rx).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(_)) => Err("put_quorum ack channel closed".to_string()),
+            Err(_) => {
+                self.pending_puts.write().remove(&put_id);
+                Err(format!(
+                    "put_quorum timed out after {:?} (required {} peers)",
+                    policy.timeout, policy.quorum
+                ))
+            }
+        }
+    }
+
+    /// Internal helper: dispatches a put with the given ack strategy.
+    ///
+    /// Currently both [`Node::put`] and [`Node::put_quorum`] inline their own
+    /// bodies for clarity — this helper exists as a future DRY surface and
+    /// is exercised by tests for the AckKind logic. Once both methods
+    /// stabilize, callers can migrate to share the helper.
+    #[allow(dead_code)] // Future DRY — both put and put_quorum will call this
+    async fn put_internal(
+        &mut self,
+        value: Value,
+        ack_kind: AckKind,
+    ) -> Result<ReplicationStatus, String> {
+        let updated_at: f64 = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as f64;
+        let mut updated_nodes = BTreeMap::new();
+        self.add_parent_nodes(&mut updated_nodes, value, updated_at);
+        let my_addr = self.addr.read().clone().unwrap();
+        let put = Put::new(updated_nodes, None, my_addr.clone());
+        let put_id = put.id.clone();
+        let (tx, rx) = oneshot::channel();
+        self.pending_puts.write().insert(put_id.clone(), tx);
+
+        let router_addr = match &*self.router.read() {
+            Some(addr) => addr.clone(),
+            None => {
+                self.pending_puts.write().remove(&put_id);
+                return Err("router not initialized".to_string());
+            }
+        };
+
+        // Quorum requires the Router to know about this put_id before any
+        // peer ack arrives. Register FIRST, then send the put.
+        if let AckKind::Quorum(policy) = &ack_kind {
+            if router_addr
+                .send(Message::RegisterQuorum {
+                    put_id: put_id.clone(),
+                    requester: my_addr.clone(),
+                    policy: *policy,
+                })
+                .is_err()
+            {
+                self.pending_puts.write().remove(&put_id);
+                return Err("failed to send RegisterQuorum to router".to_string());
+            }
+        }
+
+        if router_addr.send(Message::Put(put)).is_err() {
+            self.pending_puts.write().remove(&put_id);
+            return Err("failed to send put to router".to_string());
+        }
+
+        let dur = match &ack_kind {
+            AckKind::Local => Duration::from_secs(30),
+            AckKind::Quorum(policy) => policy.timeout,
+        };
+        match tokio::time::timeout(dur, rx).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(_)) => Err("put ack channel closed".to_string()),
+            Err(_) => {
+                self.pending_puts.write().remove(&put_id);
+                Err(format!(
+                    "put timed out after {:?} (ack_kind={:?})",
+                    dur, ack_kind
+                ))
+            }
+        }
+    }
+
     pub async fn put(&mut self, value: Value) -> Result<(), String> {
         let timeout = None; // Public API stays simple; can add timeout arg later.
         let updated_at: f64 = SystemTime::now()
@@ -617,7 +829,7 @@ impl Node {
 
         let dur = timeout.unwrap_or(Duration::from_secs(30));
         match tokio::time::timeout(dur, rx).await {
-            Ok(Ok(result)) => result,
+            Ok(Ok(_status)) => Ok(()), // discard ReplicationStatus for local put
             Ok(Err(_)) => Err("put ack channel closed".to_string()),
             Err(_) => {
                 self.pending_puts.write().remove(&put_id);
@@ -700,7 +912,7 @@ impl Node {
 
         let dur = timeout.unwrap_or(Duration::from_secs(30));
         match tokio::time::timeout(dur, rx).await {
-            Ok(Ok(result)) => result,
+            Ok(Ok(_status)) => Ok(()), // discard ReplicationStatus for batch_put
             Ok(Err(_)) => Err("batch_put ack channel closed".to_string()),
             Err(_) => {
                 self.pending_puts.write().remove(&batch_id);
@@ -760,6 +972,68 @@ impl Node {
         }
         // Ack present but no sentinel — treat as success.
         Ok(())
+    }
+
+    /// Sibling decoder for the Router's `__quorum_met__` sentinel reply.
+    ///
+    /// Inspects the Put envelope for the sentinel as a top-level key in
+    /// `updated_nodes` and, if found, returns a [`ReplicationStatus`] carrying
+    /// the ack count from the sentinel payload. Returns `None` for any other
+    /// reply shape — the caller falls back to [`Self::decode_put_ack_payload`].
+    ///
+    /// The Router emits this sentinel when the configured [`AckPolicy`]
+    /// threshold is met (see [`crate::router::Router::handle_register_quorum`]).
+    /// The reply envelope mirrors a storage `_ack` (same `in_response_to`
+    /// convention) but uses `__quorum_met__` as the `updated_nodes` key so
+    /// the decoders can disambiguate without coordination.
+    ///
+    /// # Wire format (emitted by Router via `Put::new_from_kv`)
+    ///
+    /// ```text
+    /// updated_nodes = {
+    ///     "__quorum_met__" => {
+    ///         "_" => NodeData { value: Number(ack_count), updated_at: 0.0 }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The `ack_count` is the number of peer acks observed before the
+    /// Decodes a peer-received Put carrying the `__quorum_met__` sentinel.
+    ///
+    /// Returns:
+    /// - `None` — no quorum sentinel present (caller falls through to the
+    ///   local-storage `_ack`/`_err` decoder).
+    /// - `Some(Ok(status))` — sentinel carried `Value::Number(N)`, quorum met
+    ///   with N peer acks.
+    /// - `Some(Err(msg))` — sentinel carried `Value::Bit(true)`, the Router
+    ///   cleanup reaper evicted this entry as timed out.
+    ///
+    /// The `elapsed` field is filled with the time since this decoder was
+    /// called. For accurate elapsed measurement, callers should wrap the
+    /// entire drain with an `Instant`.
+    fn decode_quorum_payload(
+        put: &Put,
+    ) -> Option<Result<ReplicationStatus, String>> {
+        let started_at = std::time::Instant::now();
+        let children = put.updated_nodes.get(QUORUM_MET_SENTINEL)?;
+        let node_data = children.get("_")?;
+        match &node_data.value {
+            Value::Number(n) => {
+                let ack_count = *n as usize;
+                Some(Ok(ReplicationStatus {
+                    put_id: put.id.clone(),
+                    acked_by: ack_count,
+                    quorum_met: true,
+                    elapsed: started_at.elapsed(),
+                }))
+            }
+            Value::Bit(true) => Some(Err(format!(
+                "quorum timed out for put_id={}",
+                put.id
+            ))),
+            // Bit(false), String, Null, etc. — malformed. Fall through.
+            _ => None,
+        }
     }
 }
 
@@ -1160,3 +1434,222 @@ mod tests {
         );
     }
 }
+        // ========================================================================
+        // Phase 5: Quorum Drain Tests (Network Fanout Ack)
+        // ========================================================================
+        //
+        // Tests exercise:
+        // - decode_quorum_payload return-shape: Some(Ok) | Some(Err) | None
+        //   (success sentinel, timeout sentinel, fall-through to _ack decoder)
+        // - AckPolicy builder math (any / for_peer_count / all / builders)
+        // - ReplicationStatus invariant (Ok arm has quorum_met = true)
+
+        /// Build a Put carrying the `__quorum_met__` sentinel for decoder tests.
+        fn make_quorum_put(sentinel_value: Value) -> Put {
+            let mut children: Children = std::collections::BTreeMap::new();
+            children.insert(
+                "_".to_string(),
+                NodeData {
+                    value: sentinel_value,
+                    updated_at: 0.0,
+                },
+            );
+            let mut put = Put::new_from_kv(
+                QUORUM_MET_SENTINEL.to_string(),
+                children,
+                Addr::noop(),
+            );
+            put.id = "test_put_id".to_string();
+            put.in_response_to = Some("test_put_id".to_string());
+            put
+        }
+
+        #[test]
+        fn decode_quorum_payload_success_with_number() {
+            let put = make_quorum_put(Value::Number(3.0));
+            let result = Node::decode_quorum_payload(&put);
+            assert!(result.is_some(), "should decode sentinel-bearing Put");
+            let inner = result.unwrap();
+            assert!(inner.is_ok(), "Number payload should decode as Ok");
+            let status = inner.unwrap();
+            assert_eq!(status.put_id, "test_put_id");
+            assert_eq!(status.acked_by, 3);
+            assert!(status.quorum_met);
+        }
+
+        #[test]
+        fn decode_quorum_payload_timeout_with_bit_true() {
+            let put = make_quorum_put(Value::Bit(true));
+            let result = Node::decode_quorum_payload(&put);
+            assert!(result.is_some(), "Bit(true) is a recognized sentinel");
+            let inner = result.unwrap();
+            assert!(inner.is_err(), "Bit(true) must decode as Err(timeout)");
+            let err_msg = inner.unwrap_err();
+            assert!(
+                err_msg.contains("quorum timed out"),
+                "error message should mention timeout, got: {err_msg}"
+            );
+            assert!(
+                err_msg.contains("test_put_id"),
+                "error message should include put_id, got: {err_msg}"
+            );
+        }
+
+        #[test]
+        fn decode_quorum_payload_no_sentinel_falls_through() {
+            let mut children: Children = std::collections::BTreeMap::new();
+            children.insert(
+                "_".to_string(),
+                NodeData {
+                    value: Value::Number(1.0),
+                    updated_at: 0.0,
+                },
+            );
+            let put = Put::new_from_kv("not_quorum".to_string(), children, Addr::noop());
+            let result = Node::decode_quorum_payload(&put);
+            assert!(
+                result.is_none(),
+                "no sentinel key → None (fall through to _ack decoder)"
+            );
+        }
+
+        #[test]
+        fn decode_quorum_payload_malformed_value_falls_through() {
+            for bad_value in [
+                Value::Bit(false),
+                Value::Null,
+                Value::Text("not a count".to_string()),
+            ] {
+                let put = make_quorum_put(bad_value.clone());
+                let result = Node::decode_quorum_payload(&put);
+                assert!(
+                    result.is_none(),
+                    "malformed value {bad_value:?} should return None (fall through)"
+                );
+            }
+        }
+
+        #[test]
+        fn decode_quorum_payload_missing_underscore_key() {
+            let mut children: Children = std::collections::BTreeMap::new();
+            children.insert(
+                "wrong_key".to_string(),
+                NodeData {
+                    value: Value::Number(1.0),
+                    updated_at: 0.0,
+                },
+            );
+            let put = Put::new_from_kv(
+                QUORUM_MET_SENTINEL.to_string(),
+                children,
+                Addr::noop(),
+            );
+            let result = Node::decode_quorum_payload(&put);
+            assert!(result.is_none(), "missing _ key → None");
+        }
+
+        #[test]
+        fn ack_policy_any_has_quorum_one_and_nine_second_timeout() {
+            let p = AckPolicy::any();
+            assert_eq!(p.quorum, 1, "AckPolicy::any → quorum=1");
+            assert_eq!(
+                p.timeout,
+                Duration::from_secs(9),
+                "AckPolicy::any → 9s timeout (Gun.js lack default)"
+            );
+        }
+
+        #[test]
+        fn ack_policy_for_peer_count_majority() {
+            assert_eq!(AckPolicy::for_peer_count(0).quorum, 1, "0 peers → 1");
+            assert_eq!(AckPolicy::for_peer_count(1).quorum, 1);
+            assert_eq!(AckPolicy::for_peer_count(2).quorum, 1); // ⌈2/2⌉ = 1
+            assert_eq!(AckPolicy::for_peer_count(3).quorum, 2); // ⌈3/2⌉ = 2
+            assert_eq!(AckPolicy::for_peer_count(4).quorum, 2);
+            assert_eq!(AckPolicy::for_peer_count(5).quorum, 3); // ⌈5/2⌉ = 3
+            assert_eq!(AckPolicy::for_peer_count(7).quorum, 4); // ⌈7/2⌉ = 4
+        }
+
+        #[test]
+        fn ack_policy_all_is_max_usize() {
+            let p = AckPolicy::all();
+            assert_eq!(p.quorum, usize::MAX, "AckPolicy::all → quorum=MAX");
+            assert_eq!(p.timeout, Duration::from_secs(9));
+        }
+
+        #[test]
+        fn ack_policy_with_timeout_overrides() {
+            let p = AckPolicy::any().with_timeout(Duration::from_secs(30));
+            assert_eq!(p.timeout, Duration::from_secs(30));
+            assert_eq!(p.quorum, 1, "with_timeout preserves quorum");
+        }
+
+        #[test]
+        fn ack_policy_with_quorum_overrides() {
+            let p = AckPolicy::any().with_quorum(5);
+            assert_eq!(p.quorum, 5);
+            assert_eq!(
+                p.timeout,
+                Duration::from_secs(9),
+                "with_quorum preserves timeout"
+            );
+        }
+
+        #[test]
+        fn ack_policy_default_is_any() {
+            let p = AckPolicy::default();
+            assert_eq!(p.quorum, 1);
+            assert_eq!(p.timeout, Duration::from_secs(9));
+        }
+
+        #[test]
+        fn replication_status_quorum_met_true_on_ok_arm() {
+            let status = ReplicationStatus {
+                put_id: "p1".to_string(),
+                acked_by: 3,
+                quorum_met: true, // invariant: Ok arm must have this
+                elapsed: Duration::from_millis(42),
+            };
+            assert_eq!(status.put_id, "p1");
+            assert_eq!(status.acked_by, 3);
+            assert!(status.quorum_met);
+            assert_eq!(status.elapsed, Duration::from_millis(42));
+        }
+
+        #[test]
+        fn drain_dispatch_quorum_ok_vs_err_vs_fallthrough() {
+            // The drain block (Node::handle_put) dispatches three cases based on
+            // decode_quorum_payload's return shape:
+            //   Some(Ok(_))  → send Ok(status)
+            //   Some(Err(_)) → send Err(timeout_msg)
+            //   None         → fall through to local-storage _ack decoder
+            let success_put = make_quorum_put(Value::Number(2.0));
+            match Node::decode_quorum_payload(&success_put) {
+                Some(Ok(_)) => {}
+                other => panic!("expected Some(Ok) for Number payload, got {other:?}"),
+            }
+            let timeout_put = make_quorum_put(Value::Bit(true));
+            match Node::decode_quorum_payload(&timeout_put) {
+                Some(Err(e)) => assert!(e.contains("timed out")),
+                other => panic!("expected Some(Err) for Bit(true) payload, got {other:?}"),
+            }
+            let non_sentinel_put = {
+                let mut children = std::collections::BTreeMap::new();
+                children.insert(
+                    "_".to_string(),
+                    NodeData {
+                        value: Value::Number(1.0),
+                        updated_at: 0.0,
+                    },
+                );
+                Put::new_from_kv("storage_ack".to_string(), children, Addr::noop())
+            };
+            match Node::decode_quorum_payload(&non_sentinel_put) {
+                None => {}
+                other => panic!("expected None for non-sentinel Put, got {other:?}"),
+            }
+        }
+
+        // ========================================================================
+        // End Phase 5 tests
+        // ========================================================================

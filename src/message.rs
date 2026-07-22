@@ -1,4 +1,5 @@
 #![allow(clippy::inherent_to_string)] // to_string methods are Gun.js wire-format serialization, not Display
+use crate::ack::AckPolicy;
 use crate::actor::Addr;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
@@ -234,6 +235,32 @@ pub enum Message {
     Flush(Flush),
     Hi { from: Addr, peer_id: String },
     RtcSignal(RtcSignal),
+    /// Periodic self-tick fired by the cleanup reaper spawned in
+    /// [`crate::router::Router::pre_start`].
+    ///
+    /// Not part of the wire protocol — purely internal. Routes back to the
+    /// Router's own `handle()` to evict expired [`crate::router::QuorumEntry`]s
+    /// with full `&mut self` access.
+    CheckQuorumTimeouts,
+
+    /// Internal message: registers a put as a quorum-tracked write.
+    ///
+    /// Sent by [`crate::Node::put_quorum`] immediately after the Put,
+    /// before fan-out. The Router uses this to create a `QuorumEntry`
+    /// keyed on `put_id`, so it can count subsequent peer acks and
+    /// signal back when the policy is met.
+    ///
+    /// Purely router-internal — never serialized to wire. Peers do not
+    /// receive this message; they only see the regular `Put`.
+    RegisterQuorum {
+        /// The id of the Put this registration tracks.
+        put_id: String,
+        /// The originating Node's actor address — receives the
+        /// `__quorum_met__` sentinel reply when quorum is satisfied.
+        requester: Addr,
+        /// The policy controlling how many acks are required.
+        policy: AckPolicy,
+    },
 }
 
 impl Message {
@@ -245,6 +272,13 @@ impl Message {
             Message::Flush(flush) => json!({"dam": "flush","#": flush.id}).to_string(),
             Message::Hi { from: _, peer_id } => json!({"dam": "hi","#": peer_id}).to_string(),
             Message::RtcSignal(rtc) => rtc.to_string(),
+            // RegisterQuorum is router-internal — never serialized to wire.
+            // If we ever see this in to_string(), something routed it wrong.
+            Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
+                Message::RegisterQuorum { put_id, .. } => {
+                debug!("internal RegisterQuorum({}) should not reach to_string", put_id);
+                String::new()
+            }
         }
     }
 
@@ -256,6 +290,8 @@ impl Message {
             Message::Flush(flush) => flush.id.clone(),
             Message::Hi { from: _, peer_id } => peer_id.to_string(),
             Message::RtcSignal(rtc) => rtc.id.clone(),
+            Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
+                Message::RegisterQuorum { put_id, .. } => put_id.clone(),
         }
     }
 
@@ -267,6 +303,8 @@ impl Message {
             Message::Flush(flush) => flush.from == *addr,
             Message::Hi { from, peer_id: _ } => *from == *addr,
             Message::RtcSignal(rtc) => rtc.from == *addr,
+            Message::CheckQuorumTimeouts => false,
+                Message::RegisterQuorum { requester, .. } => *requester == *addr,
         }
     }
 
@@ -281,6 +319,8 @@ impl Message {
                 peer_id: _,
             } => Addr::noop(),
             Message::RtcSignal(rtc) => rtc.from.clone(),
+            Message::CheckQuorumTimeouts => Addr::noop(),
+                Message::RegisterQuorum { requester, .. } => requester.clone(),
         }
     }
 
