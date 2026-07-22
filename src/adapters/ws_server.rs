@@ -71,6 +71,7 @@ impl Default for WsServerConfig {
 /// Listens on a TCP port and spawns a [`WsConn`] actor for each incoming
 /// WebSocket connection. Optionally serves a web UI on `port + 1` for
 /// stats and peer ID discovery.
+#[derive(Clone)]
 pub struct WsServer {
     config: Config,
     ws_config: WsServerConfig,
@@ -151,6 +152,32 @@ impl WsServer {
         eprintln!("Web UI:             {}", addr);
         eprintln!("Stats:              {}/stats", addr);
         warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    }
+
+    /// Returns the current number of connected WebSocket peers.
+    ///
+    /// Test-only helper to poll mesh readiness without relying on
+    /// blind sleeps. The count reflects the number of [`WsConn`]
+    /// actors that have completed the WebSocket handshake and
+    /// registered themselves in the server's client set.
+    ///
+    /// # Use
+    ///
+    /// ```ignore
+    /// // Wait for both peers to connect before broadcasting a Put.
+    /// while ws_server.peer_count() < 2 {
+    ///     sleep(Duration::from_millis(50)).await;
+    /// }
+    /// ```
+    pub fn peer_count(&self) -> usize {
+        // Try a non-blocking read. If the lock is held, treat as "no
+        // observed peers yet" so the caller polls again. Blocking
+        // would risk stalling the actor's mailbox.
+        if let Ok(count) = self.clients.try_read() {
+            count.len()
+        } else {
+            0
+        }
     }
 
     /// Periodically reports WebSocket connection count to the stats graph.
