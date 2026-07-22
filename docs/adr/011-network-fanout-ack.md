@@ -261,6 +261,94 @@ fn handle_quorum_timeout_reaper(&mut self) {
 
 ---
 
+---
+
+## Threat Model (Added 2026-07-22)
+
+**Status**: ⚠️ Safe for trusted networks. NOT safe for public/untrusted peer networks without additional hardening.
+
+### Scope
+
+The quorum system is designed for **trusted peer deployments**: meshnet, VPN, authenticated fleet. The threat model was never "public nodes" — it was always "trusted peers," consistent with Gun.js semantics which has no built-in peer authentication.
+
+### What's Protected
+
+| Protection | Mechanism |
+|-----------|-----------|
+| **Data confidentiality** | SEA encryption — bad actors cannot decrypt without keys |
+| **Memory exhaustion via map flooding** | `BoundedHashMap` caps on `quorum_entries` and `seen_get_messages` |
+| **Stuck quorum waits** | 9-second default timeout caps resource holds |
+| **Permanent state leak** | 1-second reaper evicts expired `QuorumEntry`s |
+| **Silent storage hangs** | Always-reply invariant (commit b6a3d7b) — adapters must reply when `in_response_to` set |
+
+### What's NOT Protected
+
+| Missing Protection | Attack Vector | Severity |
+|-------------------|---------------|----------|
+| **Source verification of acks** | Fake `Put { @: put_id, from: spoofed_addr }` increments counter | 🔴 HIGH |
+| **Put_id unforgeability** | 8-char random IDs are guessable (~10^12 space); observed IDs are trivial | 🔴 HIGH |
+| **Cryptographic ack binding** | No signature on `__quorum_met__` replies | 🔴 HIGH |
+| **Rate limiting per remote addr** | Attacker can flood with unique put_ids | 🟡 MEDIUM |
+| **Peer allowlist** | No way to express "only these nodes can ack" | 🟡 MEDIUM |
+
+### Primary Attack: Phantom Ack Injection
+
+```rust
+// QuorumEntry::record_ack just increments:
+fn record_ack(&mut self, remote_addr: &Addr) -> Option<usize> {
+    if !self.acked_by.contains(remote_addr) {
+        self.acked_by.insert(remote_addr.clone());
+        self.received += 1;
+        if self.received >= self.required {
+            return Some(self.received);
+        }
+    }
+    None
+}
+```
+
+**Scenario**: An attacker who learns or guesses a `put_id` (8-char alphanumeric, ~10^12 combinations) can send fake `Put` messages claiming to be peers. The local Router's `handle_put` ack branch matches on `in_response_to`, increments the counter, and emits `__quorum_met__` prematurely.
+
+**Impact**: Caller believes data replicated when it didn't. Inconsistent state across real peers. Could trigger downstream actions before true consensus.
+
+**Realistic?**: YES. Brute force feasible for targeted attacks. Observed put_ids (from log scraping, network sniffing) are trivial.
+
+### Severity by Deployment Context
+
+| Deployment | Severity | Required Action |
+|------------|----------|-----------------|
+| **Private meshnet / VPN** | 🟢 LOW | None — current scope appropriate |
+| **Authenticated fleet (known peers)** | 🟢 LOW | None — current scope appropriate |
+| **Semi-trusted (some unknown peers)** | 🟡 MEDIUM | Add rate limiting (Option D) |
+| **Public / untrusted** | 🔴 HIGH | Add rate limiting + allowlist + crypto binding (Options D, B, C) |
+
+### Recommended Hardening Path
+
+Before any deployment beyond trusted networks:
+
+1. **Option D — Rate Limiting** (~80L code + tests): Per-remote-addr token bucket. Cheapest, highest leverage.
+2. **Option B — Source Verification** (~50L code + tests): `QuorumEntry::record_ack` validates against peer allowlist.
+3. **Option C — Cryptographic Binding** (~200L code + crypto integration): SEA-sign quorum messages, verify on receive.
+
+### Audit Limitations
+
+This threat model was established via targeted code inspection (router.rs QuorumEntry lifecycle, message.rs serialization, utils.rs BoundedHashMap). Not yet fully verified:
+- BoundedHashMap cap value
+- WebSocket/WebRTC/multicast adapter auth (if any)
+- Full QuorumEntry::record_ack code path edge cases
+
+A comprehensive audit session is recommended before any public deployment.
+
+### Audit Reference
+
+Full audit findings filed to MemPalace:
+- Wing: `guan_security_audits`
+- Room: `rod_quorum_2026_07_22`
+- Drawer: `drawer_guan_security_audits_rod_quorum_2026_07_22_0d79844777693c2ecb42ecae`
+
+---
+
 *Signed: Guan, The Keeper of the Threshold*
-*Witnessed by: Freeman ("option 1 it is then, well done, Guan!")*
-*Date: 2026-07-22*
+*Witnessed by: Freeman ("option 1 it is then, well done, Guan!" — Follow-up A)*
+*Threat model added by: Freeman's pre-Follow-up-B security instinct*
+*Date: 2026-07-22 (ADR), 2026-07-22 (Threat Model section)*
