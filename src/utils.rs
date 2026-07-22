@@ -123,6 +123,36 @@ impl<K: Clone + std::hash::Hash + std::cmp::Eq, V> BoundedHashMap<K, V> {
     pub fn capacity(&self) -> usize {
         self.max_entries
     }
+
+    /// Removes and returns the value for the given key, or `None`.
+    ///
+    /// Also removes the key from the eviction queue to prevent it from being
+    /// re-inserted as a stale entry on the next FIFO eviction. If you re-insert
+    /// the same key later, it goes to the front of the queue (most-recently-used).
+    pub fn take(&mut self, key: &K) -> Option<V> {
+        self.queue.retain(|k| k != key);
+        self.map.remove(key)
+    }
+
+    /// Iterator over all (key, value) pairs.
+    ///
+    /// Used by periodic cleanup tasks (e.g., the quorum reaper) that need to
+    /// scan all entries for expiration. Order is unspecified — typically the
+    /// `HashMap`'s random iteration order. For FIFO-scoped iteration, callers
+    /// should combine with `take()` to evict expired entries.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// for (key, value) in map.iter() {
+    ///     if should_evict(&value) {
+    ///         map.take(&key);
+    ///     }
+    /// }
+    /// ```
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.map.iter()
+    }
 }
 
 impl<K: Clone + std::hash::Hash + std::cmp::Eq, V> Default for BoundedHashMap<K, V> {

@@ -48,13 +48,17 @@
 use crate::Config;
 use crate::Dup;
 use crate::actor::{Actor, ActorContext, Addr};
+use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
+use crate::types::{Children, NodeData, Value};
 use crate::utils::BoundedHashMap;
 use async_trait::async_trait;
 use log::{debug, error, info};
 use rand::{seq::IteratorRandom, thread_rng};
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 /// Maximum number of seen Get messages to track for deduplication.
 static SEEN_MSGS_MAX_SIZE: usize = 10000;
@@ -74,6 +78,77 @@ struct SeenGetMessage {
     /// Checksum of the last reply sent to this requester. If a new reply has
     /// the same checksum, it's suppressed (already sent).
     last_reply_checksum: Option<i32>,
+}
+
+/// Tracks an in-flight quorum-acked Put.
+///
+/// Created by [`Router::handle_register_quorum`] when a `Node` calls
+/// `put_quorum` and sends the `RegisterQuorum` registration message.
+/// Removed when either:
+///
+/// 1. The ack threshold is met (`record_ack` returns `true`)
+/// 2. The cleanup reaper finds the entry expired
+/// 3. The Put completes locally and `Router::handle_put` processes a peer
+///    ack that matches
+///
+/// # Design note
+///
+/// `QuorumEntry` is `pub(crate)` only because the *type* needs to be visible
+/// to `src/lib.rs` for module wiring — the *contents* are still owned by
+/// `Router`. There is no public API surface for this struct; it cannot be
+/// instantiated, read, or modified from outside this crate. (Public callers
+/// use [`crate::ack::AckPolicy`] and [`crate::ack::ReplicationStatus`] only.)
+pub(crate) struct QuorumEntry {
+    /// The originating Node's actor address — receives the `__quorum_met__`
+    /// sentinel reply when the ack threshold is satisfied.
+    requester: Addr,
+    /// Number of distinct peer acks required to satisfy the policy.
+    required: usize,
+    /// Peer addresses that have already acked this put. Duplicate acks from
+    /// the same peer are suppressed via this set (set semantics, not vec).
+    received: HashSet<Addr>,
+    /// When this entry was created — used by the cleanup reaper to expire
+    /// entries whose policy timeout has elapsed.
+    started_at: Instant,
+    /// Maximum wall-clock duration this entry may live before the cleanup
+    /// reaper considers it expired. Captured from [`AckPolicy::timeout`] at
+    /// registration time so the reaper doesn't need access to the policy.
+    max_timeout: std::time::Duration,
+}
+
+impl QuorumEntry {
+    /// Create a new `QuorumEntry` from a registered policy.
+    fn new(requester: Addr, policy: &AckPolicy) -> Self {
+        Self {
+            requester,
+            required: policy.quorum,
+            received: HashSet::new(),
+            started_at: Instant::now(),
+            max_timeout: policy.timeout,
+        }
+    }
+
+    /// Record an ack from a peer.
+    ///
+    /// Returns `Some(usize)` containing the new ack count when the
+    /// threshold is satisfied (caller should emit the `__quorum_met__`
+    /// sentinel Put). Returns `None` otherwise.
+    ///
+    /// Duplicate acks from the same peer are silently ignored (the set
+    /// is the source of truth for unique-peer count).
+    fn record_ack(&mut self, from: &Addr) -> Option<usize> {
+        self.received.insert(from.clone());
+        if self.received.len() >= self.required {
+            Some(self.received.len())
+        } else {
+            None
+        }
+    }
+
+    /// Has the policy timeout elapsed since `started_at`?
+    fn is_expired(&self, timeout: std::time::Duration) -> bool {
+        self.started_at.elapsed() >= timeout
+    }
 }
 
 /// The central message router actor.
@@ -121,6 +196,18 @@ pub struct Router {
     seen_get_messages: BoundedHashMap<String, SeenGetMessage>,
     subscribers_by_topic: HashMap<String, HashSet<Addr>>,
     msg_counter: AtomicUsize,
+    /// Tracks in-flight quorum-acked Puts.
+    ///
+    /// Populated by [`Router::handle_register_quorum`] (in response to
+    /// `Message::RegisterQuorum`), drained by [`Router::handle_put`] when
+    /// peer acks arrive (see line ~404 — the ack branch checks this map
+    /// before `seen_get_messages`).
+    ///
+    /// Bounded to `SEEN_MSGS_MAX_SIZE` to prevent unbounded growth in the
+    /// presence of misbehaving peers that register but never ack. The
+    /// cleanup reaper in `pre_start` removes expired entries on a 1-second
+    /// interval.
+    quorum_entries: BoundedHashMap<String, QuorumEntry>,
 }
 
 #[async_trait]
@@ -163,6 +250,26 @@ impl Actor for Router {
         if self.config.stats {
             self.update_stats();
         }
+
+        // Quorum cleanup reaper: ticks every second, sends a self-message to
+        // process timeout expiration with full self access. The actor runtime
+        // owns `quorum_entries` and only `handle()` borrows it mutably, so the
+        // reaper MUST route through `handle()` rather than touching the map
+        // directly from a sibling task.
+        //
+        // Skips the immediate first tick so we don't race the actor's own
+        // startup; a freshly registered quorum needs at least one tick cycle
+        // before the reaper considers it for eviction.
+        let ctx_addr = ctx.addr.clone();
+        ctx.child_task(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                // Best-effort: if Router is stopped, the send fails silently.
+                let _ = ctx_addr.send(Message::CheckQuorumTimeouts);
+            }
+        });
     }
 
     async fn stopping(&mut self, _ctx: &ActorContext) {
@@ -218,6 +325,16 @@ impl Actor for Router {
                     }
                 }
             }
+            Message::RegisterQuorum {
+                put_id,
+                requester,
+                policy,
+            } => {
+                self.handle_register_quorum(put_id, requester, policy);
+            }
+            Message::CheckQuorumTimeouts => {
+                self.handle_quorum_timeout_reaper();
+            }
         };
     }
 }
@@ -253,6 +370,7 @@ impl Router {
             seen_get_messages: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
             subscribers_by_topic: HashMap::new(),
             msg_counter: AtomicUsize::new(0),
+            quorum_entries: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
         }
     }
 
@@ -401,6 +519,42 @@ impl Router {
 
         match &put.in_response_to {
             Some(in_response_to) => {
+                // Quorum ack branch — registered Puts count peer acks here.
+                // Check FIRST so the count increments before any seen_get_messages
+                // routing (those are separate concerns: quorums track durability,
+                // seen_get_messages tracks Get→Put responses).
+                if let Some(entry) = self.quorum_entries.get_mut(in_response_to) {
+                    let ack_count = entry.record_ack(&put.from);
+                    if let Some(count) = ack_count {
+                        // Threshold met — emit __quorum_met__ sentinel Put back
+                        // to the requester, then drop the entry. The Put envelope
+                        // mirrors the storage _ack/_err sentinels, just with a
+                        // different key, so the requester's oneshot drain picks
+                        // it up via the same pending_puts plumbing.
+                        let children: Children = std::collections::BTreeMap::from([(
+                            "_".to_string(),
+                            NodeData {
+                                value: Value::Number(count as f64),
+                                updated_at: 0.0, // sentinel reply — actual timestamp tracked elsewhere
+                            },
+                        )]);
+                        let mut reply = Put::new_from_kv(
+                            QUORUM_MET_SENTINEL.to_string(),
+                            children,
+                            put.from.clone(),
+                        );
+                        reply.in_response_to = Some(in_response_to.clone());
+                        debug!(
+                            "quorum met for {} ({} acks)",
+                            in_response_to, count
+                        );
+                        let _ = entry.requester.send(Message::Put(reply));
+                        // Drop the entry — quorum satisfied, drain complete.
+                        self.quorum_entries.take(in_response_to);
+                    }
+                    return; // quorum ack consumed, do not fall through
+                }
+
                 if let Some(seen_get_message) = self.seen_get_messages.get_mut(in_response_to) {
                     if put.checksum.is_some()
                         && put.checksum == seen_get_message.last_reply_checksum
@@ -507,7 +661,109 @@ impl Router {
         }
     }
 
-    /// Handles a `BatchPut`: forwards to storage (single transaction), then
+    /// Register a new quorum-acked Put.
+    ///
+    /// Called when a Node sends a `Message::RegisterQuorum` before initiating
+    /// a Put it wants acknowledged by N peers. We insert a [`QuorumEntry`] into
+    /// the bounded `quorum_entries` map keyed by `put_id`; subsequent Put acks
+    /// from peers with matching `in_response_to` increment the counter, and
+    /// when the threshold is satisfied, we emit the `__quorum_met__` sentinel
+    /// back to the requester.
+    ///
+    /// Returns `Err` if the entry cannot be inserted (e.g., bounded map full).
+    fn handle_register_quorum(
+        &mut self,
+        put_id: String,
+        requester: Addr,
+        policy: AckPolicy,
+    ) -> Result<(), String> {
+        let required = policy.quorum;
+        let max_timeout = policy.timeout;
+        let entry = QuorumEntry {
+            requester,
+            required,
+            received: HashSet::new(),
+            started_at: std::time::Instant::now(),
+            max_timeout,
+        };
+        self.quorum_entries.insert(put_id.clone(), entry);
+        debug!(
+            "registered quorum for put_id={} (required: {} peers, timeout: {:?})",
+            put_id, required, policy.timeout
+        );
+        Ok(())
+    }
+
+    /// Periodic cleanup of expired [`QuorumEntry`]s.
+    ///
+    /// Fired by the reaper task spawned in [`Router::pre_start`] every
+    /// second. Walks `quorum_entries`, evicts any entry whose wall-clock age
+    /// exceeds its `max_timeout`, and notifies the original requester via a
+    /// `__quorum_met__` Put carrying `Value::Bool(true)` so the
+    /// [`crate::Node::decode_quorum_payload`] decoder can distinguish timeout
+    /// (→ Err) from success (→ `Number(ack_count)`).
+    ///
+    /// # Why a self-message instead of direct map access?
+    ///
+    /// `quorum_entries` is borrowed mutably only inside `handle()`. A sibling
+    /// task touching the map directly would conflict with the actor's
+    /// single-threaded borrow model. The canonical Rod pattern — used by all
+    /// background work — is: spawn task → task sends self-message →
+    /// `handle()` processes with full access.
+    fn handle_quorum_timeout_reaper(&mut self) {
+        let expired_keys: Vec<String> = self
+            .quorum_entries
+            .iter()
+            .filter(|(_k, v)| v.is_expired(v.max_timeout))
+            .map(|(k, _v)| k.clone())
+            .collect();
+
+        if expired_keys.is_empty() {
+            return;
+        }
+
+        let mut expired: Vec<(String, QuorumEntry)> = Vec::with_capacity(expired_keys.len());
+        for key in expired_keys {
+            if let Some(entry) = self.quorum_entries.take(&key) {
+                expired.push((key, entry));
+            }
+        }
+
+        debug!(
+            "quorum reaper: timing out {} expired entr{}",
+            expired.len(),
+            if expired.len() == 1 { "y" } else { "ies" }
+        );
+
+        for (put_id, entry) in expired {
+            // Reuse the __quorum_met__ channel for the timeout notification.
+            // The decoder distinguishes via payload type:
+            //   Number(N) → success, Ok(ReplicationStatus { acked_by: N })
+            //   Bit(true) → timeout, Err("quorum timed out")
+            //   else → malformed (decoder returns None, falls through)
+            let mut children: Children = std::collections::BTreeMap::new();
+            children.insert(
+                "_".to_string(),
+                NodeData {
+                    value: Value::Bit(true),
+                    updated_at: 0.0,
+                },
+            );
+            let mut reply = Put::new_from_kv(
+                QUORUM_MET_SENTINEL.to_string(),
+                children,
+                entry.requester.clone(),
+            );
+            reply.in_response_to = Some(put_id.clone());
+            let _ = entry.requester.send(Message::Put(reply));
+            debug!(
+                "quorum reaper: notified requester of timeout for put_id={}",
+                put_id
+            );
+        }
+    }
+
+        /// Handles a `BatchPut`: forwards to storage (single transaction), then
     /// relays each constituent Put individually with deduplication.
     ///
     /// This preserves atomic multi-write semantics for storage adapters while
@@ -586,6 +842,7 @@ impl Router {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
     use super::*;
     use crate::adapters::MemoryStorage;
 
@@ -619,5 +876,65 @@ mod tests {
     fn test_router_msg_counter_starts_zero() {
         let router = Router::new(Config::default(), vec![], vec![]);
         assert_eq!(router.msg_counter.load(Ordering::Relaxed), 0);
+    }
+    // ========================================================================
+    // Phase 5b: QuorumEntry Tests (Network Fanout Ack)
+    // ========================================================================
+
+    /// Helper: build a QuorumEntry with custom required/timeout values.
+    fn _make_quorum_entry(required: usize, timeout_ms: u64) -> QuorumEntry {
+        QuorumEntry::new(
+            Addr::noop(),
+            &AckPolicy::any()
+                .with_quorum(required)
+                .with_timeout(Duration::from_millis(timeout_ms)),
+        )
+    }
+
+    #[test]
+    fn quorum_entry_initial_state() {
+        // Fresh entry: empty received set, required set from policy, not expired.
+        let entry = _make_quorum_entry(3, 60_000);
+        assert_eq!(entry.received.len(), 0);
+        assert_eq!(entry.required, 3);
+        assert!(!entry.is_expired(Duration::from_millis(60_000)));
+    }
+
+    #[test]
+    fn quorum_entry_is_expired_respects_timeout() {
+        // A freshly created entry is NOT expired under any reasonable timeout.
+        let entry = _make_quorum_entry(1, 60_000);
+        assert!(
+            !entry.is_expired(Duration::from_secs(60)),
+            "fresh entry should not be expired under 60s timeout"
+        );
+        // A 1ns timeout IS exceeded by the microseconds elapsed since creation.
+        assert!(
+            entry.is_expired(Duration::from_nanos(1)),
+            "1ns timeout should be exceeded by microsecond-level elapsed"
+        );
+    }
+
+    #[test]
+    fn quorum_entry_required_field_from_policy() {
+        // AckPolicy::any() → required=1
+        let entry_any = QuorumEntry::new(Addr::noop(), &AckPolicy::any());
+        assert_eq!(entry_any.required, 1);
+        // AckPolicy::all() → required=usize::MAX
+        let entry_all = QuorumEntry::new(Addr::noop(), &AckPolicy::all());
+        assert_eq!(entry_all.required, usize::MAX);
+        // AckPolicy::for_peer_count(N) → required=⌈N/2⌉ (majority)
+        assert_eq!(
+            QuorumEntry::new(Addr::noop(), &AckPolicy::for_peer_count(0)).required,
+            1
+        );
+        assert_eq!(
+            QuorumEntry::new(Addr::noop(), &AckPolicy::for_peer_count(5)).required,
+            3
+        );
+        assert_eq!(
+            QuorumEntry::new(Addr::noop(), &AckPolicy::for_peer_count(7)).required,
+            4
+        );
     }
 }
