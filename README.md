@@ -131,6 +131,98 @@ async fn main() {
 
 ---
 
+## Storage Backends
+
+Rod supports two persistent storage backends for the embedded database layer. Both implement the same `Storage` trait, so the rest of the codebase is unaware of which one is active. The wire protocol is backend-agnostic — nodes with different storage choices converge via the standard mesh.
+
+### redb (Default)
+
+**What**: Embedded ACID database, single-writer, fsync on every Put.
+
+**When to use**:
+- Single-node deployments
+- Low-to-moderate write throughput
+- You want the most mature, stable option
+- You don't want to think about it
+
+**Trade-offs**:
+- ✅ Battle-tested, single-crate, well-understood
+- ✅ fsync before ack = bulletproof durability
+- ❌ Single-writer serialization limits concurrent write throughput
+- ❌ Not ideal for high-fanout mesh workloads
+
+### Persy (Opt-In)
+
+**What**: Embedded segment-based store with per-transaction isolation and optional `background_ops` fsync offloading.
+
+**When to use**:
+- Multi-node meshes with high concurrent write fanout
+- Workloads where many writers hit disjoint keys simultaneously
+- You're benchmarking and Persy shows wins on your data
+
+**Trade-offs**:
+- ✅ Multiple writers proceed in parallel on disjoint keys
+- ✅ Optional `background_ops` for fsync offloading
+- ❌ Younger ecosystem, fewer Stack Overflow answers
+- ❌ Requires more careful substrate reading when debugging
+- ❌ Performance characteristics need your own benchmarks
+
+### Selection
+
+Build with the feature, then select at runtime via CLI flag:
+
+```bash
+# Default build — redb only
+cargo build --release
+
+# With Persy support
+cargo build --release --features persy
+
+# Run with redb (default)
+cargo run --release -- --port 4944 --redb-storage true
+
+# Run with Persy
+cargo run --release --features persy -- --port 4944 --persy-storage true
+
+# In-memory only (no persistence)
+cargo run --release -- --port 4944 --memory-storage true
+```
+
+The flags are mutually exclusive. `--redb-storage` is the default and works in any build. `--persy-storage` requires the `--features persy` build flag (the binary will error at startup otherwise).
+
+### Migration Between Backends
+
+The `rod migrate` subcommand converts between formats:
+
+```bash
+# Preview without writing
+rod migrate --from redb --to persy --source ./data.redb --target ./data.persy --dry-run
+
+# Execute migration
+rod migrate --from redb --to persy --source ./data.redb --target ./data.persy
+
+# Reverse direction
+rod migrate --from persy --to redb --source ./data.persy --target ./data.redb
+```
+
+Migration uses single-transaction-per-batch for safety and includes checksum verification. See `docs/migrations/migration-guide.md` for the full procedure including rollback.
+
+### Mixed Meshes
+
+Nodes with different storage backends interoperate transparently. A redb node, a Persy node, and an in-memory node form a valid mesh. The wire protocol carries the data; storage is a local choice.
+
+**Cross-backend mesh verified** by `tests/cross_backend_mesh_e2e.rs`: 2 redb nodes + 1 Persy node converge correctly under the standard Put/Get protocol.
+
+### Known Limitations
+
+- The `rod_meta_v1` metadata table from redb (last-write timestamps) is not preserved when migrating redb → Persy. This metadata is not currently used by the actor framework, so the loss is cosmetic.
+- The migration tool is single-threaded per batch. For datasets larger than ~100k records, run during a maintenance window.
+
+### Architecture Decision
+
+See `docs/adr/013-persy-storage-backend.md` for the full rationale, alternatives considered, and consequences. See `docs/plans/PERSY-STORAGE-ADAPTER.md` for the implementation plan and ship log.
+---
+
 ## Architecture
 
 Rod is built on an actor model with a central router. Every component — storage, network, graph nodes — is an actor communicating via typed messages over Tokio channels.
