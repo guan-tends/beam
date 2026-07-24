@@ -1,3 +1,7 @@
 /target
 .idea
 *_db
+
+# Criterion benchmark persistent state
+benches/_data/
+

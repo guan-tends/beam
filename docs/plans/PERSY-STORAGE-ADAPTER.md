@@ -219,7 +219,7 @@ for record in persy.scan("rod_nodes_v1") {
 - ADR-013 written and committed
 - README updated with migration CLI docs
 
-### Epic 5: Heavy Abusive Benchmarks (6-8h) — NEXT SESSION
+### Epic 5: Heavy Abusive Benchmarks — IN PROGRESS, see `docs/plans/EPIC-5-BENCHMARKS.md`
 **Goal**: Torture both backends. Publish numbers.
 
 **Tasks:**

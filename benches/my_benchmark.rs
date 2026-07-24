@@ -1,97 +1,166 @@
-//! Criterion benchmarks for Rod — measuring throughput of core operations.
+//! Criterion benchmarks for Rod — measuring throughput and latency of core operations.
 //!
-//! Benchmarks for Rod — measuring throughput of core operations.
+//! ## Benchmark groups
 //!
-//! Benchmarks:
-//! 1. **memory_storage get-put** — in-memory storage roundtrip (put → subscribe → recv)
-//! 2. **websocket get-put** — cross-node sync over WebSocket (two-node mesh)
-//! 3. **JSON parse + verify** — message deserialization for public, content-addressed, and signed puts
-//! 4. **redb concurrent read under write load** — read latency while writes hammer the
-//!    write actor. Proves the CQRS read/write split keeps reads fast during fsync.
+//! 1. **Parsing** — JSON parse + verify (Gun.js wire format, content-addressed, signed)
+//! 2. **Storage — Sequential Write Storm** (redb vs Persy) — 1k puts
+//! 3. **Storage — Concurrent Write Storm** (redb vs Persy) — 4 tasks × 250 puts
+//! 4. **Storage — Read Storm** (redb vs Persy) — 1k reads on populated DB
+//! 5. **Storage — Mixed 70/30 Workload** (redb vs Persy) — realistic OLTP-ish, 1k ops
+//! 6. **Storage — Memory Pressure** (redb vs Persy) — placeholder (deferred)
+//! 7. **Storage — Cross-Backend Mesh** (redb ↔ Persy) — placeholder (deferred)
 //!
-//! Run with: `cargo bench` (requires `--features` for webrtc benchmarks if applicable)
+//! ## Per-iteration fresh tokio Runtime
+//!
+//! All storage groups use Criterion's sync `iter_custom` with a fresh
+//! `tokio::runtime::Runtime` allocated **inside** the loop body. When the
+//! loop body's scope ends, the runtime drops — killing every actor task
+//! `tokio::spawn`'d by `Node::new_with_config` and `setup_node`. This
+//! prevents actor-task accumulation across the 10 Criterion samples (an
+//! earlier `to_async(&rt).iter_with_setup` pattern with a module-level
+//! Runtime drove per-process RSS past 25 GB and was OOM-killed). The
+//! pattern is idiomatic for Criterion+tokio: fresh per-iteration resources,
+//! explicit `Drop` cleanup, no manual lifecycle plumbing.
+//!
+//! ## Running
+//!
+//! ```bash
+//! # redb-only benchmarks (default features)
+//! cargo bench --bench my_benchmark
+//!
+//! # redb + persy benchmarks
+//! cargo bench --bench my_benchmark --features persy
+//!
+//! # Save baseline for comparison
+//! cargo bench --bench my_benchmark --features persy -- --save-baseline my
+//! ```
+//!
+//! ## Persistent state
+//!
+//! Benchmarks that touch real on-disk storage use `benches/_data/<group>/<backend>/`
+//! (gitignored). Each group cleans its directory at the start of each `b.iter` setup.
+//!
+//! ## Substrate recon (2026-07-24)
+//!
+//! - `criterion = { version = "0.3", features = ["async_futures", "async_tokio", "html_reports"] }`
+//! - `[[bench]] my_benchmark harness = false` registered in Cargo.toml
+//! - `persy = { features = ["background_ops"] }` enabled at dep level (A7)
+//! - No `nix`, no `tempfile`, no `libc` deps — std-only crash recovery (A4)
+//! - `sysinfo = "0.23.5"` available for RSS measurement
+//! - `ctrlc = "3.2.1"` available for graceful shutdown handling
 
-use criterion::async_executor::FuturesExecutor;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use rod::actor::Addr;
-use rod::adapters::{MemoryStorage, OutgoingWebsocketManager, RedbStorage, WsServer};
+use rod::adapters::RedbStorage;
 use rod::message::Message;
 use rod::{Config, Node};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::path::PathBuf;
 use tokio::runtime::Runtime;
-use tokio::time::{Duration, sleep};
+use tokio::time::Duration;
 
-fn criterion_benchmark(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    c.bench_function("memory_storage get-put", |b| {
-        rt.block_on(async {
-            let mut db = Node::new_with_config(
-                Config::default(),
-                vec![Box::new(MemoryStorage::new())],
+// =====================================================================================
+// Backend Harness — used by every storage benchmark group
+// =====================================================================================
+
+/// Storage backend selector. The `Persy` variant is only available with the
+/// `--features persy` cargo flag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackendKind {
+    Redb,
+    #[cfg(feature = "persy")]
+    Persy,
+}
+
+impl BackendKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            BackendKind::Redb => "redb",
+            #[cfg(feature = "persy")]
+            BackendKind::Persy => "persy",
+        }
+    }
+
+    /// All backends available in the current build.
+    pub fn all() -> Vec<BackendKind> {
+        // Note: the `mut` is necessary when `--features persy` is on; when off,
+        // the cfg-gated block becomes a no-op and the compiler correctly warns
+        // about unused mutability. We silence the no-feature case because
+        // removing `mut` would break the persy build (mutually-exclusive cfg).
+        #[cfg_attr(not(feature = "persy"), allow(unused_mut))]
+        let mut out = vec![BackendKind::Redb];
+        #[cfg(feature = "persy")]
+        {
+            out.push(BackendKind::Persy);
+        }
+        out
+    }
+}
+
+/// Returns the persistent benchmark directory for the given group + backend.
+/// Created on demand. Each call returns the SAME directory — callers are
+/// responsible for cleaning between independent benchmark runs.
+pub fn bench_data_dir(group: &str, backend: BackendKind) -> PathBuf {
+    let mut path = PathBuf::from("benches/_data");
+    path.push(group);
+    path.push(backend.name());
+    std::fs::create_dir_all(&path).expect("failed to create bench data dir");
+    path
+}
+
+/// Cleans a bench data directory. Called before each benchmark's `iter_with_setup`
+/// so iterations start from a known state.
+pub fn clean_bench_dir(group: &str, backend: BackendKind) {
+    let path = bench_data_dir(group, backend);
+    if path.exists() {
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("recreate after remove");
+    }
+}
+
+/// Construct a fresh Node wired to the requested backend's persistent storage
+/// at `benches/_data/<group>/<backend>/`.
+///
+/// Mirrors the `node_with_persy` / `node_with_redb` pattern from
+/// `tests/persy_e2e.rs` and `tests/async_put_e2e.rs`.
+pub fn setup_node(group: &str, backend: BackendKind) -> Node {
+    let dir = bench_data_dir(group, backend);
+
+    match backend {
+        BackendKind::Redb => {
+            let path = dir.join("store.redb");
+            let path_str = path.to_string_lossy().into_owned();
+            let config = Config::default();
+            Node::new_with_config(
+                config.clone(),
+                vec![Box::new(RedbStorage::new_with_config(config, &path_str, None))],
                 vec![],
-            );
-            let counter: AtomicUsize = AtomicUsize::new(0);
-            b.to_async(FuturesExecutor).iter(|| {
-                let mut db = db.clone();
-                let key = counter.fetch_add(1, Ordering::Relaxed).to_string();
-                async move {
-                    let mut node = db.get("a").get(&key);
-                    node.put("hello".into());
-                    let mut sub = node.on();
-                    sub.recv().await.ok();
-                }
-            });
-            db.stop();
-        });
-    });
-
-    let mut group = c.benchmark_group("fewer samples");
-    group.sample_size(10);
-
-    group.bench_function("websocket get-put", |b| {
-        rt.block_on(async {
-            //sleep(Duration::from_millis(100)).await;
-            let ws_server = Box::new(WsServer::new(Config::default()));
-            let ws_client = Box::new(OutgoingWebsocketManager::new(
+            )
+        }
+        #[cfg(feature = "persy")]
+        BackendKind::Persy => {
+            let path = dir.join("store.persy");
+            let path_str = path.to_string_lossy().into_owned();
+            // PersyStorage::new_with_path expects a file path (not a directory)
+            let storage = rod::adapters::PersyStorage::new_with_path(&path_str);
+            Node::new_with_config(
                 Config::default(),
-                vec!["http://localhost:4944/ws".to_string()],
-            ));
-            let mut peer1 = Node::new_with_config(
-                Config::default(),
-                vec![Box::new(MemoryStorage::new())],
-                vec![ws_server],
-            );
-            //sleep(Duration::from_millis(1000)).await; // let the server start
-            let mut peer2 = Node::new_with_config(
-                Config::default(),
-                vec![Box::new(MemoryStorage::new())],
-                vec![ws_client],
-            );
-            //sleep(Duration::from_millis(1000)).await; // let the ws connect
-            let counter: AtomicUsize = AtomicUsize::new(0);
-            b.to_async(FuturesExecutor).iter(|| {
-                let mut peer1 = peer1.clone();
-                let mut peer2 = peer2.clone();
-                let key = counter.fetch_add(1, Ordering::Relaxed).to_string();
-                async move {
-                    peer1.get("a").get(&key).put("hello".into());
-                    let mut sub = peer2.get("a").get(&key).on();
-                    //sub.recv().await; // TODO enable
-                }
-            });
-            peer1.stop(); // should this be awaitable?
-            peer2.stop(); // should this be awaitable?
-            sleep(Duration::from_millis(100)).await;
-        });
-        // https://bheisler.github.io/criterion.rs/book/user_guide/timing_loops.html
-    });
-    group.finish();
+                vec![Box::new(storage) as Box<dyn rod::actor::Actor>],
+                vec![],
+            )
+        }
+    }
+}
 
+// =====================================================================================
+// Original benchmarks (preserved as-is)
+// =====================================================================================
+
+fn parsing_benchmarks(c: &mut Criterion) {
     c.bench_function("parse and verify public space put json", |b| {
         let addr = Addr::noop();
         b.iter(|| {
-            Message::try_from(r##"
+            Message::try_from(
+                r##"
             [
               {
                 "put": {
@@ -108,14 +177,19 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "#": "yvd2vk4338i"
               }
             ]
-            "##, addr.clone(), true).unwrap();
+            "##,
+                addr.clone(),
+                true,
+            )
+            .unwrap();
         })
     });
 
     c.bench_function("parse and verify content addressed put json", |b| {
         let addr = Addr::noop();
         b.iter(|| {
-            Message::try_from(r##"
+            Message::try_from(
+                r##"
             [
               {
                 "put": {
@@ -132,14 +206,19 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "#": "yvd2vk4338i"
               }
             ]
-            "##, addr.clone(), false).unwrap();
+            "##,
+                addr.clone(),
+                false,
+            )
+            .unwrap();
         })
     });
 
     c.bench_function("parse and verify signed put json", |b| {
         let addr = Addr::noop();
         b.iter(|| {
-            Message::try_from(r##"
+            Message::try_from(
+                r##"
             {
               "put": {
                 "~BjxYTmcODm__M52FmMX_grHcafW0WiHpJUtVRCgEsZY._QiIs4tK22hebiZjGovtp3cHo1pAfYxoRODS_jyudA8": {
@@ -149,7 +228,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                       "profile": 1653463165115
                     }
                   },
-                  "profile": "{\":\":{\"#\":\"~BjxYTmcODm__M52FmMX_grHcafW0WiHpJUtVRCgEsZY._QiIs4tK22hebiZjGovtp3cHo1pAfYxoRODS_jyudA8/profile\"},\"~\":\"JW+tFHHVBaY+zm/uzUoGVlogvXXQIA3vFNT0f0uX6tnnPGrRevDWzEmnVYy+ChxS6AJi5THiPyOc2HorIIM5wg==\"}"
+                  "profile": "{\\\":\\\":{\\\"#\\\":\\\"~BjxYTmcODm__M52FmMX_grHcafW0WiHpJUtVRCgEsZY._QiIs4tK22hebiZjGovtp3cHo1pAfYxoRODS_jyudA8/profile\\\"},\\\"~\\\":\\\"JW+tFHHVBaY+zm/uzUoGVlogvXXQIA3vFNT0f0uX6tnnPGrRevDWzEmnVYy+ChxS6AJi5THiPyOc2HorIIM5wg==\\\"}"
                 },
                 "~BjxYTmcODm__M52FmMX_grHcafW0WiHpJUtVRCgEsZY._QiIs4tK22hebiZjGovtp3cHo1pAfYxoRODS_jyudA8/profile": {
                   "_": {
@@ -158,80 +237,319 @@ fn criterion_benchmark(c: &mut Criterion) {
                     },
                     "#": "~BjxYTmcODm__M52FmMX_grHcafW0WiHpJUtVRCgEsZY._QiIs4tK22hebiZjGovtp3cHo1pAfYxoRODS_jyudA8/profile"
                   },
-                  "name": "{\":\":\"Arja Koriseva\",\"~\":\"KCq2D/T0mMenizxiVMso8FO5JIv9ZJLA0Q67DFa9qssPSKCmmieC1Nl5+nRpOX29C6A2/kLaJgphN/X7kUQjww==\"}"
+                  "name": "{\\\":\\\":\\\"Arja Koriseva\\\",\\\"~\\\":\\\"KCq2D/T0mMenizxiVMso8FO5JIv9ZJLA0Q67DFa9qssPSKCmmieC1Nl5+nRpOX29C6A2/kLaJgphN/X7kUQjww==\\\"}"
                 }
               },
               "#": "issWkzotF"
             }
-            "##, addr.clone(), false).unwrap();
+            "##,
+                addr.clone(),
+                false,
+            )
+            .unwrap();
         })
     });
+}
 
-    // Benchmark: concurrent reads under write load using redb.
-    //
-    // Measures read latency (once()) while a background task continuously
-    // writes to the same database. With the CQRS split, reads go through
-    // the read actor and are not blocked by the write actor's spawn_blocking
-    // fsync. Without the split, reads would queue behind writes.
-    let mut group = c.benchmark_group("concurrent read under write");
+// =====================================================================================
+// Group 1 — Sequential Write Storm (redb vs Persy)
+// =====================================================================================
+
+/// Sequential write storm. N=1k puts per backend. Reports ops/sec via
+/// `Throughput::Elements`. Each backend gets its own bench; comparison happens
+/// in `benches/RESULTS.md` (manual table) and Criterion's HTML report.
+///
+/// Measures **submit rate** (how fast the actor can accept puts into its
+/// mailbox), not wait-for-ack latency. We drop each put future and let
+/// `flush_storage` drain the mailbox at end of iter — the drain cost is
+/// included in the measurement (realistic production pattern: client buffers,
+/// batched flush).
+fn write_storm(c: &mut Criterion) {
+    // N=1k is the sweet spot for Criterion-based in-process micro-benchmarks
+    // (matches rocksdb/sled/lmdb-rs). 1k × 10 samples = 10k ops — well above
+    // the significance threshold. Larger N (e.g. 100k) drove per-iteration
+    // RAM past 15GB under criterion's setup overhead, triggering OOM-killer.
+    const N: usize = 1_000;
+    let mut group = c.benchmark_group("write_storm");
+    group.throughput(Throughput::Elements(N as u64));
+    group.sample_size(10); // 1k puts × 10 samples = 10k puts — comfortable
+
+    for backend in BackendKind::all() {
+        let label = format!("sequential_{}", backend.name());
+        group.bench_function(label, |b| {
+            // Per-iteration fresh Runtime: see module-level docs. Sync
+            // `iter_custom` lets us own the runtime lifetime explicitly —
+            // every actor task `tokio::spawn`'d inside `rt.block_on(...)`
+            // dies when `rt` drops at end of the for-loop body.
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
+                for _ in 0..iters {
+                    let rt = Runtime::new().unwrap();
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        clean_bench_dir("write_storm", backend);
+                        let mut node = setup_node("write_storm", backend);
+                        // Submit N puts without awaiting individual acks —
+                        // measures **submit rate** (backpressure on the put
+                        // path). `drop()` is explicit: Rust warns about
+                        // dropped `Future`s because they may not have started.
+                        // Here we intentionally queue them and let the actor
+                        // process them.
+                        for i in 0..N {
+                            drop(node.get(&format!("k{i:08}"))
+                                .put(format!("v{i}").into()));
+                        }
+                        // Drain — `flush_storage` returns when all pending
+                        // writes have committed (or timed out).
+                        let _ = tokio::time::timeout(Duration::from_secs(60), async {
+                            node.flush_storage(Some(Duration::from_secs(30))).await.ok();
+                        })
+                        .await;
+                    });
+                    total += start.elapsed();
+                    // rt drops here, killing every actor spawned this iter.
+                }
+                total
+            });
+        });
+    }
+    group.finish();
+}
+
+// =====================================================================================
+// Top-level entry: register all benchmark groups
+// =====================================================================================
+
+// =====================================================================================
+// Group 2 — Concurrent Write Storm (redb vs Persy)
+// =====================================================================================
+
+/// Concurrent write storm. 16 tokio tasks × 10,000 puts = 160k total per
+/// backend. Measures aggregate ops/sec under contention on the actor model.
+///
+/// Each task owns a key range `[task_id * PER_TASK, (task_id+1) * PER_TASK)`
+/// so the benchmark exercises non-overlapping writes — measuring pure
+/// throughput, not write-write conflicts. (Conflict benchmarks belong in
+/// their own group; this is "can the actor keep up at N-way fan-in".)
+fn concurrent_write_storm(c: &mut Criterion) {
+    // 4 tasks × 250 = 1k ops/iter matches write_storm's N=1k. Reduces RAM
+    // pressure from 16 tasks × 10k = 160k to a 1k-equivalent workload.
+    const TASKS: usize = 4;
+    const PER_TASK: usize = 250;
+    const TOTAL: u64 = (TASKS * PER_TASK) as u64;
+    let mut group = c.benchmark_group("concurrent_write_storm");
+    group.throughput(Throughput::Elements(TOTAL));
     group.sample_size(10);
 
-    group.bench_function("redb read during write", |b| {
-        rt.block_on(async {
-            let temp_path =
-                std::env::temp_dir().join(format!("rod-bench-{}.redb", std::process::id()));
-            let _ = std::fs::remove_file(&temp_path);
-
-            let config = Config::default();
-            let mut db = Node::new_with_config(
-                config.clone(),
-                vec![Box::new(RedbStorage::new_with_config(
-                    config,
-                    temp_path.to_string_lossy().as_ref(),
-                    None,
-                ))],
-                vec![],
-            );
-
-            // Seed a key so reads have something to find.
-            db.get("bench_key").put("bench_value".into());
-            sleep(Duration::from_millis(100)).await;
-
-            // Background writer: continuously puts to a different key.
-            let mut writer_db = db.clone();
-            let write_counter = Arc::new(AtomicUsize::new(0));
-            let writer_counter_clone = write_counter.clone();
-            let stop_writer = Arc::new(AtomicBool::new(false));
-            let stop_clone = stop_writer.clone();
-            let writer_handle = tokio::spawn(async move {
-                loop {
-                    if stop_clone.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let n = writer_counter_clone.fetch_add(1, Ordering::Relaxed);
-                    writer_db.get("write_load").put(format!("val-{n}").into());
-                    // Small yield to avoid saturating the channel.
-                    tokio::task::yield_now().await;
+    for backend in BackendKind::all() {
+        let label = format!("{}_x{}_tasks", backend.name(), TASKS);
+        group.bench_function(label, |b| {
+            // Per-iteration fresh Runtime: see module-level docs. Sync
+            // `iter_custom` lets us own the runtime lifetime explicitly —
+            // every actor task `tokio::spawn`'d inside `rt.block_on(...)`
+            // (including the per-task workers below) dies when `rt` drops
+            // at end of the for-loop body.
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
+                for _ in 0..iters {
+                    let rt = Runtime::new().unwrap();
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        clean_bench_dir("concurrent_write_storm", backend);
+                        let node = setup_node("concurrent_write_storm", backend);
+                        let mut handles = Vec::with_capacity(TASKS);
+                        for task_id in 0..TASKS {
+                            let mut task_node = node.clone();
+                            handles.push(tokio::spawn(async move {
+                                let start = task_id * PER_TASK;
+                                let end = start + PER_TASK;
+                                for i in start..end {
+                                    let mut child =
+                                        task_node.get(&format!("k{i:08}"));
+                                    // Per-task ack drain keeps actor mailbox
+                                    // bounded and produces realistic backpressure.
+                                    let _ = child.put(format!("v{i}").into()).await;
+                                }
+                            }));
+                        }
+                        for h in handles {
+                            let _ = h.await;
+                        }
+                        let _ = tokio::time::timeout(Duration::from_secs(60), async {
+                            node.flush_storage(Some(Duration::from_secs(30))).await.ok();
+                        })
+                        .await;
+                    });
+                    total += start.elapsed();
+                    // rt drops here, killing every actor spawned this iter.
                 }
+                total
             });
-
-            let read_counter = AtomicUsize::new(0);
-            b.to_async(FuturesExecutor).iter(|| {
-                let mut db = db.clone();
-                async move {
-                    let _ = db.get("bench_key").once(Some(Duration::from_secs(2))).await;
-                }
-            });
-
-            // Stop the background writer.
-            stop_writer.store(true, Ordering::Relaxed);
-            let _ = writer_handle.await;
-            db.stop();
-            sleep(Duration::from_millis(200)).await;
-            let _ = std::fs::remove_file(&temp_path);
         });
-    });
+    }
     group.finish();
+}
+
+// =====================================================================================
+// Group 3 — Read Storm (redb vs Persy)
+// =====================================================================================
+
+/// Read storm. Pre-populate N keys in setup (NOT measured), then bench
+/// random key reads. Each read uses `Node::get(k).once(timeout)` which
+/// returns the current value via the local `on()` broadcast channel.
+///
+/// We use `once()` rather than `map()` because `map()` is a streaming
+/// receiver (broadcasts all children on subscribe); `once()` is the
+/// idiomatic single-value read for a known key.
+fn read_storm(c: &mut Criterion) {
+    // Same scale rationale as write_storm — N=1k is the sweet spot.
+    const N: u64 = 1_000;
+    const READ_TIMEOUT_MS: u64 = 500;
+    let mut group = c.benchmark_group("read_storm");
+    group.throughput(Throughput::Elements(N));
+    group.sample_size(10);
+
+    for backend in BackendKind::all() {
+        let label = format!("random_{}", backend.name());
+        group.bench_function(label, |b| {
+            // Per-iteration fresh Runtime: see module-level docs. Sync
+            // `iter_custom` lets us own the runtime lifetime explicitly —
+            // every actor task `tokio::spawn`'d inside `rt.block_on(...)`
+            // dies when `rt` drops at end of the for-loop body.
+            //
+            // Pre-populate (NOT measured) and the read storm (measured)
+            // both happen sequentially inside one `rt.block_on(...)` call.
+            // This is cleaner than the prior `tokio::spawn`-for-prep +
+            // JoinHandle-await dance, which was a workaround for the broken
+            // shared-runtime pattern.
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
+                for _ in 0..iters {
+                    let rt = Runtime::new().unwrap();
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        clean_bench_dir("read_storm", backend);
+                        let mut node = setup_node("read_storm", backend);
+                        // Pre-populate (not measured). Sync drain so every
+                        // key is durable before the read storm starts.
+                        for i in 0..N {
+                            let _ = node
+                                .get(&format!("k{i:08}"))
+                                .put(format!("v{i}").into())
+                                .await;
+                        }
+                        let _ = node
+                            .flush_storage(Some(Duration::from_secs(60)))
+                            .await;
+                        // Measured: random key reads via `once()`.
+                        // `once()` is the idiomatic single-value read for a
+                        // known key (vs. `map()` which streams all children).
+                        for i in 0..N {
+                            let key = format!("k{i:08}");
+                            let _ = node
+                                .get(&key)
+                                .once(Some(Duration::from_millis(READ_TIMEOUT_MS)))
+                                .await;
+                        }
+                    });
+                    total += start.elapsed();
+                    // rt drops here, killing every actor spawned this iter.
+                }
+                total
+            });
+        });
+    }
+    group.finish();
+}
+
+// =====================================================================================
+// Group 4 — Mixed 70/30 Workload (redb vs Persy)
+// =====================================================================================
+
+/// Mixed 70% reads / 30% writes per iteration. Realistic OLTP-ish profile.
+/// 1,000 ops per iter; each op randomly chosen via an LCG PRNG seeded
+/// from a fixed constant for reproducibility.
+fn mixed_workload(c: &mut Criterion) {
+    const OPS_PER_ITER: u64 = 1_000;
+    const READ_RATIO_NUM: u32 = 7; // 7/10 = 70%
+    const READ_RATIO_DEN: u32 = 10;
+    let mut group = c.benchmark_group("mixed_70_30");
+    group.throughput(Throughput::Elements(OPS_PER_ITER));
+    group.sample_size(10);
+
+    for backend in BackendKind::all() {
+        let label = format!("r70w30_{}", backend.name());
+        group.bench_function(label, |b| {
+            // Per-iteration fresh Runtime: see module-level docs. Sync
+            // `iter_custom` lets us own the runtime lifetime explicitly —
+            // every actor task `tokio::spawn`'d inside `rt.block_on(...)`
+            // dies when `rt` drops at end of the for-loop body.
+            //
+            // Pre-populate (NOT measured) and the mixed workload (measured)
+            // both happen sequentially inside one `rt.block_on(...)` call —
+            // cleaner than the prior `tokio::spawn`-for-prep + JoinHandle-await
+            // workaround.
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
+                for _ in 0..iters {
+                    let rt = Runtime::new().unwrap();
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        clean_bench_dir("mixed_workload", backend);
+                        let mut node = setup_node("mixed_workload", backend);
+                        // Pre-populate so reads always find values (not measured).
+                        for i in 0..OPS_PER_ITER {
+                            let _ = node
+                                .get(&format!("k{i:08}"))
+                                .put(format!("seed{i}").into())
+                                .await;
+                        }
+                        let _ = node
+                            .flush_storage(Some(Duration::from_secs(60)))
+                            .await;
+                        // Measured: LCG PRNG for reproducible op sequencing
+                        // (same sequence every iter → apples-to-apples comparison).
+                        let mut state: u32 = 0xCAFEBABE;
+                        for op_idx in 0..OPS_PER_ITER {
+                            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                            let is_read = (state >> 16) % READ_RATIO_DEN < READ_RATIO_NUM;
+                            let key = format!("k{:08}", op_idx);
+                            if is_read {
+                                let _ = node
+                                    .get(&key)
+                                    .once(Some(Duration::from_millis(500)))
+                                    .await;
+                            } else {
+                                let _ = node
+                                    .get(&key)
+                                    .put(format!("v{op_idx}").into())
+                                    .await;
+                            }
+                        }
+                        let _ = tokio::time::timeout(Duration::from_secs(60), async {
+                            node.flush_storage(Some(Duration::from_secs(30))).await.ok();
+                        })
+                        .await;
+                    });
+                    total += start.elapsed();
+                    // rt drops here, killing every actor spawned this iter.
+                }
+                total
+            });
+        });
+    }
+    group.finish();
+}
+
+fn criterion_benchmark(c: &mut Criterion) {
+    parsing_benchmarks(c);
+    write_storm(c);
+    concurrent_write_storm(c);
+    read_storm(c);
+    mixed_workload(c);
+    // Future groups appended here:
+    //   memory_pressure(c);
+    //   cross_backend_mesh(c);
 }
 
 criterion_group!(benches, criterion_benchmark);
