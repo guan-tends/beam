@@ -41,7 +41,7 @@ mod memory_storage;
 mod multicast;
 mod redb_storage;
 #[cfg(feature = "persy")]
-mod persy_storage;
+pub mod persy_storage;
 #[cfg(feature = "webrtc")]
 mod webrtc;
 mod ws_client;

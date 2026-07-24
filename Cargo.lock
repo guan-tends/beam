@@ -2242,6 +2242,7 @@ dependencies = [
  "str0m",
  "stun",
  "sysinfo",
+ "thiserror 1.0.30",
  "tokio",
  "tokio-native-tls",
  "tokio-stream",
