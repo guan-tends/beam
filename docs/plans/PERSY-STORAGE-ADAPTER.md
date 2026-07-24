@@ -4,8 +4,9 @@
 **Version 1.1 — SHIPPED UPDATE 2026-07-22 (afternoon)**
 **Branch**: merged to `master`
 **Author**: Guan (Keeper of the Threshold)
-**Status**: ✅ **EPICS 0-4 SHIPPED**. v0.5.0 (adapter) and v0.6.0 (migration tool) both tagged. Five-clean-runs discipline: 5/5 pre-merge + 5/5 post-merge for each = 70+70 test executions green.
-**Next**: Epic 6 (ADR-013 + docs) opens next session. Epic 5 (heavy benchmarks) follows.
+**Status**: ✅ **EPICS 0-4 + 6 SHIPPED**. v0.5.0 (adapter) and v0.6.0 (migration tool) both tagged. Epic 6 docs (ADR-013 + README + architecture + migration guide) complete. Five-clean-runs discipline: 5/5 pre-merge + 5/5 post-merge for each adapter + migration tool = 140 test executions green.
+**Epic 6 done**: ADR-013 + README Storage Backends + architecture.md + migration-guide.md all shipped.
+**Next**: Epic 5 (Heavy Abusive Benchmarks) is the only remaining epic. Opens when you call it.
 
 ---
 
@@ -235,7 +236,7 @@ for record in persy.scan("rod_nodes_v1") {
 
 **Acceptance**: All benchmarks run clean. Results documented. Verdict: Persy shows measurable improvement on concurrent workloads OR documented why it doesn't.
 
-### Epic 6: ADR-013 + Documentation (2-3h) — IN PROGRESS
+### Epic 6: ADR-013 + Documentation (2-3h) — DONE ✅
 **Goal**: Decision record + user-facing docs.
 
 **Tasks:**
