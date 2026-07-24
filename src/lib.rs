@@ -1,6 +1,7 @@
 pub mod ack;
 pub mod actor;
 pub mod adapters;
+pub mod migration;
 mod dup;
 #[doc(hidden)]
 pub mod message; // pub for benchmarking

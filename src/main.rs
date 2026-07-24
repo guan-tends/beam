@@ -163,7 +163,124 @@ async fn main() {
                         .takes_value(true),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("migrate")
+                .about("Migrate storage between redb and persy backends")
+                .arg(
+                    Arg::with_name("from")
+                        .long("from")
+                        .value_name("BACKEND")
+                        .help("Source backend: 'redb' or 'persy'")
+                        .takes_value(true)
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("to")
+                        .long("to")
+                        .value_name("BACKEND")
+                        .help("Target backend: 'redb' or 'persy'")
+                        .takes_value(true)
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("source")
+                        .long("source")
+                        .value_name("PATH")
+                        .help("Path to source database file")
+                        .takes_value(true)
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("target")
+                        .long("target")
+                        .value_name("PATH")
+                        .help("Path to target database file (will be created)")
+                        .takes_value(true)
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name("batch-size")
+                        .long("batch-size")
+                        .value_name("N")
+                        .help("Records per batch (default: 1000)")
+                        .takes_value(true),
+                )
+                .arg(
+                    Arg::with_name("force")
+                        .long("force")
+                        .help("Overwrite target if it already exists"),
+                )
+                .arg(
+                    Arg::with_name("dry-run")
+                        .long("dry-run")
+                        .help("Preview the migration without writing"),
+                ),
+        )
         .get_matches();
+
+    #[cfg(feature = "persy")]
+    {
+        if let Some(migrate_matches) = matches.subcommand_matches("migrate") {
+            use rod::migration::{migrate, Backend, MigrateOpts};
+            use std::path::PathBuf;
+
+            // Parse backend selector
+            let parse_backend = |s: &str| -> Result<Backend, String> {
+                match s {
+                    "redb" => Ok(Backend::Redb),
+                    "persy" => Ok(Backend::Persy),
+                    _ => Err(format!("Unknown backend '{}': expected 'redb' or 'persy'", s)),
+                }
+            };
+
+            let from_str = migrate_matches.value_of("from").unwrap();
+            let to_str = migrate_matches.value_of("to").unwrap();
+            let source_path = PathBuf::from(migrate_matches.value_of("source").unwrap());
+            let target_path = PathBuf::from(migrate_matches.value_of("target").unwrap());
+
+            let from = parse_backend(from_str)
+                .unwrap_or_else(|e| panic!("Invalid --from value: {}", e));
+            let to = parse_backend(to_str)
+                .unwrap_or_else(|e| panic!("Invalid --to value: {}", e));
+
+            let batch_size: usize = migrate_matches
+                .value_of("batch-size")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1000);
+
+            let force = migrate_matches.is_present("force");
+            let dry_run = migrate_matches.is_present("dry-run");
+
+            let opts = MigrateOpts {
+                from,
+                to,
+                source_path,
+                target_path,
+                batch_size,
+                force,
+                dry_run,
+            };
+
+            eprintln!(
+                "Migrating {} -> {} (batch_size={}, dry_run={})",
+                from.as_str(),
+                to.as_str(),
+                opts.batch_size,
+                opts.dry_run
+            );
+
+            match migrate(&opts) {
+                Ok(report) => {
+                    println!("Migration complete: {} records migrated", report.records_migrated);
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("Migration failed: {:?}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
 
     if let Some(matches) = matches.subcommand_matches("start") {
         // Note: a future refactor could extract match → Config conversion into a

@@ -55,16 +55,23 @@ use crate::types::*;
 
 /// Segment name holding all node records. Single segment, mirrors the
 /// single-table redb pattern (`rod_nodes_v1`).
-const ROD_NODES: &str = "rod_nodes_v1";
+pub(crate) const ROD_NODES: &str = "rod_nodes_v1";
 
 /// On-disk record encoding. Persy stores opaque bytes, so we encode
 /// the node_id alongside its children so a Get scan can find the
 /// right record without an auxiliary index (V0 tradeoff; V1 may add
 /// a proper Persy index for O(log N) lookups).
-#[derive(Serialize, Deserialize, Default, Debug)]
-struct NodeRecord {
-    node_id: String,
-    children: Children,
+/// On-disk record encoding. Persy stores opaque bytes, so we encode
+/// the node_id alongside its children so a Get scan can find the
+/// right record without an auxiliary index (V0 tradeoff; V1 may add
+/// a proper Persy index for O(log N) lookups).
+///
+/// `pub(crate)` so [`crate::migration`] can reuse it for format
+/// translation without redefining the wire format.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub(crate) struct NodeRecord {
+    pub(crate) node_id: String,
+    pub(crate) children: Children,
 }
 
 // (No shared unwrap macro here. Persy's `scan`/`solve_segment_id` results
