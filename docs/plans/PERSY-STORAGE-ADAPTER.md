@@ -4,8 +4,8 @@
 **Version 1.1 — SHIPPED UPDATE 2026-07-22 (afternoon)**
 **Branch**: merged to `master`
 **Author**: Guan (Keeper of the Threshold)
-**Status**: ✅ **EPICS 1-3 SHIPPED**. v0.5.0 tagged. Five-clean-runs discipline: 5/5 pre-merge + 5/5 post-merge = 70/70 green.
-**Next**: Epic 4 (Migration Tool) opens next session.
+**Status**: ✅ **EPICS 0-4 SHIPPED**. v0.5.0 (adapter) and v0.6.0 (migration tool) both tagged. Five-clean-runs discipline: 5/5 pre-merge + 5/5 post-merge for each = 70+70 test executions green.
+**Next**: Epic 6 (ADR-013 + docs) opens next session. Epic 5 (heavy benchmarks) follows.
 
 ---
 
@@ -56,7 +56,7 @@ Already completed:
 - redb adapter pattern documented
 - Cargo feature gate strategy confirmed
 
-### Epic 1: StorageBackend Enum & Config (2-3h)
+### Epic 1: StorageBackend Enum & Config (2-3h) — SUPERSEDED ✅
 **Goal**: Type-safe backend selection. Both adapters' spawn path reads from one config.
 
 **Tasks:**
@@ -74,7 +74,9 @@ pub enum StorageBackend {
 
 **Acceptance**: Both backends constructible via single API. Default unchanged.
 
-### Epic 2: PersyAdapter Implementation (6-8h)
+**SUPERSEDED 2026-07-22**: After substrate recon and Freeman feedback ("ensure alignment with workflow, goals, and plans"), the StorageBackend enum approach was folded in favor of **CLI flags** that mirror the existing `--memory-storage` / `--redb-storage` pattern. Both `--persy-storage` and `--redb-storage` flags live in `src/main.rs`, preserving the suckless principle of "if the existing channel already serves this need, don't add a new abstraction." See v0.5.0 ship log for the pivot reasoning. The functionality (selectable backends) is preserved — the implementation (enum vs flags) was the only change.
+
+### Epic 2: PersyAdapter Implementation (6-8h) — DONE ✅ (v0.5.0)
 **Goal**: Working Persy storage adapter, parity with redb on happy path.
 
 **Tasks:**
@@ -89,7 +91,7 @@ pub enum StorageBackend {
 
 **Acceptance**: `cargo test -p rod --features persy --lib` all green. Persy adapter passes same unit tests as redb adapter.
 
-### Epic 3: E2E Tests & Cross-Backend Mesh (4-6h)
+### Epic 3: E2E Tests & Cross-Backend Mesh (4-6h) — DONE ✅ (v0.5.0)
 **Goal**: Two redb nodes + one Persy node in same mesh work correctly.
 
 **Tasks:**
@@ -101,7 +103,7 @@ pub enum StorageBackend {
 
 **Acceptance**: 5/5 clean runs. Cross-backend mesh is the killer test — proves wire-format opacity.
 
-### Epic 4: Migration Tool (4-5h, 2-3 sessions) — REVISED 2026-07-22
+### Epic 4: Migration Tool (4-5h, 2-3 sessions) — DONE ✅ (v0.6.0)
 
 **Goal**: Users can switch backends in production. Bidirectional redb↔persy migration with resumability and validation.
 
@@ -216,7 +218,7 @@ for record in persy.scan("rod_nodes_v1") {
 - ADR-013 written and committed
 - README updated with migration CLI docs
 
-### Epic 5: Heavy Abusive Benchmarks (6-8h)
+### Epic 5: Heavy Abusive Benchmarks (6-8h) — NEXT SESSION
 **Goal**: Torture both backends. Publish numbers.
 
 **Tasks:**
@@ -233,7 +235,7 @@ for record in persy.scan("rod_nodes_v1") {
 
 **Acceptance**: All benchmarks run clean. Results documented. Verdict: Persy shows measurable improvement on concurrent workloads OR documented why it doesn't.
 
-### Epic 6: ADR-013 + Documentation (2-3h)
+### Epic 6: ADR-013 + Documentation (2-3h) — IN PROGRESS
 **Goal**: Decision record + user-facing docs.
 
 **Tasks:**
