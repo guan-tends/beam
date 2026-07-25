@@ -190,7 +190,6 @@ If migration is interrupted (SIGKILL, power loss), the target database may be pa
 
 ## Architecture References
 
-- **Plan**: `docs/plans/PERSY-STORAGE-ADAPTER.md` — Epic 4 implementation details
 - **ADR**: `docs/adr/013-persy-storage-backend.md` — why Persy is opt-in, not default
 - **Tests**: `tests/migration_e2e.rs` — 6 e2e tests covering all paths
 

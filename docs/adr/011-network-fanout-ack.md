@@ -249,7 +249,6 @@ fn handle_quorum_timeout_reaper(&mut self) {
 
 ## References
 
-- Plan file: `docs/plans/ROD-FOLLOWUP-A-NETWORK-FANOUT-ACK.md` (1480L)
 - Built-in memory: `rod_followup_a_network_fanout_ack_plan` (REVISED v2)
 - Sibling built-ins:
   - `rod_sentinel_drain_pattern_observation` — cross-cutting pattern analysis

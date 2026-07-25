@@ -1,6 +1,6 @@
 # BEAM Architecture
 
-This document provides the deep architectural view of BEAM — the Rust port of Gun.js. For quick-start usage, see `README.md`. For implementation plans and ship logs, see `docs/plans/`. For architectural decisions, see `docs/adr/`.
+This document provides the deep architectural view of BEAM — the Rust port of Gun.js. For quick-start usage, see `README.md`. Implementation plans and ship logs are preserved in git history. For architectural decisions, see `docs/adr/`.
 
 ## High-Level Actor Model
 
@@ -171,8 +171,6 @@ Major decisions live in `docs/adr/`:
 ## Cross-References
 
 - `README.md` — user-facing quick start and feature overview
-- `docs/plans/PERSY-STORAGE-ADAPTER.md` — Persy arc plan and ship log
-- `docs/plans/ROD-FOLLOWUP-A-NETWORK-FANOUT-ACK.md` — Put quorum design
 - `docs/migrations/migration-guide.md` — `beam migrate` procedure
 - `tests/cross_backend_mesh_e2e.rs` — 2 redb + 1 Persy mesh verification
 - `tests/persy_e2e.rs` — single-node Persy CRUD tests

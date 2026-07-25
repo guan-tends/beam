@@ -185,7 +185,6 @@ cargo check -p beam --tests
 - `src/node.rs::new_with_config` — Arc creation site (Phase 3)
 - `src/router.rs::Router::new` — Arc consumer site (Phase 3)
 - `tests/send_metrics_e2e.rs` — Arc-sharing e2e tests
-- Plan: `docs/plans/ROD-FOLLOWUP-B-SEND-METRICS.md`
 
 ---
 

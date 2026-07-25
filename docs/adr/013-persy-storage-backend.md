@@ -120,7 +120,6 @@ The verdict will land in `benches/RESULTS.md` after Epic 5. This ADR will be ame
 
 ## Cross-References
 
-- Plan doc: `docs/plans/PERSY-STORAGE-ADAPTER.md` (Epics 0-4 shipped, E5 next, E6 in progress)
 - v0.5.0 ship log: `.serena/memories/beam/v0.5.0-persy-storage-adapter-shipped.md`
 - v0.6.0 ship log: `.serena/memories/beam/v0.6.0-persy-migration-tool-shipped.md`
 - Always-reply invariant: commit `b6a3d7b` in `src/adapters/redb_storage.rs`
