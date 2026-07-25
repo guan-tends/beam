@@ -9,8 +9,8 @@
 
 #[tokio::main]
 async fn main() {
-    use rod::Node;
-    use rod::Value;
+    use beam::Node;
+    use beam::Value;
 
     // FLAT
     let mut db = Node::new();

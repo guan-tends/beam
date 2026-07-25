@@ -26,7 +26,7 @@
 //! ## Example
 //!
 //! ```
-//! use rod::types::{Value, NodeData};
+//! use beam::types::{Value, NodeData};
 //!
 //! let v = Value::Text("hello".into());
 //! assert_eq!(v.to_string(), "hello");

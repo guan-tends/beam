@@ -16,7 +16,7 @@
 //! # Example
 //!
 //! ```ignore
-//! let pair = rod::sea::generate_pair().await.unwrap();
+//! let pair = beam::sea::generate_pair().await.unwrap();
 //! assert!(!pair.pub_key.is_empty());
 //! assert!(!pair.priv_key.is_empty());
 //! assert!(pair.epub_key.is_some());

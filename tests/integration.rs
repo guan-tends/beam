@@ -33,8 +33,8 @@ mod common;
 mod tests {
     use crate::common;
     use log::info;
-    use rod::adapters::*;
-    use rod::{Config, Node, Value};
+    use beam::adapters::*;
+    use beam::{Config, Node, Value};
     use std::sync::Once;
     use tokio::time::{Duration, timeout};
 
@@ -493,11 +493,11 @@ mod tests {
     #[tokio::test]
     async fn redb_storage_persists() {
         let _ = env_logger::try_init();
-        use rod::adapters::RedbStorage;
+        use beam::adapters::RedbStorage;
         use std::time::Duration;
         use tokio::time::sleep;
 
-        let temp_path = std::env::temp_dir().join("rod-redb-test.ron");
+        let temp_path = std::env::temp_dir().join("beam-redb-test.ron");
         let _ = std::fs::remove_file(&temp_path);
 
         let config = Config::default();
@@ -556,11 +556,11 @@ mod tests {
 
     #[tokio::test]
     async fn redb_storage_flush_returns_ok() {
-        use rod::adapters::RedbStorage;
+        use beam::adapters::RedbStorage;
         use std::time::Duration;
         use tokio::time::sleep;
 
-        let temp_path = std::env::temp_dir().join("rod-redb-flush.ron");
+        let temp_path = std::env::temp_dir().join("beam-redb-flush.ron");
         let _ = std::fs::remove_file(&temp_path);
 
         let config = Config::default();
@@ -593,11 +593,11 @@ mod tests {
     /// read returns `None` (data not yet committed).
     #[tokio::test]
     async fn flush_acts_as_write_barrier() {
-        use rod::adapters::RedbStorage;
+        use beam::adapters::RedbStorage;
         use std::time::Duration;
 
         let temp_path =
-            std::env::temp_dir().join(format!("rod-flush-barrier-{}.redb", std::process::id()));
+            std::env::temp_dir().join(format!("beam-flush-barrier-{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&temp_path);
 
         let config = Config::default();
