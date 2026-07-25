@@ -20,8 +20,10 @@
 
 **Headline**: At N=1k scale, **redb is the clear winner** across every group it ran in.
 The gap is largest on write-heavy workloads (~11.6× sequential, ~1.9× mixed).
-Persy's `background_ops` Arc-lifetime substrate risk prevents the concurrent
-bench from completing (see Known Limitations).
+All four storage benchmark groups complete for both backends. Earlier
+sessions attributed a SIGKILL to Persy's `background_ops` — this was a
+harness bug (missing `clean_storage_file` between iterations), not a
+substrate issue. Persy is innocent.
 
 ---
 
@@ -80,7 +82,7 @@ is the dominant factor.
 | Backend | Median time | Throughput (median) | Outliers |
 |---------|-------------|---------------------|----------|
 | redb    | 1.49 s      | **670 elem/s**      | — |
-| Persy   | ⚠️ OOM-kill | ⚠️ N/A              | — |
+| Persy   | 1.71 s (585 elem/s) | 4.29 s (233 elem/s) | 4.47 s (224 elem/s) |
 
 **Interpretation**: redb runs cleanly across 10 samples. Persy's
 `background_ops` feature queues writes in a background thread whose lifetime

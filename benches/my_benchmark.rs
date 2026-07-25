@@ -10,17 +10,32 @@
 //! 6. **Storage — Memory Pressure** (redb vs Persy) — placeholder (deferred)
 //! 7. **Storage — Cross-Backend Mesh** (redb ↔ Persy) — placeholder (deferred)
 //!
-//! ## Per-iteration fresh tokio Runtime
+//! ## Per-iteration fresh state (three-step teardown)
 //!
-//! All storage groups use Criterion's sync `iter_custom` with a fresh
-//! `tokio::runtime::Runtime` allocated **inside** the loop body. When the
-//! loop body's scope ends, the runtime drops — killing every actor task
-//! `tokio::spawn`'d by `Node::new_with_config` and `setup_node`. This
-//! prevents actor-task accumulation across the 10 Criterion samples (an
-//! earlier `to_async(&rt).iter_with_setup` pattern with a module-level
-//! Runtime drove per-process RSS past 25 GB and was OOM-killed). The
-//! pattern is idiomatic for Criterion+tokio: fresh per-iteration resources,
-//! explicit `Drop` cleanup, no manual lifecycle plumbing.
+//! All storage groups use Criterion's sync `iter_custom` with:
+//!
+//! 1. **Fresh database file** — `clean_storage_file()` removes the
+//!    previous iteration's database file so each iteration starts with
+//!    an empty database. Without this, the file (and its in-memory page
+//!    cache) accumulates across iterations, causing linear RSS growth
+//!    (~700 MB/iter). Industry standard: fresh state per DB benchmark.
+//! 2. **Fresh tokio Runtime** — allocated inside the loop body so actor
+//!    tasks from one iteration cannot survive into the next.
+//! 3. **Two-step actor teardown** before the Runtime drops:
+//!    a. `node.stop()` — sends stop signals to child actors.
+//!    b. `rt.shutdown_timeout(2s)` — blocks until all spawned tasks
+//!       finish, so actors holding `Arc<Persy>` are reaped.
+//!
+//! All groups await individual puts (`.put(v).await`) rather than
+//! fire-and-forget (`drop(put())`). The fire-and-forget pattern flooded
+//! the actor mailbox with unbounded unawaited Put messages, causing
+//! Persy OOM during Criterion warmup. Awaiting provides natural
+//! backpressure and matches the concurrent_write_storm pattern.
+//!
+//! History: earlier versions were killed by OOM-killer at ~25 GB RSS
+//! due to (a) shared module-level Runtime, (b) missing `shutdown_timeout`,
+//! (c) missing `clean_storage_file`, and (d) fire-and-forget puts.
+//! See [`criterion_tokio_iter_custom_runtime_pattern`] scar in memory.
 //!
 //! ## Running
 //!
@@ -114,6 +129,32 @@ pub fn clean_bench_dir(group: &str, backend: BackendKind) {
     if path.exists() {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("recreate after remove");
+    }
+}
+
+/// Remove the storage file between benchmark iterations.
+///
+/// Standard practice for database benchmarks — each iteration starts
+/// with a fresh database so we measure write-to-fresh-DB throughput,
+/// not write-to-already-large-DB throughput. Without this, RSS grows
+/// linearly with iteration count because the database file (and its
+/// in-memory page cache) accumulates across iterations.
+fn clean_storage_file(group: &str, backend: BackendKind) {
+    let dir = bench_data_dir(group, backend);
+    match backend {
+        BackendKind::Redb => {
+            let path = dir.join("store.redb");
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        #[cfg(feature = "persy")]
+        BackendKind::Persy => {
+            let path = dir.join("store.persy");
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
     }
 }
 
@@ -288,26 +329,47 @@ fn write_storm(c: &mut Criterion) {
                     let start = std::time::Instant::now();
                     rt.block_on(async {
                         clean_bench_dir("write_storm", backend);
+                        clean_storage_file("write_storm", backend);
                         let mut node = setup_node("write_storm", backend);
-                        // Submit N puts without awaiting individual acks —
-                        // measures **submit rate** (backpressure on the put
-                        // path). `drop()` is explicit: Rust warns about
-                        // dropped `Future`s because they may not have started.
-                        // Here we intentionally queue them and let the actor
-                        // process them.
+                        // Submit N puts with per-put ack drain — measures
+                        // **commit rate** (each put is awaited so the actor
+                        // processes it before the next is submitted). This
+                        // matches the concurrent_write_storm pattern and
+                        // prevents mailbox flooding that caused Persy OOM
+                        // when puts were fire-and-forget.
                         for i in 0..N {
-                            drop(node.get(&format!("k{i:08}"))
-                                .put(format!("v{i}").into()));
+                            let _ = node.get(&format!("k{i:08}"))
+                                .put(format!("v{i}").into())
+                                .await;
                         }
-                        // Drain — `flush_storage` returns when all pending
-                        // writes have committed (or timed out).
+                        // Drain any remaining writes with a flush.
                         let _ = tokio::time::timeout(Duration::from_secs(60), async {
                             node.flush_storage(Some(Duration::from_secs(30))).await.ok();
                         })
                         .await;
+                        // Two-step teardown — both pieces are required:
+                        //
+                        // 1. `node.stop()` aborts the actor's child `JoinHandle`s
+                        //    and sends a stop signal to child actors so their
+                        //    `run()` loop exits cleanly.
+                        // 2. `rt.shutdown_timeout(...)` blocks until every
+                        //    spawned task on this Runtime has actually finished.
+                        //    Without this, `tokio::spawn`'d tasks (including
+                        //    the now-stopped actors) keep running on the
+                        //    Runtime's worker threads after `rt` drops,
+                        //    holding `Arc<Persy>` alive across samples and
+                        //    causing RSS to grow linearly with sample count.
+                        //
+                        // `node.stop()` alone is necessary but not sufficient
+                        // — the actor tasks need to be reaped by the Runtime
+                        // before it drops.
+                        //
+                        // See `Node::stop`, `ActorContext::stop`, and
+                        // `tokio::runtime::Runtime::shutdown_timeout`.
+                        node.stop();
                     });
+                    rt.shutdown_timeout(Duration::from_secs(2));
                     total += start.elapsed();
-                    // rt drops here, killing every actor spawned this iter.
                 }
                 total
             });
@@ -356,7 +418,8 @@ fn concurrent_write_storm(c: &mut Criterion) {
                     let start = std::time::Instant::now();
                     rt.block_on(async {
                         clean_bench_dir("concurrent_write_storm", backend);
-                        let node = setup_node("concurrent_write_storm", backend);
+                        clean_storage_file("concurrent_write_storm", backend);
+                        let mut node = setup_node("concurrent_write_storm", backend);
                         let mut handles = Vec::with_capacity(TASKS);
                         for task_id in 0..TASKS {
                             let mut task_node = node.clone();
@@ -379,9 +442,11 @@ fn concurrent_write_storm(c: &mut Criterion) {
                             node.flush_storage(Some(Duration::from_secs(30))).await.ok();
                         })
                         .await;
+                        // Two-step teardown — see comment in `write_storm`.
+                        node.stop();
                     });
+                    rt.shutdown_timeout(Duration::from_secs(2));
                     total += start.elapsed();
-                    // rt drops here, killing every actor spawned this iter.
                 }
                 total
             });
@@ -429,6 +494,7 @@ fn read_storm(c: &mut Criterion) {
                     let start = std::time::Instant::now();
                     rt.block_on(async {
                         clean_bench_dir("read_storm", backend);
+                        clean_storage_file("read_storm", backend);
                         let mut node = setup_node("read_storm", backend);
                         // Pre-populate (not measured). Sync drain so every
                         // key is durable before the read storm starts.
@@ -451,9 +517,11 @@ fn read_storm(c: &mut Criterion) {
                                 .once(Some(Duration::from_millis(READ_TIMEOUT_MS)))
                                 .await;
                         }
+                        // Two-step teardown — see comment in `write_storm`.
+                        node.stop();
                     });
+                    rt.shutdown_timeout(Duration::from_secs(2));
                     total += start.elapsed();
-                    // rt drops here, killing every actor spawned this iter.
                 }
                 total
             });
@@ -496,6 +564,7 @@ fn mixed_workload(c: &mut Criterion) {
                     let start = std::time::Instant::now();
                     rt.block_on(async {
                         clean_bench_dir("mixed_workload", backend);
+                        clean_storage_file("mixed_workload", backend);
                         let mut node = setup_node("mixed_workload", backend);
                         // Pre-populate so reads always find values (not measured).
                         for i in 0..OPS_PER_ITER {
@@ -530,9 +599,11 @@ fn mixed_workload(c: &mut Criterion) {
                             node.flush_storage(Some(Duration::from_secs(30))).await.ok();
                         })
                         .await;
+                        // Two-step teardown — see comment in `write_storm`.
+                        node.stop();
                     });
+                    rt.shutdown_timeout(Duration::from_secs(2));
                     total += start.elapsed();
-                    // rt drops here, killing every actor spawned this iter.
                 }
                 total
             });
