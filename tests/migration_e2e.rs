@@ -28,7 +28,7 @@
 #![cfg(feature = "persy")]
 
 use rod::migration::{migrate, Backend, MigrateOpts};
-use rod::types::{Children, NodeData, Value};
+use rod::types::{NodeData, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
@@ -60,7 +60,7 @@ fn temp_path(name: &str, ext: &str) -> PathBuf {
 /// being a single-child `Children` map (so we test N records, not 1 record
 /// with N children).
 fn write_redb_records(path: &std::path::Path, count: usize) -> Result<usize, String> {
-    use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+    use redb::{Database, TableDefinition};
     const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
 
     let db = Database::create(path).map_err(|e| format!("create: {:?}", e))?;
@@ -153,19 +153,18 @@ async fn e2e_redb_to_persy_basic() {
     assert_eq!(report.records_migrated, 100);
     assert_eq!(report.source_count, 100);
 
-    // Verify target has 100 records
-    eprintln!("DIAG: target path = {:?}", target);
-    eprintln!("DIAG: target file size = {} bytes", std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0));
-
-    // CRITICAL: drop everything from migration before counting
+    // `migrate()` commits all batches before returning; `drop(opts)` releases
+    // the migration's Persy handles so we can open a fresh reader. No sleep
+    // needed — the sibling test `diag_persy_count_basic` does the same
+    // migration and counts immediately without sleeping, proving the
+    // commit is synchronous.
     drop(opts);
-    std::thread::sleep(std::time::Duration::from_millis(500));
 
     let target_count = count_persy_records(&target).expect("count persy");
-    eprintln!("DIAG: post-sleep count = {}", target_count);
     assert_eq!(target_count, 100, "Persy target should have 100 records");
 
-    // Leave files for inspection (don't cleanup in diag)
+    cleanup(&source);
+    cleanup(&target);
 }
 
 /// Test 2: Reverse direction (persy → redb) for rollback paths.
@@ -221,7 +220,7 @@ async fn e2e_migration_preserves_children() {
 
     // Write a 3-level nested graph:
     // root → { level1_a → { level2_a → { leaf1, leaf2 } } }
-    use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+    use redb::{Database, TableDefinition};
     const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
 
     let db = Database::create(&source).expect("create");
@@ -357,7 +356,7 @@ async fn e2e_migration_dry_run_no_write() {
 /// Diagnostic: write 100 records to Persy via migration, count via fresh open.
 #[tokio::test]
 async fn diag_persy_count_basic() {
-    use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+    use redb::{Database, TableDefinition};
 
     const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
 

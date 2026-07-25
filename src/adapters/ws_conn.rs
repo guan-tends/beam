@@ -88,16 +88,16 @@ impl Actor for WsConn {
             let _ = receiver
                 .try_for_each(|msg| {
                     if let Ok(s) = msg.to_text() {
+                        debug!("WsConn received: {}", s);
                         if let Ok(msgs) =
                             Message::try_from(s, ctx2.addr.clone(), allow_public_space)
                         {
-                            debug!("ws_conn in {}", s);
                             for msg in msgs.into_iter() {
                                 if ctx2.router.send(msg).is_err() {
-                                    error!("failed to send incoming message to node");
+                                    error!("failed to forward incoming message to router");
                                 }
                             }
-                        };
+                        }
                     }
                     future::ok(())
                 })

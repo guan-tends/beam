@@ -287,6 +287,13 @@ impl Actor for WsServer {
         }
     }
 
+    /// WsServer is a relay adapter — it fans out Puts to all connected
+    /// WebSocket clients. Must return `true` so the Router adds it to
+    /// `server_peers` and relays Put messages through it.
+    fn subscribe_to_everything(&self) -> bool {
+        true
+    }
+
     async fn stopping(&mut self, _context: &ActorContext) {
         info!("WsServer stopping");
     }
