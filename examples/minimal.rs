@@ -6,7 +6,7 @@
 //! cargo run --example minimal
 //! ```
 
-use rod::{Node, adapters::*};
+use beam::{Node, adapters::*};
 
 #[tokio::main]
 async fn main() {
@@ -21,7 +21,7 @@ async fn main() {
     let mut sub = node.on();
     eprintln!("F: recv");
     match sub.recv().await {
-        Ok(rod::Value::Text(s)) => eprintln!("G: RECEIVED = {}", s),
+        Ok(beam::Value::Text(s)) => eprintln!("G: RECEIVED = {}", s),
         Ok(other) => eprintln!("G: other = {:?}", other),
         Err(e) => eprintln!("G: error = {}", e),
     }

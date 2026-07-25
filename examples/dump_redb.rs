@@ -2,7 +2,7 @@
 //!
 //! Usage:
 //! ```bash
-//! cargo run --example dump_redb -- /path/to/rod.redb
+//! cargo run --example dump_redb -- /path/to/beam.redb
 //! ```
 //! Prints all node IDs, their children, update timestamps, and value types.
 
@@ -21,7 +21,7 @@ fn main() {
         let (k, v) = entry.unwrap();
         let node_id: String = k.value().to_string();
         let bytes = v.value();
-        let children: std::collections::BTreeMap<String, rod::types::NodeData> =
+        let children: std::collections::BTreeMap<String, beam::types::NodeData> =
             match bincode::deserialize(bytes) {
                 Ok(c) => c,
                 Err(e) => {

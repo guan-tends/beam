@@ -8,19 +8,19 @@
 //!
 //! ```bash
 //! # Start with defaults (redb storage, websocket server on default port)
-//! cargo run --bin rod
+//! cargo run --bin beam
 //!
 //! # Start with custom port and outgoing peers
-//! cargo run --bin rod -- start --port 8080 --peers wss://peer1.example.com,wss://peer2.example.com
+//! cargo run --bin beam -- start --port 8080 --peers wss://peer1.example.com,wss://peer2.example.com
 //!
 //! # Start with TLS
-//! cargo run --bin rod -- start --cert-path /path/cert.pem --key-path /path/key.pem
+//! cargo run --bin beam -- start --cert-path /path/cert.pem --key-path /path/key.pem
 //!
 //! # Use in-memory storage only (no persistence)
-//! cargo run --bin rod -- start --memory-storage true --redb-storage false
+//! cargo run --bin beam -- start --memory-storage true --redb-storage false
 //!
 //! # Disable public space (require content-hash addressing or user signatures)
-//! cargo run --bin rod -- start --allow-public-space false
+//! cargo run --bin beam -- start --allow-public-space false
 //! ```
 //!
 //! # Environment Variables
@@ -35,17 +35,17 @@
 //! | `--peers` | `PEERS` | (none) |
 //! | `--multicast` | `MULTICAST` | false |
 //! | `--redb-storage` | `REDB_STORAGE` | true |
-//! | `--redb-path` | `REDB_PATH` | rod.redb |
+//! | `--redb-path` | `REDB_PATH` | beam.redb |
 //! | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true |
 //! | `--stats` | `STATS` | true |
 
 extern crate clap;
 use clap::{App, Arg, SubCommand};
-use rod::actor::Actor;
-use rod::adapters::{
+use beamdb::actor::Actor;
+use beamdb::adapters::{
     MemoryStorage, Multicast, OutgoingWebsocketManager, RedbStorage, WsServer, WsServerConfig,
 };
-use rod::{Config, Node};
+use beamdb::{Config, Node};
 
 #[tokio::main]
 async fn main() {
@@ -64,7 +64,7 @@ async fn main() {
         )
         .subcommand(
             SubCommand::with_name("start")
-                .about("runs the rod server")
+                .about("runs the beam server")
                 .arg(
                     Arg::with_name("ws-server")
                         .long("ws-server")
@@ -141,7 +141,7 @@ async fn main() {
                         .env("REDB_PATH")
                         .value_name("PATH")
                         .help("Path to the redb database file")
-                        .default_value("rod.redb")
+                        .default_value("beam.redb")
                         .takes_value(true),
                 )
                 .arg(
@@ -221,7 +221,7 @@ async fn main() {
     #[cfg(feature = "persy")]
     {
         if let Some(migrate_matches) = matches.subcommand_matches("migrate") {
-            use rod::migration::{migrate, Backend, MigrateOpts};
+            use beamdb::migration::{migrate, Backend, MigrateOpts};
             use std::path::PathBuf;
 
             // Parse backend selector

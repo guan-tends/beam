@@ -9,12 +9,12 @@
 
 ## Context
 
-Rod's actor model routes messages between `Node` and `Router` via
+BEAM's actor model routes messages between `Node` and `Router` via
 `tokio::sync::mpsc` channels. When the receiver side is slow or its
 queue fills, `mpsc::Sender::send` returns `Err(SendError)` and the
 message is **silently dropped** unless the caller inspects the Result.
 
-In a distributed graph database like Rod, a silent dropped send is a
+In a distributed graph database like BEAM, a silent dropped send is a
 correctness hazard: a `Put` that fails to enqueue leaves the writer
 thinking the data was committed when in fact it was lost.
 
@@ -107,7 +107,7 @@ been updated.
 
 ### Compilation
 ```
-cargo check -p rod --tests
+cargo check -p beam --tests
 0 errors. 6 pre-existing warnings (unrelated to this commit).
 ```
 
@@ -119,8 +119,8 @@ cargo check -p rod --tests
    one Arc handle is visible via another (production use case).
 
 ### Test Results
-- `cargo test -p rod --lib`: **225/225 pass**
-- `cargo test -p rod --test send_metrics_e2e`: **3/3 pass**
+- `cargo test -p beam --lib`: **225/225 pass**
+- `cargo test -p beam --test send_metrics_e2e`: **3/3 pass**
 - **5 consecutive clean runs of full suite** (lib + e2e): all green.
   Zero flakes. The `no_flakey_merges` discipline held.
 
@@ -185,7 +185,6 @@ cargo check -p rod --tests
 - `src/node.rs::new_with_config` — Arc creation site (Phase 3)
 - `src/router.rs::Router::new` — Arc consumer site (Phase 3)
 - `tests/send_metrics_e2e.rs` — Arc-sharing e2e tests
-- Plan: `docs/plans/ROD-FOLLOWUP-B-SEND-METRICS.md`
 
 ---
 

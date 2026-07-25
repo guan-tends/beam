@@ -106,8 +106,8 @@ impl AddrReceiver {
 /// # Example
 ///
 /// ```no_run
-/// use rod::actor::{Actor, ActorContext};
-/// use rod::message::Message;
+/// use beam::actor::{Actor, ActorContext};
+/// use beam::message::Message;
 /// use async_trait::async_trait;
 ///
 /// struct EchoActor;
@@ -362,8 +362,8 @@ impl ActorContext {
 /// # Sending Messages
 ///
 /// ```no_run
-/// use rod::actor::Addr;
-/// use rod::message::Message;
+/// use beam::actor::Addr;
+/// use beam::message::Message;
 ///
 /// // addr.send(msg) returns Result<(), ()>
 /// // Err(()) means the actor's channel is closed (actor stopped)

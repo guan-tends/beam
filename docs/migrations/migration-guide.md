@@ -1,6 +1,6 @@
 # Storage Migration Guide
 
-How to move data between Rod's storage backends (`redb` ↔ `Persy`) using the `rod migrate` CLI subcommand.
+How to move data between BEAM's storage backends (`redb` ↔ `Persy`) using the `beam migrate` CLI subcommand.
 
 ## Overview
 
@@ -18,10 +18,10 @@ The migration tool reads records from a source database (redb or Persy) and writ
 
 ```bash
 # 1. Preview (always do this first)
-rod migrate --from redb --to persy --source ./data.redb --target ./data.persy --dry-run
+beam migrate --from redb --to persy --source ./data.redb --target ./data.persy --dry-run
 
 # 2. Execute (if preview looks right)
-rod migrate --from redb --to persy --source ./data.redb --target ./data.persy
+beam migrate --from redb --to persy --source ./data.redb --target ./data.persy
 
 # 3. Verify (start a new node against the target)
 cargo run --release --features persy -- --port 4944 --persy-storage true --persy-path ./data.persy
@@ -30,7 +30,7 @@ cargo run --release --features persy -- --port 4944 --persy-storage true --persy
 ## CLI Reference
 
 ```bash
-rod migrate \
+beam migrate \
   --from <redb|persy> \
   --to <redb|persy> \
   --source <PATH> \
@@ -68,7 +68,7 @@ kill -TERM <pid>
 ### 2. Dry-run preview
 
 ```bash
-rod migrate --from redb --to persy --source ./data.redb --target ./data.persy --dry-run
+beam migrate --from redb --to persy --source ./data.redb --target ./data.persy --dry-run
 ```
 
 The dry-run mode:
@@ -79,13 +79,13 @@ The dry-run mode:
 
 **Always run this first.** It catches:
 - Wrong file paths
-- Incompatible formats (e.g., trying to migrate a non-Rod database)
+- Incompatible formats (e.g., trying to migrate a non-BEAM database)
 - Insufficient disk space
 
 ### 3. Execute the migration
 
 ```bash
-rod migrate --from redb --to persy --source ./data.redb --target ./data.persy
+beam migrate --from redb --to persy --source ./data.redb --target ./data.persy
 ```
 
 The tool will:
@@ -114,7 +114,7 @@ curl http://localhost:4944/<known-soul>
 **Roll back**: The source database is untouched. If verification fails:
 ```bash
 # Reverse migration
-rod migrate --from persy --to redb --source ./data.persy --target ./data.redb.recovered
+beam migrate --from persy --to redb --source ./data.persy --target ./data.redb.recovered
 
 # Or just keep using the original source database
 ```
@@ -190,7 +190,6 @@ If migration is interrupted (SIGKILL, power loss), the target database may be pa
 
 ## Architecture References
 
-- **Plan**: `docs/plans/PERSY-STORAGE-ADAPTER.md` — Epic 4 implementation details
 - **ADR**: `docs/adr/013-persy-storage-backend.md` — why Persy is opt-in, not default
 - **Tests**: `tests/migration_e2e.rs` — 6 e2e tests covering all paths
 

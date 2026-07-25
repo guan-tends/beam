@@ -48,14 +48,14 @@
 //! `Value::Bit(true)` (timeout) is covered by the unit tests in
 //! `src/node.rs::tests::decode_quorum_payload_*`.
 //!
-//! Run with: `cargo test -p rod --test quorum_e2e -- --test-threads=1`
+//! Run with: `cargo test -p beam --test quorum_e2e -- --test-threads=1`
 
 #![allow(clippy::needless_return)]
 
-use rod::Node;
-use rod::ack::{AckPolicy, ReplicationStatus};
-use rod::actor::Actor;
-use rod::adapters::MemoryStorage;
+use beam::Node;
+use beam::ack::{AckPolicy, ReplicationStatus};
+use beam::actor::Actor;
+use beam::adapters::MemoryStorage;
 use std::time::Duration;
 
 /// **Test 1**: `put_quorum` with `AckPolicy::any()` succeeds against a single
@@ -100,7 +100,7 @@ async fn e2e_put_quorum_succeeds_with_local_ack() {
         .await;
     assert_eq!(
         got,
-        Some(rod::types::Value::Text(
+        Some(beam::types::Value::Text(
             "e2e_quorum_local_value".to_string()
         )),
         "value should be readable after put_quorum resolves"
@@ -155,7 +155,7 @@ async fn e2e_put_quorum_majority_policy_completes_single_node() {
         .await;
     assert_eq!(
         got,
-        Some(rod::types::Value::Text(
+        Some(beam::types::Value::Text(
             "e2e_quorum_majority_value".to_string()
         )),
         "value should be readable after put_quorum resolves"

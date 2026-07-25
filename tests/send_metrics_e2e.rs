@@ -21,14 +21,14 @@
 //! | e2e_node_and_router_share_metrics_arc         | Node + Router Arcs observe same counters |
 //! | e2e_dropped_send_records_in_shared_metrics    | Drop is visible via Node handle          |
 
-use rod::Node;
+use beam::Node;
 use std::sync::Arc;
 
 /// A fresh Node exposes counters at zero.
 #[tokio::test]
 async fn e2e_metrics_starts_at_zero() {
     let node = Node::new();
-    let metrics: Arc<rod::metrics::Metrics> = node.metrics();
+    let metrics: Arc<beam::metrics::Metrics> = node.metrics();
 
     let snap = metrics.snapshot();
     assert_eq!(snap.dropped_sends, 0, "fresh node must have zero drops");

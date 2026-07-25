@@ -31,18 +31,18 @@
 //! All tests in this file require the `persy` feature:
 //!
 //! ```bash
-//! cargo test -p rod --features persy --test persy_e2e
+//! cargo test -p beam --features persy --test persy_e2e
 //! ```
 
 #![cfg(feature = "persy")]
 
-use rod::actor::Actor;
-use rod::types::Value;
+use beam::actor::Actor;
+use beam::types::Value;
 use std::env;
 use std::time::Duration;
 
 /// Build a unique Persy file path. Each test gets its own file under
-/// `/tmp/rod-persy-{name}-{pid}-{nanos}.persy`.
+/// `/tmp/beam-persy-{name}-{pid}-{nanos}.persy`.
 fn unique_persy_path(test_name: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -50,7 +50,7 @@ fn unique_persy_path(test_name: &str) -> String {
         .as_nanos();
     env::temp_dir()
         .join(format!(
-            "rod-persy-{}-{}-{}.persy",
+            "beam-persy-{}-{}-{}.persy",
             test_name,
             std::process::id(),
             nanos
@@ -61,11 +61,11 @@ fn unique_persy_path(test_name: &str) -> String {
 }
 
 /// Build a `Node` wired to a fresh `PersyStorage` at `path`.
-fn node_with_persy(path: &str) -> rod::Node {
-    use rod::adapters::PersyStorage;
-    use rod::Config;
+fn node_with_persy(path: &str) -> beam::Node {
+    use beam::adapters::PersyStorage;
+    use beam::Config;
     let storage = PersyStorage::new_with_path(path);
-    rod::Node::new_with_config(
+    beam::Node::new_with_config(
         Config::default(),
         vec![Box::new(storage) as Box<dyn Actor>],
         vec![],

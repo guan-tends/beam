@@ -38,7 +38,7 @@
 //! # Usage
 //!
 //! ```no_run
-//! use rod::metrics::Metrics;
+//! use beam::metrics::Metrics;
 //! use std::sync::Arc;
 //!
 //! let metrics = Arc::new(Metrics::new());
