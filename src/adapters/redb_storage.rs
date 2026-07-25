@@ -75,8 +75,8 @@ macro_rules! unwrap_or_return {
 /// # Example
 ///
 /// ```ignore
-/// use rod::adapters::RedbStorage;
-/// use rod::Config;
+/// use beam::adapters::RedbStorage;
+/// use beam::Config;
 ///
 /// let storage = RedbStorage::new_with_config(Config::default(), "my-db.redb", None);
 /// ```
@@ -97,13 +97,13 @@ impl Clone for RedbStorage {
 }
 
 impl RedbStorage {
-    /// Creates a new redb storage at the default path `rod.redb`.
+    /// Creates a new redb storage at the default path `beam.redb`.
     ///
     /// # Panics
     ///
     /// Panics if the database cannot be created or opened.
     pub fn new() -> Self {
-        Self::new_with_config(Config::default(), "rod.redb", None)
+        Self::new_with_config(Config::default(), "beam.redb", None)
     }
 
     /// Creates a new redb storage with explicit config and path.
@@ -508,7 +508,7 @@ mod tests {
     use super::*;
 
     fn create_test_storage(suffix: &str) -> RedbStorage {
-        let path = format!("/tmp/rod-test-{}-{}.redb", std::process::id(), suffix);
+        let path = format!("/tmp/beam-test-{}-{}.redb", std::process::id(), suffix);
         RedbStorage::new_with_config(Config::default(), &path, None)
     }
 

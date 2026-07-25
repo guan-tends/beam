@@ -1,4 +1,4 @@
-# Deploying Rod
+# Deploying BEAM
 
 > *Production deployment guide. Every command, port, and configuration option below is verified against the actual source code.*
 
@@ -17,13 +17,13 @@ cargo build --release
 cargo build --release --features webrtc
 
 # Binary locations after build:
-#   target/release/rod                — main server binary
+#   target/release/beam                — main server binary
 #   target/release/beam-sea-keygen   — session key generator utility
 ```
 
 ### Cross-Compilation
 
-Rod uses `ring` (for ECDSA), which requires a C compiler for the target platform. For cross-compilation, ensure you have the appropriate target toolchain installed.
+BEAM uses `ring` (for ECDSA), which requires a C compiler for the target platform. For cross-compilation, ensure you have the appropriate target toolchain installed.
 
 ---
 
@@ -35,19 +35,19 @@ A relay node accepts WebSocket connections from peers and synchronizes data betw
 
 ```bash
 # Start with default config: redb storage, WebSocket on port 4944
-./target/release/rod -- start --port 4944
+./target/release/beam -- start --port 4944
 ```
 
 This starts:
 - **WebSocket server** on port 4944 (accepts peer connections at `ws://your-host:4944/ws`)
 - **Web UI** on port 4945 (serves `/peer_id` and `/stats/*`)
-- **redb persistent storage** at `./rod.redb`
+- **redb persistent storage** at `./beam.redb`
 
 ### With WebRTC (Direct P2P)
 
 ```bash
 # Enable WebRTC data channels for direct peer connections
-./target/release/rod --features webrtc -- start --port 4944
+./target/release/beam --features webrtc -- start --port 4944
 ```
 
 This adds:
@@ -59,9 +59,9 @@ This adds:
 
 ```bash
 # Enable WSS (WebSocket Secure) and HTTPS web UI
-./target/release/rod -- start --port 4944 \
-  --cert-path /etc/rod/cert.pem \
-  --key-path /etc/rod/key.pem
+./target/release/beam -- start --port 4944 \
+  --cert-path /etc/beam/cert.pem \
+  --key-path /etc/beam/key.pem
 ```
 
 TLS is handled natively by the `WsServer` adapter via `tokio-native-tls`. The certificate must be in PEM/PKCS8 format.
@@ -70,7 +70,7 @@ TLS is handled natively by the `WsServer` adapter via `tokio-native-tls`. The ce
 
 ```bash
 # Connect to existing relay peers on startup
-./target/release/rod -- start --port 4944 \
+./target/release/beam -- start --port 4944 \
   --peers wss://relay1.example.com:8443/ws,wss://relay2.example.com:8443/ws
 ```
 
@@ -80,7 +80,7 @@ The `OutgoingWebsocketManager` connects to each peer URL and maintains the conne
 
 ```bash
 # Enable UDP multicast for local network peer discovery
-./target/release/rod -- start --port 4944 --multicast true
+./target/release/beam -- start --port 4944 --multicast true
 ```
 
 Uses multicast group `224.0.0.123:6969`. Peers on the same LAN automatically discover and sync with each other. **Disable on public-facing servers** — multicast is for trusted local networks only.
@@ -89,7 +89,7 @@ Uses multicast group `224.0.0.123:6969`. Peers on the same LAN automatically dis
 
 ```bash
 # Use ephemeral in-memory storage (data lost on restart)
-./target/release/rod -- start --port 4944 \
+./target/release/beam -- start --port 4944 \
   --memory-storage true \
   --redb-storage false
 ```
@@ -99,7 +99,7 @@ Uses multicast group `224.0.0.123:6969`. Peers on the same LAN automatically dis
 ```bash
 # Reject unsigned writes to public space
 # Only user-signed (~{pub}) and content-addressed (#) data accepted
-./target/release/rod -- start --port 4944 \
+./target/release/beam -- start --port 4944 \
   --allow-public-space false
 ```
 
@@ -119,7 +119,7 @@ This matches Gun.js `opt.enforce` semantics. Useful for relay nodes that should 
 | `--multicast` | `MULTICAST` | false | Enable UDP multicast LAN discovery |
 | `--memory-storage` | `MEMORY_STORAGE` | false | Enable in-memory storage |
 | `--redb-storage` | `REDB_STORAGE` | true | Enable redb persistent storage |
-| `--redb-path` | `REDB_PATH` | `rod.redb` | Path to redb database file |
+| `--redb-path` | `REDB_PATH` | `beam.redb` | Path to redb database file |
 | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true | Accept unsigned writes to public nodes |
 | `--stats` | `STATS` | true | Expose stats endpoint on web UI |
 
@@ -140,20 +140,20 @@ All flags can be set via environment variables (uppercase, underscore-separated)
 ## Systemd Service
 
 ```ini
-# /etc/systemd/system/rod.service
+# /etc/systemd/system/beam.service
 [Unit]
-Description=Rod P2P Graph Database Relay
+Description=BEAM P2P Graph Database Relay
 After=network.target
 
 [Service]
 Type=simple
-User=rod
-Group=rod
-ExecStart=/usr/local/bin/rod -- start \
+User=beam
+Group=beam
+ExecStart=/usr/local/bin/beam -- start \
   --port 4944 \
-  --redb-path /var/lib/rod/data.redb \
+  --redb-path /var/lib/beam/data.redb \
   --peers wss://relay1.example.com:8443/ws
-WorkingDirectory=/var/lib/rod
+WorkingDirectory=/var/lib/beam
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
@@ -170,23 +170,23 @@ WantedBy=multi-user.target
 
 ```bash
 # Create user and data directory
-sudo useradd -r -s /usr/sbin/nologin -d /var/lib/rod rod
-sudo mkdir -p /var/lib/rod
-sudo chown rod:rod /var/lib/rod
+sudo useradd -r -s /usr/sbin/nologin -d /var/lib/beam beam
+sudo mkdir -p /var/lib/beam
+sudo chown beam:beam /var/lib/beam
 
 # Install binary
-sudo cp target/release/rod /usr/local/bin/rod
+sudo cp target/release/beam /usr/local/bin/beam
 sudo cp target/release/beam-sea-keygen /usr/local/bin/
 
 # Install service
-sudo cp rod.service /etc/systemd/system/
+sudo cp beam.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable rod
-sudo systemctl start rod
+sudo systemctl enable beam
+sudo systemctl start beam
 
 # Check status
-sudo systemctl status rod
-journalctl -u rod -f
+sudo systemctl status beam
+journalctl -u beam -f
 ```
 
 ---
@@ -203,7 +203,7 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/rod /usr/local/bin/rod
+COPY --from=builder /app/target/release/beam /usr/local/bin/beam
 COPY --from=builder /app/target/release/beam-sea-keygen /usr/local/bin/beam-sea-keygen
 
 # Default port
@@ -214,10 +214,10 @@ EXPOSE 4945
 VOLUME ["/data"]
 
 ENV RUST_LOG=info
-ENV REDB_PATH=/data/rod.redb
+ENV REDB_PATH=/data/beam.redb
 
-ENTRYPOINT ["rod"]
-CMD ["--", "start", "--port", "4944", "--redb-path", "/data/rod.redb"]
+ENTRYPOINT ["beam"]
+CMD ["--", "start", "--port", "4944", "--redb-path", "/data/beam.redb"]
 ```
 
 ### docker-compose.yml
@@ -225,13 +225,13 @@ CMD ["--", "start", "--port", "4944", "--redb-path", "/data/rod.redb"]
 ```yaml
 version: "3.8"
 services:
-  rod:
+  beam:
     build: .
     ports:
       - "4944:4944"
       - "4945:4945"
     volumes:
-      - rod-data:/data
+      - beam-data:/data
     environment:
       - RUST_LOG=info
       - ALLOW_PUBLIC_SPACE=false
@@ -239,7 +239,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  rod-data:
+  beam-data:
 ```
 
 ### Running
@@ -252,7 +252,7 @@ docker-compose up -d
 docker-compose logs -f
 
 # Generate a session key
-docker-compose exec rod beam-sea-keygen
+docker-compose exec beam beam-sea-keygen
 ```
 
 ---
@@ -276,16 +276,16 @@ export BEAM_SEA_SESSION_KEY=$(beam-sea-keygen)
 
 # Store in secrets manager (examples)
 # systemd credentials:
-echo "$BEAM_SEA_SESSION_KEY" | sudo systemd-creds encrypt - rod-session.key
+echo "$BEAM_SEA_SESSION_KEY" | sudo systemd-creds encrypt - beam-session.key
 
 # Docker secrets:
 echo "$BEAM_SEA_SESSION_KEY" | docker secret create rod_session_key -
 ```
 
-**Session files** contain encrypted private keys. Protect the session directory (`~/.config/rod/sessions/`) with filesystem permissions:
+**Session files** contain encrypted private keys. Protect the session directory (`~/.config/beam/sessions/`) with filesystem permissions:
 
 ```bash
-chmod 700 ~/.config/rod/sessions/
+chmod 700 ~/.config/beam/sessions/
 ```
 
 ### Storage Security
@@ -301,7 +301,7 @@ SEA certificates enable delegated trust — an authority can issue time-limited 
 
 ```rust
 // Issue a certificate
-let cert = rod::sea::certify(
+let cert = beam::sea::certify(
     &["alice_pub_key", "bob_pub_key"],     // authorized certificants
     Some(&json!({"e": 9999999999999.0,     // expiry timestamp
                   "r": ".*",                // read regex
@@ -310,8 +310,8 @@ let cert = rod::sea::certify(
 ).await?;
 
 // Verify a certificate
-let payload = rod::sea::verify_certificate(&cert, &authority_pub_key)?;
-let is_authorized = rod::sea::is_pubkey_certified(&payload, &alice_pub_key);
+let payload = beam::sea::verify_certificate(&cert, &authority_pub_key)?;
+let is_authorized = beam::sea::is_pubkey_certified(&payload, &alice_pub_key);
 ```
 
 ---
@@ -327,33 +327,33 @@ curl -s http://localhost:4945/peer_id
 websocat ws://localhost:4944/ws
 
 # Check systemd service
-systemctl status rod
+systemctl status beam
 
 # Check logs
-journalctl -u rod -f --since "1 hour ago"
+journalctl -u beam -f --since "1 hour ago"
 ```
 
 ---
 
 ## Logging
 
-Rod uses `env_logger` (initialized via `env_logger::init()` in `main.rs`). Control verbosity with `RUST_LOG`:
+BEAM uses `env_logger` (initialized via `env_logger::init()` in `main.rs`). Control verbosity with `RUST_LOG`:
 
 ```bash
 # Error only
-RUST_LOG=error ./rod -- start
+RUST_LOG=error ./beam -- start
 
 # Info (default)
-RUST_LOG=info ./rod -- start
+RUST_LOG=info ./beam -- start
 
 # Debug (verbose — includes message routing, dedup decisions, peer management)
-RUST_LOG=debug ./rod -- start
+RUST_LOG=debug ./beam -- start
 
 # Trace (everything — includes every message received)
-RUST_LOG=trace ./rod -- start
+RUST_LOG=trace ./beam -- start
 
 # Filter by module
-RUST_LOG=rod::router=debug,rod::node=info ./rod -- start
+RUST_LOG=beam::router=debug,beam::node=info ./beam -- start
 ```
 
 ---
@@ -387,7 +387,7 @@ Peer A ──→ Relay 1 ←──→ Relay 2 ←──→ Peer B
 ### Storage Sizing
 
 - `MemoryStorage`: bounded only by available RAM
-- `RedbStorage`: the `rod.redb` file grows with data. Monitor disk usage. The file does not auto-shrink on deletes — run `redb` compaction periodically (requires a maintenance window).
+- `RedbStorage`: the `beam.redb` file grows with data. Monitor disk usage. The file does not auto-shrink on deletes — run `redb` compaction periodically (requires a maintenance window).
 
 ---
 
@@ -403,12 +403,12 @@ The `WsServer` periodically reports WebSocket connection count to the node's sta
 
 ### Prometheus / Grafana
 
-Rod does not have built-in Prometheus metrics. The `msg_counter` atomic in `Router` tracks total messages processed but is not yet exposed. A future implementation could expose this via the web UI server.
+BEAM does not have built-in Prometheus metrics. The `msg_counter` atomic in `Router` tracks total messages processed but is not yet exposed. A future implementation could expose this via the web UI server.
 
 For now, use log-based monitoring:
 ```bash
 # Count messages per second
-journalctl -u rod -f --since "1 min ago" | grep "incoming message" | wc -l
+journalctl -u beam -f --since "1 min ago" | grep "incoming message" | wc -l
 ```
 
 ---
@@ -419,13 +419,13 @@ journalctl -u rod -f --since "1 min ago" | grep "incoming message" | wc -l
 
 ```bash
 # Stop the node gracefully (flushes pending writes)
-systemctl stop rod
+systemctl stop beam
 
 # Copy the database file
-cp /var/lib/rod/data.redb /backup/rod-$(date +%Y%m%d).redb
+cp /var/lib/beam/data.redb /backup/beam-$(date +%Y%m%d).redb
 
 # Restart
-systemctl start rod
+systemctl start beam
 ```
 
 ### Session Key Backup

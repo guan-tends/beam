@@ -27,8 +27,8 @@ use std::collections::{HashMap, VecDeque};
 /// # Example
 ///
 /// ```ignore
-/// // Module is crate-private; use from within rod.
-/// let id = rod::utils::random_string(32);
+/// // Module is crate-private; use from within beam.
+/// let id = beam::utils::random_string(32);
 /// assert_eq!(id.len(), 32);
 /// ```
 pub fn random_string(len: usize) -> String {
@@ -49,8 +49,8 @@ pub fn random_string(len: usize) -> String {
 /// # Example
 ///
 /// ```ignore
-/// // Module is crate-private; use from within rod.
-/// use rod::utils::BoundedHashMap;
+/// // Module is crate-private; use from within beam.
+/// use beam::utils::BoundedHashMap;
 /// let mut map = BoundedHashMap::new(2);
 /// map.insert("a", 1);
 /// map.insert("b", 2);
@@ -305,7 +305,7 @@ pub(crate) fn try_send_or_log(
 ) {
     if addr.send(msg).is_err() {
         metrics.record_dropped_send();
-        log::debug!(target: "rod::send", "actor mailbox full or closed, dropped message (context={})", ctx);
+        log::debug!(target: "beam::send", "actor mailbox full or closed, dropped message (context={})", ctx);
     }
 }
 

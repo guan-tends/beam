@@ -65,10 +65,10 @@
 //! - `ctrlc = "3.2.1"` available for graceful shutdown handling
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use rod::actor::Addr;
-use rod::adapters::RedbStorage;
-use rod::message::Message;
-use rod::{Config, Node};
+use beam::actor::Addr;
+use beam::adapters::RedbStorage;
+use beam::message::Message;
+use beam::{Config, Node};
 use std::path::PathBuf;
 use tokio::runtime::Runtime;
 use tokio::time::Duration;
@@ -182,10 +182,10 @@ pub fn setup_node(group: &str, backend: BackendKind) -> Node {
             let path = dir.join("store.persy");
             let path_str = path.to_string_lossy().into_owned();
             // PersyStorage::new_with_path expects a file path (not a directory)
-            let storage = rod::adapters::PersyStorage::new_with_path(&path_str);
+            let storage = beam::adapters::PersyStorage::new_with_path(&path_str);
             Node::new_with_config(
                 Config::default(),
-                vec![Box::new(storage) as Box<dyn rod::actor::Actor>],
+                vec![Box::new(storage) as Box<dyn beam::actor::Actor>],
                 vec![],
             )
         }

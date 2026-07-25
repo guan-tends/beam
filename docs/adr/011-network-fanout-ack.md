@@ -9,14 +9,14 @@
 
 ## Context
 
-Gun.js (and Rod as its Rust port) supports an `ack` callback on `get().put()`
+Gun.js (and BEAM as its Rust port) supports an `ack` callback on `get().put()`
 that fires when the put reaches a configurable number of peers. This is the
 fanout-ack pattern: caller wants to know "did my write reach durability"
 before resolving. Without it, `put()` returns immediately after local
 storage commit, which is insufficient for distributed systems that need
 consistency guarantees.
 
-Rod needed `Node::put_quorum(value, AckPolicy)` that:
+BEAM needed `Node::put_quorum(value, AckPolicy)` that:
 1. Resolves only when N peer acknowledgements arrive, OR
 2. Times out after a configured deadline, OR
 3. Falls back to local ack when quorum is 1 (Any policy on single node)
@@ -25,7 +25,7 @@ Rod needed `Node::put_quorum(value, AckPolicy)` that:
 
 ## Decision: Sentinel-Driven Drain, DRY with Existing Plumbing
 
-The implementation reuses Rod's existing sentinel-drain pattern (already
+The implementation reuses BEAM's existing sentinel-drain pattern (already
 used by `put`, `batch_put`, `Flush`, and `map()` replay) rather than
 building a parallel system.
 
@@ -211,9 +211,9 @@ fn handle_quorum_timeout_reaper(&mut self) {
 
 ### Positive
 
-- **Substrate convergence**: Rod now has 5 surfaces using sentinel-drain.
+- **Substrate convergence**: BEAM now has 5 surfaces using sentinel-drain.
   Future async patterns have a canonical pattern to follow.
-- **Wire compatibility**: Gun.js-compatible. Existing Rod nodes can
+- **Wire compatibility**: Gun.js-compatible. Existing BEAM nodes can
   interoperate with quorum-aware nodes.
 - **Composable**: `put_quorum` shares the `pending_puts` map, so
   contention is bounded by the same BoundedHashMap policy.
@@ -239,8 +239,8 @@ fn handle_quorum_timeout_reaper(&mut self) {
 
 ## Verification
 
-- **215/215** unit tests pass (`cargo test -p rod --lib`)
-- **3/3** e2e tests pass (`cargo test -p rod --test quorum_e2e`)
+- **215/215** unit tests pass (`cargo test -p beam --lib`)
+- **3/3** e2e tests pass (`cargo test -p beam --test quorum_e2e`)
 - 3 consecutive clean runs of full surface verified (sessions 2026-07-22)
 - 5 consecutive clean runs deferred to Follow-up A+B completion
   (per Freeman: "3/5 is pretty indicative")
@@ -249,13 +249,12 @@ fn handle_quorum_timeout_reaper(&mut self) {
 
 ## References
 
-- Plan file: `docs/plans/ROD-FOLLOWUP-A-NETWORK-FANOUT-ACK.md` (1480L)
 - Built-in memory: `rod_followup_a_network_fanout_ack_plan` (REVISED v2)
 - Sibling built-ins:
   - `rod_sentinel_drain_pattern_observation` — cross-cutting pattern analysis
   - `phase1_v1_to_v2_pivot_insight` — process lesson from the pivot
   - `plan_doc_and_builtin_must_stay_mirrored` — pivot+doc discipline
-- Substrate recon: `feat/rod-redux-async-ack-and-drain` branch
+- Substrate recon: `feat/beam-redux-async-ack-and-drain` branch
 - Always-reply invariant: commit `b6a3d7b`
 - Map replay sentinel precedent: commit `9c5d254`
 

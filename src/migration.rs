@@ -15,7 +15,7 @@
 //! # CLI
 //!
 //! ```text
-//! rod migrate --from <redb|persy> --to <redb|persy> \
+//! beam migrate --from <redb|persy> --to <redb|persy> \
 //!     --source <path> --target <path> \
 //!     [--batch-size 1000] [--force] [--dry-run]
 //! ```

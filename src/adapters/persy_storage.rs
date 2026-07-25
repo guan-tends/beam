@@ -36,7 +36,7 @@
 //! This adapter is compiled only when the `persy` feature is enabled:
 //!
 //! ```toml
-//! rod = { version = "0.3", features = ["persy"] }
+//! beam = { version = "0.3", features = ["persy"] }
 //! ```
 
 use std::collections::BTreeMap;
@@ -107,13 +107,13 @@ impl Clone for PersyStorage {
 }
 
 impl PersyStorage {
-    /// Creates a new Persy storage at the default path `rod.persy`.
+    /// Creates a new Persy storage at the default path `beam.persy`.
     ///
     /// # Panics
     ///
     /// Panics if the database cannot be created or opened.
     pub fn new() -> Self {
-        Self::new_with_path("rod.persy")
+        Self::new_with_path("beam.persy")
     }
 
     /// Creates a new Persy storage at the given path.
@@ -498,7 +498,7 @@ impl PersyStorage {
 // Tests
 // ============================================================================
 //
-// Tests run only when `cargo test -p rod --features persy --lib` is invoked.
+// Tests run only when `cargo test -p beam --features persy --lib` is invoked.
 // They exercise the public surface (`new_with_path`, `handle_put_internal`,
 // `handle_get`) directly, no actor plumbing — that's what the e2e tests in
 // `tests/persy_e2e.rs` (Epic 3) cover.

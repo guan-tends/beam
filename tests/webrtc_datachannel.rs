@@ -99,7 +99,7 @@ fn webrtc_datachannel_puts_reach_peer() {
     // — 9. Create out-of-band negotiated data channel on both sides —
     let config = ChannelConfig {
         negotiated: Some(1),
-        label: "rod-test-chan".into(),
+        label: "beam-test-chan".into(),
         ..Default::default()
     };
     let l_cid = l_rtc.direct_api().create_data_channel(config.clone());

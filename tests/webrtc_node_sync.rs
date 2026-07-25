@@ -6,8 +6,8 @@
 
 #[cfg(feature = "webrtc")]
 mod tests {
-    use rod::adapters::{MemoryStorage, OutgoingWebsocketManager, WsServer};
-    use rod::{Config, Node, Value};
+    use beam::adapters::{MemoryStorage, OutgoingWebsocketManager, WsServer};
+    use beam::{Config, Node, Value};
     use std::time::Instant;
     use tokio::net::TcpStream;
     use tokio::time::{Duration, sleep, timeout};
@@ -62,8 +62,8 @@ mod tests {
         // Actor `pre_start` is synchronous — no sleep needed between the two
         // connect calls; the answerer's task is spawned before the offerer
         // sends.
-        peer_b.connect_webrtc_peer("peer-b", "peer-a", rod::adapters::WebRtcRole::Answerer);
-        peer_a.connect_webrtc_peer("peer-a", "peer-b", rod::adapters::WebRtcRole::Offerer);
+        peer_b.connect_webrtc_peer("peer-b", "peer-a", beam::adapters::WebRtcRole::Answerer);
+        peer_a.connect_webrtc_peer("peer-a", "peer-b", beam::adapters::WebRtcRole::Offerer);
 
         // Retry put + recv until the WebRTC DataChannel is ready and the
         // value arrives. This replaces a blind `sleep(5000)` with active

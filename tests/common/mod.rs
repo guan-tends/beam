@@ -1,4 +1,4 @@
-//! Shared async readiness helpers for rod e2e tests.
+//! Shared async readiness helpers for beam e2e tests.
 //!
 //! # The Flakiness Pattern
 //!
@@ -44,7 +44,7 @@
 //!   accept queue has room. Does NOT guarantee the user-space
 //!   handshake completed — pair with `wait_for_peer_count` for that.
 
-use rod::adapters::{OutgoingWebsocketManager, WsServer};
+use beam::adapters::{OutgoingWebsocketManager, WsServer};
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::time::sleep;
@@ -87,7 +87,7 @@ pub async fn wait_for_port(port: u16, timeout_ms: u64) {
 /// # Why this is correct
 ///
 /// `WsServer::peer_count()` increments when a
-/// `rod::adapters::ws_conn::WsConn` actor finishes the WS upgrade
+/// `beam::adapters::ws_conn::WsConn` actor finishes the WS upgrade
 /// and registers its address. That happens AFTER the TCP listener
 /// accepts AND the WS handshake completes — the same condition the
 /// broadcast needs to succeed.

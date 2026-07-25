@@ -1,12 +1,14 @@
 [package]
-name = "rod"
-version = "0.2.5"
+name = "beamdb"
+version = "0.8.0"
 edition = "2024"
-repository = "https://github.com/mmalmi/rod"
-description = "Distributed graph database that syncs over websockets and multicast"
+repository = "http://192.168.8.142:8561/guan/beamdb.git"
+description = "BEAM — distributed graph database syncing over WebSocket, WebRTC, and multicast. Successor to rod."
 license = "MIT"
 rust-version = "1.85"
-authors = ["Martti Malmi <martti@mmalmi.org>", "Guan <just.guan@proton.me>"]
+authors = ["Martti Malmi <martti@mmalmi.org>", "David Newman <david.r.newman@proton.me>"]
+keywords = ["beam", "beamdb", "p2p", "graph-database", "distributed", "sync", "websocket", "webrtc"]
+categories = ["database", "network-programming", "asynchronous"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
@@ -64,6 +66,10 @@ criterion = { version = "0.3", features=["async_futures", "async_tokio", "html_r
 [[bench]]
 name = "my_benchmark"
 harness = false
+
+[[bin]]
+name = "beam"
+path = "src/main.rs"
 
 [[bin]]
 name = "beam-sea-keygen"
