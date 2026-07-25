@@ -295,7 +295,7 @@ impl Actor for Router {
             Message::Get(get) => self.handle_get(get),
             Message::Flush(flush) => self.handle_flush(flush),
             Message::Hi { from, peer_id } => {
-                self.known_peers.insert(from.clone());
+                                self.known_peers.insert(from.clone());
                 if !peer_id.is_empty() {
                     if let Some(existing) = self.peer_addrs.get(&peer_id) {
                         if existing != &from {
@@ -628,18 +628,18 @@ impl Router {
     /// in the hop list are skipped.
     fn handle_put_relay(&mut self, put: &Put) {
         // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
-        let mut hops = put.peer_hop_list.clone().unwrap_or_default();
+                let mut hops = put.peer_hop_list.clone().unwrap_or_default();
         hops.insert(put.from.to_string());
         let mut already_sent_to = HashSet::new();
 
         // Send to server peers
         for addr in self.server_peers.iter() {
             if put.from == *addr || hops.contains(&addr.to_string()) {
-                continue;
+                                continue;
             }
             let mut put = put.clone();
             put.peer_hop_list = Some(hops.clone());
-            let _ = addr.send(Message::Put(put));
+                        let _ = addr.send(Message::Put(put));
             already_sent_to.insert(addr.clone());
         }
 

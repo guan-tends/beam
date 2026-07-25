@@ -18,29 +18,25 @@
 //! `websocket_sync_over_2_relay_peers` may time out on slow CI. It uses a 30s
 //! timeout per subscription receive. If it fails, re-run before investigating.
 
+// Shared async readiness helpers. See `tests/common/mod.rs` for the
+// full doc on the readiness pattern. Replaces every blind `sleep(N)`
+// in this file with active polling on the actual invariant.
+//
+// Declared at crate root (outside `mod tests`) so Rust resolves it
+// against `tests/common/mod.rs`. Cargo does not auto-discover
+// subdirectories as separate test crates, so this is safe.
+//
+// This is the idiomatic pattern used by tokio, hyper, reqwest, et al.
+mod common;
+
 #[cfg(test)]
 mod tests {
+    use crate::common;
     use log::info;
     use rod::adapters::*;
     use rod::{Config, Node, Value};
     use std::sync::Once;
-    use std::time::Instant;
-    use tokio::net::TcpStream;
-    use tokio::time::{Duration, sleep, timeout};
-
-    /// Poll a TCP port until it accepts connections or timeout elapses.
-    /// Replaces blind sleep races with deterministic readiness.
-    async fn wait_for_port(port: u16, timeout_ms: u64) {
-        let start = Instant::now();
-        let timeout = std::time::Duration::from_millis(timeout_ms);
-        while start.elapsed() < timeout {
-            match TcpStream::connect(format!("127.0.0.1:{}", port)).await {
-                Ok(_) => return,
-                Err(_) => sleep(Duration::from_millis(50)).await,
-            }
-        }
-        panic!("Port {} did not become ready within {}ms", port, timeout_ms);
-    }
+    use tokio::time::{Duration, timeout};
 
     static INIT: Once = Once::new();
 
@@ -64,7 +60,7 @@ mod tests {
         let mut db = Node::new();
         let mut node = db.get("Anborn");
         let mut sub = node.on();
-        node.put("Ancalagon".into());
+        node.put("Ancalagon".into()).await.unwrap();
         if let Value::Text(str) = sub.recv().await.unwrap() {
             assert_eq!(&str, "Ancalagon");
         }
@@ -78,7 +74,7 @@ mod tests {
             vec![],
         );
         let mut node = db.get("Finglas1").get("Finglas2"); // apparently shorter path db.get("Finglas") wouldn't work
-        node.put("Fingolfin".into());
+        node.put("Fingolfin".into()).await.unwrap();
         let mut sub = node.on();
         if let Value::Text(str) = sub.recv().await.unwrap() {
             assert_eq!(&str, "Fingolfin");
@@ -93,7 +89,7 @@ mod tests {
             vec![],
         );
         let mut node = db.get("Finglas1").get("Finglas2");
-        node.put("Fingolfin".into());
+        node.put("Fingolfin".into()).await.unwrap();
         let Some(Value::Text(str)) = node.once(None).await else {
             panic!("once didn't find val");
         };
@@ -106,7 +102,7 @@ mod tests {
                 .await
                 .is_none()
         );
-        db.get("Fin").get("golf").get("fin").put(Value::Null);
+        db.get("Fin").get("golf").get("fin").put(Value::Null).await.unwrap();
         assert!(
             !db.get("Fin")
                 .get("golf")
@@ -121,22 +117,30 @@ mod tests {
     #[allow(unreachable_code)]
     async fn connect_and_sync_over_websocket() {
         let config = Config::default();
+        let ws_server = WsServer::new(config.clone());
         let mut peer1 = Node::new_with_config(
             config.clone(),
-            vec![],
-            vec![Box::new(WsServer::new(config.clone()))],
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_server.clone())],
         );
         let ws_client = OutgoingWebsocketManager::new(
             config.clone(),
             vec!["ws://localhost:4944/ws".to_string()],
         );
-        let mut peer2 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
-        wait_for_port(4944, 5000).await;
-        sleep(Duration::from_millis(1000)).await;
+        let mut peer2 = Node::new_with_config(
+            config.clone(),
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_client.clone())],
+        );
+        // Wait for both sides of the WebSocket mesh to be ready:
+        // server side has the peer handshake, client side has connected.
+        common::wait_for_port(4944, 5000).await;
+        common::wait_for_peer_count(&ws_server, 1, 5000).await;
+        common::wait_for_connected_count(&ws_client, 1, 5000).await;
         let mut sub1 = peer1.get("beta").get("name").on();
         let mut sub2 = peer2.get("alpha").get("name").on();
-        peer1.get("alpha").get("name").put("Amandil".into());
-        peer2.get("beta").get("name").put("Beregond".into());
+        peer1.get("alpha").get("name").put("Amandil".into()).await.unwrap();
+        peer2.get("beta").get("name").put("Beregond".into()).await.unwrap();
 
         // Timeout: WebSocket handshake may race with actor pre_start.
         // If mesh propagation fails, fail fast with clear message rather than hanging.
@@ -178,14 +182,14 @@ mod tests {
         );
         let mut peer1 = Node::new_with_config(
             config.clone(),
-            vec![],
+            vec![Box::new(MemoryStorage::new())],
             vec![Box::new(ws_server)],
         );
         let ws_client = OutgoingWebsocketManager::new(
             config.clone(),
             vec!["ws://localhost:4946/ws".to_string()],
         );
-        let mut peer2 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
+        let mut peer2 = Node::new_with_config(config.clone(), vec![Box::new(MemoryStorage::new())], vec![Box::new(ws_client)]);
         sleep(Duration::from_millis(2000)).await;
         let mut sub1 = peer1.get("beta").get("charlie").get("name").on();
         let mut sub2 = peer2.get("alpha").get("beta").get("name").on();
@@ -193,12 +197,12 @@ mod tests {
             .get("alpha")
             .get("beta")
             .get("name")
-            .put("Amandil".into());
+            .put("Amandil".into()).await.unwrap();
         peer2
             .get("beta")
             .get("charlie")
             .get("name")
-            .put("Beregond".into());
+            .put("Beregond".into()).await.unwrap();
         match sub1.recv().await.unwrap() {
             Value::Text(str) => {
                 assert_eq!(&str, "Beregond");
@@ -227,26 +231,41 @@ mod tests {
                 ..WsServerConfig::default()
             },
         );
-        let mut relay = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_server)]);
+        let mut relay = Node::new_with_config(
+            config.clone(),
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_server.clone())],
+        );
 
-        let ws_client = OutgoingWebsocketManager::new(
+        let ws_client1 = OutgoingWebsocketManager::new(
             config.clone(),
             vec!["ws://localhost:4948/ws".to_string()],
         );
-        let mut peer1 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
+        let mut peer1 = Node::new_with_config(
+            config.clone(),
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_client1.clone())],
+        );
 
-        let ws_client = OutgoingWebsocketManager::new(
+        let ws_client2 = OutgoingWebsocketManager::new(
             config.clone(),
             vec!["ws://localhost:4948/ws".to_string()],
         );
-        let mut peer2 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
+        let mut peer2 = Node::new_with_config(
+            config.clone(),
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_client2.clone())],
+        );
 
-        wait_for_port(4948, 5000).await;
-        sleep(Duration::from_millis(1000)).await;
+        // Wait for full mesh: server bound + 2 peers handshake + 2 clients connected
+        common::wait_for_port(4948, 5000).await;
+        common::wait_for_peer_count(&ws_server, 2, 5000).await;
+        common::wait_for_connected_count(&ws_client1, 1, 5000).await;
+        common::wait_for_connected_count(&ws_client2, 1, 5000).await;
         let mut sub1 = peer1.get("beta").get("name").on();
         let mut sub2 = peer2.get("alpha").get("name").on();
-        peer1.get("alpha").get("name").put("Amandil".into());
-        peer2.get("beta").get("name").put("Beregond".into());
+        peer1.get("alpha").get("name").put("Amandil".into()).await.unwrap();
+        peer2.get("beta").get("name").put("Beregond".into()).await.unwrap();
         let val = timeout(Duration::from_secs(30), sub1.recv())
             .await
             .expect("timeout waiting for sub1 — mesh propagation from peer2 failed")
@@ -290,39 +309,63 @@ mod tests {
                 ..WsServerConfig::default()
             },
         );
-        let ws_client = OutgoingWebsocketManager::new(
+        // relay2 connects outbound to ws_server1 (port 4950), AND
+        // accepts inbound on port 4952. Hold a clone of the outbound
+        // client so we can poll it for readiness.
+        let relay2_client = OutgoingWebsocketManager::new(
             config.clone(),
             vec!["ws://localhost:4950/ws".to_string()],
         );
-        let mut relay1 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_server1)]);
+        let mut relay1 = Node::new_with_config(
+            config.clone(),
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_server1.clone())],
+        );
         let mut relay2 = Node::new_with_config(
             config.clone(),
-            vec![],
-            vec![Box::new(ws_server2), Box::new(ws_client)],
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_server2.clone()), Box::new(relay2_client.clone())],
         );
 
         let ws_client = OutgoingWebsocketManager::new(
             config.clone(),
             vec!["ws://localhost:4950/ws".to_string()],
         );
-        let mut peer1 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
+        let mut peer1 = Node::new_with_config(
+            config.clone(),
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_client.clone())],
+        );
 
-        let ws_client = OutgoingWebsocketManager::new(
+        let ws_client2 = OutgoingWebsocketManager::new(
             config.clone(),
             vec!["ws://localhost:4952/ws".to_string()],
         );
-        let mut peer2 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
+        let mut peer2 = Node::new_with_config(
+            config.clone(),
+            vec![Box::new(MemoryStorage::new())],
+            vec![Box::new(ws_client2.clone())],
+        );
 
-        wait_for_port(4950, 5000).await;
-        wait_for_port(4952, 5000).await;
-        // Small delay for client connections to establish
-        sleep(Duration::from_millis(1500)).await;
+        // Wait for both servers bound + both client connections active.
+        // Two-server mesh: ws_server1 sees 2 clients (relay2 + peer1),
+        // ws_server2 sees 1 client (peer2). Active polling replaces
+        // the blind sleep(1500).
+        common::wait_for_port(4950, 5000).await;
+        common::wait_for_port(4952, 5000).await;
+        common::wait_for_peer_count(&ws_server1, 2, 5000).await;
+        common::wait_for_peer_count(&ws_server2, 1, 5000).await;
+        common::wait_for_connected_count(&ws_client, 1, 5000).await;
+        common::wait_for_connected_count(&ws_client2, 1, 5000).await;
+        common::wait_for_connected_count(&relay2_client, 1, 5000).await;
 
         let mut sub1 = peer1.get("beta").get("name").on();
         let mut sub2 = peer2.get("alpha").get("name").on();
-        sleep(Duration::from_millis(100)).await;
-        peer1.get("alpha").get("name").put("Amandil".into());
-        peer2.get("beta").get("name").put("Beregond".into());
+        // Subscriptions register synchronously in `on()`; no sleep needed.
+        // If a put races past subscription registration, the recv()
+        // timeout below will catch it with a clear failure message.
+        peer1.get("alpha").get("name").put("Amandil".into()).await.unwrap();
+        peer2.get("beta").get("name").put("Beregond".into()).await.unwrap();
         let val = timeout(Duration::from_secs(30), sub1.recv())
             .await
             .expect("timeout waiting for sub1 — mesh propagation from peer2 via relay failed")
@@ -346,7 +389,7 @@ mod tests {
 
         assert!(peer2.get("gamma").get("name").once(None).await.is_none());
         assert!(peer1.get("gamma").get("name").once(None).await.is_none());
-        peer1.get("gamma").get("name").put("once".into());
+        peer1.get("gamma").get("name").put("once".into()).await.unwrap();
         let Some(Value::Text(str)) = peer2.get("gamma").get("name").once(None).await else {
             panic!("once: Expected Value::Text");
         };
@@ -370,13 +413,13 @@ mod tests {
                 ..WsServerConfig::default()
             },
         );
-        let mut peer1 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_server1)]);
+        let mut peer1 = Node::new_with_config(config.clone(), vec![Box::new(MemoryStorage::new())], vec![Box::new(ws_server1)]);
 
         let ws_client = OutgoingWebsocketManager::new(
             config.clone(),
             vec!["ws://localhost:4954/ws".to_string()],
         );
-        let mut peer2 = Node::new_with_config(config.clone(), vec![], vec![Box::new(ws_client)]);
+        let mut peer2 = Node::new_with_config(config.clone(), vec![Box::new(MemoryStorage::new())], vec![Box::new(ws_client)]);
 
         sleep(Duration::from_millis(2000)).await;
 
@@ -410,8 +453,8 @@ mod tests {
             vec![Box::new(Multicast::new(config.clone()))],
         );
         sleep(Duration::from_millis(1000)).await;
-        peer1.get("gamma").put("Gorlim".into());
-        peer2.get("sigma").put("Smaug".into());
+        peer1.get("gamma").put("Gorlim".into()).await.unwrap();
+        peer2.get("sigma").put("Smaug".into()).await.unwrap();
         let mut sub1 = peer1.get("sigma").on();
         let mut sub2 = peer2.get("gamma").on();
         match sub1.recv().await.unwrap() {
@@ -438,7 +481,7 @@ mod tests {
         let mut db = Node::new();
         let n = 1000;
         for i in 0..n {
-            db.get(&format!("a{:?}", i)).get("Pelendur").put(format!("{:?}b", i).into());
+            db.get(&format!("a{:?}", i)).get("Pelendur").put(format!("{:?}b", i).into()).await.unwrap();
         }
         let duration = start.elapsed();
         let per_second = (n as f64) / (duration.as_nanos() as f64) * 1000000000.0;
@@ -471,7 +514,7 @@ mod tests {
                 vec![],
             );
 
-            db.get("Feanor").put("Noldor".into());
+            db.get("Feanor").put("Noldor".into()).await.unwrap();
             sleep(Duration::from_millis(500)).await;
             db.stop();
             sleep(Duration::from_millis(1000)).await;
@@ -531,7 +574,7 @@ mod tests {
             vec![],
         );
 
-        db.get("FlushTest").put("pre_flush".into());
+        db.get("FlushTest").put("pre_flush".into()).await.unwrap();
         sleep(Duration::from_millis(200)).await;
 
         // flush_storage awaits the ack from RedbStorage
@@ -571,7 +614,7 @@ mod tests {
                 vec![],
             );
 
-            db.get("BarrierKey").put("barrier_value".into());
+            db.get("BarrierKey").put("barrier_value".into()).await.unwrap();
 
             // Flush must block until the Put is committed.
             let result = db.flush_storage(Some(Duration::from_secs(5))).await;

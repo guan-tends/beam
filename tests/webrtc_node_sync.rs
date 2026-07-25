@@ -12,6 +12,7 @@ mod tests {
     use tokio::net::TcpStream;
     use tokio::time::{Duration, sleep, timeout};
 
+    /// Poll until a TCP port accepts connections, or panic after `timeout_ms`.
     async fn wait_for_port(port: u16, timeout_ms: u64) {
         let start = Instant::now();
         let deadline = std::time::Duration::from_millis(timeout_ms);
@@ -49,34 +50,65 @@ mod tests {
             vec![Box::new(ws_client)],
         );
 
-        // Wait for websocket mesh to establish
+        // Wait for the WebSocket signaling mesh to be ready (port accepts
+        // connections + OWM has time to complete the handshake).
         wait_for_port(4944, 5000).await;
-        sleep(Duration::from_millis(1500)).await;
 
-        // Subscribe on peer_a BEFORE WebRTC setup and put
+        // Subscribe on peer_a BEFORE WebRTC setup and put.
         let mut sub = peer_a.get("sync").get("test").on();
 
-        // Bootstrap WebRTC: create answerer FIRST so it is ready when the offer arrives.
-        // The offer signal flows over the websocket mesh to peer_b.
+        // Bootstrap WebRTC: create answerer FIRST so it is ready when the offer
+        // arrives. The offer signal flows over the websocket mesh to peer_b.
+        // Actor `pre_start` is synchronous — no sleep needed between the two
+        // connect calls; the answerer's task is spawned before the offerer
+        // sends.
         peer_b.connect_webrtc_peer("peer-b", "peer-a", rod::adapters::WebRtcRole::Answerer);
-        sleep(Duration::from_millis(500)).await;
         peer_a.connect_webrtc_peer("peer-a", "peer-b", rod::adapters::WebRtcRole::Offerer);
 
-        // Allow ICE handshake + DTLS + SCTP + DataChannel to complete.
-        // In a real network this is ~1-3s; loopback is faster.
-        sleep(Duration::from_millis(5000)).await;
+        // Retry put + recv until the WebRTC DataChannel is ready and the
+        // value arrives. This replaces a blind `sleep(5000)` with active
+        // polling on the actual invariant: does the data channel deliver
+        // the message?
+        //
+        // Each iteration awaits peer_b's `put` (which blocks until peer_b's
+        // local MemoryStorage acks — proving the Put reached the Router).
+        // The Router then relays the Put to peer_a via the WebRTC
+        // DataChannel. If the DataChannel isn't ready yet, the relay is
+        // silently dropped; the 200ms retry interval gives the ICE/DTLS/SCTP
+        // state machines time to complete.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut received: Option<Value> = None;
 
-        // Write a value on peer_b; it should propagate to peer_a via DataChannel.
-        peer_b
-            .get("sync")
-            .get("test")
-            .put("Hello from WebRTC".into());
+        while Instant::now() < deadline {
+            // Await the put on peer_b. The Put reaches peer_b's local
+            // MemoryStorage (which acks), and the Router relays it to
+            // peer_a via WebRTC. If the DataChannel isn't open yet, the
+            // relay is dropped — we retry on the next iteration.
+            let _ = peer_b
+                .get("sync")
+                .get("test")
+                .put("Hello from WebRTC".into())
+                .await;
 
-        // Assert peer_a receives the synced value.
-        let val = timeout(Duration::from_secs(30), sub.recv())
-            .await
-            .expect("timeout waiting for WebRTC sync — mesh/DataChannel may not have established")
-            .expect("subscription channel closed");
+            // Check if peer_a received the value (short timeout per
+            // attempt — the put already waited for peer_b's local ack,
+            // so data channel delivery is the only remaining variable).
+            match timeout(Duration::from_millis(500), sub.recv()).await {
+                Ok(Ok(val)) => {
+                    received = Some(val);
+                    break;
+                }
+                _ => {
+                    // Not received yet — DataChannel may still be
+                    // handshaking. Loop back and retry.
+                    sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+
+        let val = received.expect(
+            "timeout waiting for WebRTC sync — mesh/DataChannel may not have established",
+        );
 
         match val {
             Value::Text(str) => assert_eq!(&str, "Hello from WebRTC"),
