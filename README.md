@@ -1,6 +1,6 @@
-# Rod
+# BEAM
 
-**A Rust implementation of [Gun.js](https://gun.eco/) — a real-time, decentralized, P2P-synced graph database with end-to-end encryption.**
+**A real-time, decentralized, P2P-synced graph database written in Rust — maintaining wire-format compatibility with [Gun.js](https://gun.eco/).**
 
 [![Rust Edition](https://img.shields.io/badge/edition-2024-orange.svg)](https://doc.rust-lang.org/edition-guide/)
 [![Rust Version](https://img.shields.io/badge/rust-≥1.85-blue.svg)](https://www.rust-lang.org/)
@@ -9,11 +9,11 @@
 
 ---
 
-## What Is Rod?
+## What Is BEAM?
 
-Rod is a distributed graph database where every node holds a partial replica of the graph and synchronizes with peers in real time. Data flows over WebSocket relays, UDP multicast, or direct WebRTC connections. All cryptographic operations — signatures, key exchange, encryption — use the SEA layer (Security, Encryption, Authorization), providing Gun.js-compatible wire protocol and cryptographic semantics.
+BEAM is a distributed graph database where every node holds a partial replica of the graph and synchronizes with peers in real time. Data flows over WebSocket relays, UDP multicast, or direct WebRTC connections. All cryptographic operations — signatures, key exchange, encryption — use the SEA layer (Security, Encryption, Authorization), providing Gun.js-compatible wire protocol and cryptographic semantics.
 
-Rod is a from-scratch Rust port of [Gun.js](https://github.com/amark/gun), maintaining wire-format compatibility so Rod nodes can interop with Gun.js peers.
+BEAM began as a from-scratch Rust port of [Gun.js](https://github.com/amark/gun), maintaining wire-format compatibility so BEAM nodes can interop with Gun.js peers. It has since grown into a comprehensive distributed-database system with multiple storage backends, WebRTC direct P2P, observability, and migration tooling.
 
 ### Key Properties
 
@@ -21,7 +21,7 @@ Rod is a from-scratch Rust port of [Gun.js](https://github.com/amark/gun), maint
 - **Real-time** — `on()` subscriptions deliver updates as they propagate through the mesh
 - **Eventually consistent** — last-write-wins conflict resolution via timestamps (matching Gun.js)
 - **Encrypted** — SEA layer provides Ed25519 signing, X25519 ECDH, and AES-256-GCM encryption
-- **Persistent** — `redb` embedded database for disk-backed storage, or in-memory for ephemeral use
+- **Persistent** — `redb` embedded database for disk-backed storage, or `Persy` for high-concurrency workloads, or in-memory for ephemeral use
 - **Multi-transport** — WebSocket (relay), UDP multicast (LAN discovery), WebRTC (direct P2P)
 
 ---
@@ -38,22 +38,22 @@ cargo build --release
 
 ```bash
 # Start with defaults: redb storage, WebSocket server on port 4944
-cargo run --release -- --port 4944
+cargo run --release --bin beam -- --port 4944
 
 # With WebRTC support (direct P2P connections)
-cargo run --release --features webrtc -- --port 4944
+cargo run --release --bin beam --features webrtc -- --port 4944
 
 # Connect to existing peers
-cargo run --release -- --port 4944 --peers wss://relay1.example.com:8080/ws,wss://relay2.example.com:8080/ws
+cargo run --release --bin beam -- --port 4944 --peers wss://relay1.example.com:8080/ws,wss://relay2.example.com:8080/ws
 
 # With TLS
-cargo run --release -- --port 4944 --cert-path /path/cert.pem --key-path /path/key.pem
+cargo run --release --bin beam -- --port 4944 --cert-path /path/cert.pem --key-path /path/key.pem
 
 # In-memory only (no persistence)
-cargo run --release -- --port 4944 --memory-storage true --redb-storage false
+cargo run --release --bin beam -- --port 4944 --memory-storage true --redb-storage false
 
 # Restrict to signed data only (disable public space)
-cargo run --release -- --port 4944 --allow-public-space false
+cargo run --release --bin beam -- --port 4944 --allow-public-space false
 ```
 
 ### Generate a SEA Key Pair
@@ -65,8 +65,17 @@ cargo run --release --bin beam-sea-keygen
 
 ### Use as a Library
 
+Add to `Cargo.toml`:
+
+```toml
+[dependencies]
+beamdb = { git = "http://192.168.8.142:8561/guan/beamdb.git" }
+```
+
+In your code:
+
 ```rust
-use rod::{Node, Value};
+use beam::{Node, Value};
 
 #[tokio::main]
 async fn main() {
@@ -92,8 +101,8 @@ async fn main() {
 ### Connect Two Nodes Over WebSocket
 
 ```rust
-use rod::adapters::*;
-use rod::{Config, Node, Value};
+use beam::adapters::*;
+use beam::{Config, Node, Value};
 
 #[tokio::main]
 async fn main() {
@@ -133,7 +142,7 @@ async fn main() {
 
 ## Storage Backends
 
-Rod supports two persistent storage backends for the embedded database layer. Both implement the same `Storage` trait, so the rest of the codebase is unaware of which one is active. The wire protocol is backend-agnostic — nodes with different storage choices converge via the standard mesh.
+BEAM supports two persistent storage backends for the embedded database layer. Both implement the same `Storage` trait, so the rest of the codebase is unaware of which one is active. The wire protocol is backend-agnostic — nodes with different storage choices converge via the standard mesh.
 
 ### redb (Default)
 
@@ -173,36 +182,36 @@ Build with the feature, then select at runtime via CLI flag:
 
 ```bash
 # Default build — redb only
-cargo build --release
+cargo build --release --bin beam
 
 # With Persy support
-cargo build --release --features persy
+cargo build --release --bin beam --features persy
 
 # Run with redb (default)
-cargo run --release -- --port 4944 --redb-storage true
+cargo run --release --bin beam -- --port 4944 --redb-storage true
 
 # Run with Persy
-cargo run --release --features persy -- --port 4944 --persy-storage true
+cargo run --release --bin beam --features persy -- --port 4944 --persy-storage true
 
 # In-memory only (no persistence)
-cargo run --release -- --port 4944 --memory-storage true
+cargo run --release --bin beam -- --port 4944 --memory-storage true
 ```
 
 The flags are mutually exclusive. `--redb-storage` is the default and works in any build. `--persy-storage` requires the `--features persy` build flag (the binary will error at startup otherwise).
 
 ### Migration Between Backends
 
-The `rod migrate` subcommand converts between formats:
+The `beam migrate` subcommand converts between formats:
 
 ```bash
 # Preview without writing
-rod migrate --from redb --to persy --source ./data.redb --target ./data.persy --dry-run
+beam migrate --from redb --to persy --source ./data.redb --target ./data.persy --dry-run
 
 # Execute migration
-rod migrate --from redb --to persy --source ./data.redb --target ./data.persy
+beam migrate --from redb --to persy --source ./data.redb --target ./data.persy
 
 # Reverse direction
-rod migrate --from persy --to redb --source ./data.persy --target ./data.redb
+beam migrate --from persy --to redb --source ./data.persy --target ./data.redb
 ```
 
 Migration uses single-transaction-per-batch for safety and includes checksum verification. See `docs/migrations/migration-guide.md` for the full procedure including rollback.
@@ -215,17 +224,18 @@ Nodes with different storage backends interoperate transparently. A redb node, a
 
 ### Known Limitations
 
-- The `rod_meta_v1` metadata table from redb (last-write timestamps) is not preserved when migrating redb → Persy. This metadata is not currently used by the actor framework, so the loss is cosmetic.
+- The `beam_meta_v1` metadata table from redb (last-write timestamps) is not preserved when migrating redb → Persy. This metadata is not currently used by the actor framework, so the loss is cosmetic.
 - The migration tool is single-threaded per batch. For datasets larger than ~100k records, run during a maintenance window.
 
 ### Architecture Decision
 
-See `docs/adr/013-persy-storage-backend.md` for the full rationale, alternatives considered, and consequences. See `docs/plans/PERSY-STORAGE-ADAPTER.md` for the implementation plan and ship log.
+See `docs/adr/013-persy-storage-backend.md` for the full rationale, alternatives considered, and consequences.
+
 ---
 
 ## Architecture
 
-Rod is built on an actor model with a central router. Every component — storage, network, graph nodes — is an actor communicating via typed messages over Tokio channels.
+BEAM is built on an actor model with a central router. Every component — storage, network, graph nodes — is an actor communicating via typed messages over Tokio channels.
 
 ```
                     ┌─────────────────────────────────────────────┐
@@ -253,7 +263,7 @@ Rod is built on an actor model with a central router. Every component — storag
                     │             │ │             │ │            │
                     │ MemoryStorage│ │ WsServer    │ │ WebRtcPeer │
                     │ RedbStorage │ │ WsClient    │ │ (str0m)    │
-                    │             │ │ Multicast   │ │            │
+                    │ PersyStorage│ │ Multicast   │ │            │
                     └─────────────┘ └─────────────┘ └────────────┘
 ```
 
@@ -280,6 +290,7 @@ Rod is built on an actor model with a central router. Every component — storag
 | `sea/session/` | 516 | Session persistence: `MemorySessionStorage` (ephemeral) and `EncryptedFileSessionStorage` (disk, AES-GCM) |
 | `adapters/memory_storage.rs` | 124 | In-memory `HashMap<node_id, Children>` storage (ephemeral, default for `Node::new()`) |
 | `adapters/redb_storage.rs` | 261 | Persistent storage via `redb` embedded database — `BatchPut` atomic transactions, flush ack |
+| `adapters/persy_storage.rs` | 652 | Persistent storage via `Persy` segment store — high-concurrency writes, optional `background_ops` |
 | `adapters/ws_server.rs` | 223 | WebSocket server: accepts inbound connections, spawns `WsConn` per connection, optional TLS, web UI on port+1 |
 | `adapters/ws_client.rs` | 63 | `OutgoingWebsocketManager` — connects to remote WebSocket peers with retry |
 | `adapters/ws_conn.rs` | 76 | Per-connection WebSocket actor: bridges wire format ↔ Message types |
@@ -293,7 +304,7 @@ Rod is built on an actor model with a central router. Every component — storag
 
 ## Data Model
 
-Rod uses a **key-path graph** — a hierarchical tree of nodes addressed by `/`-separated paths:
+BEAM uses a **key-path graph** — a hierarchical tree of nodes addressed by `/`-separated paths:
 
 ```
 root (uid="")
@@ -321,11 +332,11 @@ root (uid="")
 
 ### Path Depth and Data Access Semantics
 
-Rod's graph operations differ from Gun.js in important ways. Understanding these prevents confusion.
+BEAM's graph operations differ from Gun.js in important ways. Understanding these prevents confusion.
 
 #### One-Level Paths
 
-Both flat (one-level) and nested paths work in Rod:
+Both flat (one-level) and nested paths work in BEAM:
 
 ```rust
 // Flat path — works
@@ -339,7 +350,7 @@ let mut sub = db.get("x").get("y").on();
 println!("{:?}", sub.recv().await.unwrap()); // Ok(Text("Hello World!"))
 ```
 
-> **Gun.js difference:** Gun.js prohibits saving primitive values at the root level — `Gun().put("oops")` and `Gun().get("odd").put("oops")` are errors. Rod does **not** enforce this restriction. Flat-key writes (`db.get("key").put(val)`) are valid and propagate to storage and peers normally.
+> **Gun.js difference:** Gun.js prohibits saving primitive values at the root level — `Gun().put("oops")` and `Gun().get("odd").put("oops")` are errors. BEAM does **not** enforce this restriction. Flat-key writes (`db.get("key").put(val)`) are valid and propagate to storage and peers normally.
 
 #### `on()` — Subscribing to a Single Value
 
@@ -347,165 +358,89 @@ println!("{:?}", sub.recv().await.unwrap()); // Ok(Text("Hello World!"))
 
 1. **Local value first** — if a value was already `put()` on this node, it arrives before any remote updates
 2. **Streamed values** — new values from peers, storage replay, or subsequent `put()` calls
+3. **Linked values** — `Value::Link("path/to/child")` if a child reference exists
+
+#### `map()` — Subscribing to All Children
+
+`map()` returns a stream of `(child_key, value)` pairs. It replays existing children from storage, then streams new ones as they're added. A sentinel `("__beam_replay_complete__", Null)` signals that all existing children have been replayed; subsequent values are **new** children only.
 
 ```rust
-let mut db = Node::new();
-db.get("greeting").put("Hello".into());
-
-let mut sub = db.get("greeting").on();
-// First recv: local value
-assert_eq!(sub.recv().await.unwrap(), Value::Text("Hello".into()));
-
-// Subsequent puts produce new values on the same subscription
-db.get("greeting").put("World".into());
-assert_eq!(sub.recv().await.unwrap(), Value::Text("World".into()));
+let mut sub = db.get("users").map();
+while let Some((key, value)) = sub.recv().await {
+    if key == "__beam_replay_complete__" {
+        break; // replay finished; subscribe to new children separately
+    }
+    println!("child: {} = {:?}", key, value);
+}
 ```
 
-#### `on()` on Branch Nodes Returns `Value::Link`
+The `__beam_replay_complete__` sentinel signals that all existing children have been replayed from storage. Subsequent values on the receiver are **new** children added after subscription. To read a child's actual value, call `on()` or `once()` on the child node directly.
 
-When a node has children, calling `on()` on that node returns a `Value::Link` to the node itself — **not** a reconstructed object containing the children. This is a key difference from Gun.js.
+#### `once()` — Read-Once with Timeout
 
-```rust
-let mut db = Node::new();
-db.get("x").get("y").get("z").put("Hello World 1!".into());
-db.get("x").get("y").get("t").put("Hello World 2!".into());
+`once()` returns the current value with a 66ms timeout (matching Gun.js's default). If no value exists and no peer responds within the window, returns `None`. Use `once()` for one-shot reads; use `on()` for subscriptions.
 
-let mut sub = db.get("x").get("y").on();
-println!("{:?}", sub.recv().await.unwrap());
-// Rod:          Link("x/y")
-// Gun.js:       Object { z: "Hello World 1!", t: "Hello World 2!" }
-```
+### Wire-Compatible Leaf Types
 
-Each `put()` on a descendant propagates up the parent chain via `add_parent_nodes()`, firing `on_sender` at every ancestor. This means `on()` at a branch node receives **one `Value::Link` event per child put** — not a single reconstructed object. These are granular change notifications, not partial data.
+BEAM supports five wire-compatible leaf types, matching Gun.js:
 
-To enumerate children of a branch node, use `map()` instead (see below).
-
-#### `once()` — Read Once With Timeout
-
-`once()` is a convenience wrapper around `on()` + `tokio::time::timeout`. It subscribes, waits for the first value, and returns:
-
-- `Some(value)` — if a value arrives within the timeout
-- `None` — if no value arrives (timeout elapsed), equivalent to Gun.js's `undefined`
-
-```rust
-let mut db = Node::new();
-
-// Missing value → None (timeout)
-assert!(db.get("missing").once(None).await.is_none());
-
-// Existing value → Some
-db.get("key").put("value".into());
-assert_eq!(
-    db.get("key").once(None).await,
-    Some(Value::Text("value".into()))
-);
-
-// Explicitly set to Null → Some(Null), NOT None
-db.get("nulled").put(Value::Null);
-assert_eq!(
-    db.get("nulled").once(None).await,
-    Some(Value::Null)
-);
-
-// Branch node → Some(Link)
-db.get("x").get("y").get("z").put("val".into());
-assert_eq!(
-    db.get("x").get("y").once(None).await,
-    Some(Value::Link("x/y".into()))
-);
-```
-
-The default timeout is **66ms** (matching Gun.js's `opt.wait` default of 99ms, adjusted for Rust's async runtime). Pass a custom `Duration` to override:
-
-```rust
-// Wait up to 5 seconds for a value from a remote peer
-let val = node.once(Some(Duration::from_secs(5))).await;
-```
-
-#### Why No Debounce?
-
-Gun.js implements a debounce timer in `once()` that keeps resetting itself until the received data passes `Gun.valid()` (i.e., a complete primitive or relation arrives). This is necessary because Gun.js's `on()` at a branch node **accumulates partial object data** — `{ z: "a" }` arrives, then `{ z: "a", t: "b" }` — and the debounce waits for the object to settle before delivering.
-
-Rod does **not** implement debounce because `on()` at branch nodes returns `Value::Link` — a **complete, valid primitive** on every delivery. There is nothing partial to accumulate. Each `Link` event is a complete value representing a change notification, not an incomplete snapshot. The 66ms timeout in `once()` is sufficient: it either receives a value or it doesn't.
-
-#### `map()` — Listing Children
-
-`map()` subscribes to all children of a node and replays existing children from storage. It yields `(child_key, value)` tuples. The value type depends on whether the child is itself a branch (has its own children) or a leaf:
-
-```rust
-let mut db = Node::new();
-db.get("x").get("y").get("z").put("Hello World 1!".into());
-db.get("x").get("y").get("t").put("Hello World 2!".into());
-
-// map() at x/y (children are leaves) — yields actual values
-let mut sub = db.get("x").get("y").map();
-// → ("z", Text("Hello World 1!"))
-// → ("t", Text("Hello World 2!"))
-// → ("__rod_replay_complete__", Null)  ← sentinel: replay finished
-
-// map() at x (children are branches) — yields Links
-let mut sub2 = db.get("x").map();
-// → ("y", Link("x/y"))
-// → ("__rod_replay_complete__", Null)
-```
-
-The `__rod_replay_complete__` sentinel signals that all existing children have been replayed from storage. Subsequent values on the receiver are **new** children added after subscription. To read a child's actual value, call `on()` or `once()` on the child node directly.
-
-#### Summary: `on()` vs `map()` vs `once()`
-
-| Method | Returns | Leaf Node | Branch Node |
-|--------|---------|-----------|-------------|
-| `on()` | `Receiver<Value>` | Actual value (Text, Number, Null, Bit) | `Value::Link("node_id")` — one event per descendant put |
-| `once(timeout)` | `Option<Value>` | `Some(actual_value)` or `None` | `Some(Link("node_id"))` or `None` |
-| `map()` | `Receiver<(String, Value)>` | N/A (no children) | `("key", actual_value)` for leaf children, `("key", Link)` for branch children |
-
-### Value Types
-
-Rod supports five wire-compatible leaf types, matching Gun.js:
-
-| Variant | JSON | Example |
-|---------|------|---------|
-| `Value::Null` | `null` | Absence of a value |
-| `Value::Bit(true)` | `true` | Boolean flag |
-| `Value::Number(42.0)` | `42` | Floating-point number |
-| `Value::Text("hello")` | `"hello"` | Unicode string |
-| `Value::Link("node/id")` | `{"#": "node/id"}` | Soul relation (graph edge) |
+| Type | Wire Format | Example |
+|------|-------------|---------|
+| `Value::Null` | `null` | Absent or explicitly null |
+| `Value::Bit(bool)` | `true` / `false` | Booleans |
+| `Value::Number(f64)` | JSON number | `42`, `3.14` |
+| `Value::Text(String)` | JSON string | `"hello"` |
+| `Value::Link(String)` | `{"#": "path/to/child"}` | Reference to another node |
 
 ---
 
-## SEA — Security, Encryption, Authorization
+## Cryptography (SEA Layer)
 
-The SEA layer provides Gun.js-compatible cryptographic operations:
+The SEA (Security, Encryption, Authorization) module implements Gun.js-compatible cryptography. All operations use `ring` for primitives and `pbkdf2` for key derivation.
 
-### Key Generation
+### Key Pair Generation
+
 ```rust
-let pair = rod::sea::generate_pair().await?;
-// pair.pub_key   = "x.y" (P-256 ECDSA public key, base64 coordinates)
-// pair.priv_key  = base64-encoded 32-byte scalar
-// pair.epub_key  = "x.y" (P-256 ECDH public key for encryption)
-// pair.epriv_key = base64-encoded 32-byte ECDH private scalar
+use beam::sea;
+
+let pair = beam::sea::generate_pair().await?;
+println!("pub: {}", pair.pub_key);   // ECDSA public key (Gun.js x.y format)
+println!("epub: {}", pair.epub_key); // ECDH public key
+println!("priv: {}", pair.priv_key); // ECDSA private key
+println!("epriv: {}", pair.epriv_key); // ECDH private key
 ```
 
-### Signing & Verification
+### Signing and Verification
+
 ```rust
-let signed = rod::sea::sign(&json!({"msg": "hello"}), &pair).await?;
-// signed = {"m": {...}, "s": "base64-signature"}
-let verified = rod::sea::verify_sync(&signed, &pair.pub_key)?;
+use beam::sea;
+use serde_json::json;
+
+let signed = beam::sea::sign(&json!({"msg": "hello"}), &pair).await?;
+let verified = beam::sea::verify_sync(&signed, &pair.pub_key)?;
 ```
 
-### Encryption
+### Encryption and Decryption
+
 ```rust
-// ECDH-based: derives shared secret from your epriv + their epub
-let encrypted = rod::sea::encrypt(&data, &my_pair, Some(&their_epub)).await?;
-let decrypted = rod::sea::decrypt(&encrypted, &my_pair, Some(&their_epub)).await?;
+use beam::sea;
+
+let data = b"secret message";
+
+// Asymmetric (ECDH key exchange + AES-GCM)
+let encrypted = beam::sea::encrypt(&data, &my_pair, Some(&their_epub)).await?;
+let decrypted = beam::sea::decrypt(&encrypted, &my_pair, Some(&their_epub)).await?;
 
 // Symmetric: raw 32-byte AES-256 key
-let encrypted = rod::sea::encrypt_symmetric(&data, &key_bytes).await?;
-let decrypted = rod::sea::decrypt_symmetric(&encrypted, &key_bytes).await?;
+let encrypted = beam::sea::encrypt_symmetric(&data, &key_bytes).await?;
+let decrypted = beam::sea::decrypt_symmetric(&encrypted, &key_bytes).await?;
 ```
 
 ### User Identity
+
 ```rust
+use beam::sea::user::User;
+
 let mut node = Node::new();
 let user = User::create("alice", "password123", &mut node).await?;
 user.trust(&bob_pub, Some("path/prefix"), &mut node).await?;
@@ -529,9 +464,10 @@ When `allow_public_space=false`, the node rejects unsigned puts to public space 
 
 ## Wire Protocol
 
-Rod uses Gun.js's JSON wire format. Messages are JSON objects with these fields:
+BEAM uses Gun.js's JSON wire format. Messages are JSON objects with these fields:
 
 ### Put
+
 ```json
 {
   "put": {
@@ -556,6 +492,7 @@ Rod uses Gun.js's JSON wire format. Messages are JSON objects with these fields:
 | `@` | Ack ID — if present, this Put is a response to a Get with this ID |
 
 ### Get
+
 ```json
 {
   "get": { "#": "node/id", ".": "optional_child_key" },
@@ -564,6 +501,7 @@ Rod uses Gun.js's JSON wire format. Messages are JSON objects with these fields:
 ```
 
 ### Other Messages
+
 - `{"dam": "hi", "#": "peer_id"}` — peer introduction
 - `{"dam": "flush", "#": "flush_id"}` — flush storage to disk
 - `{"dam": "rtc", "id": "...", "offer": "...", "answer": "...", "candidate": "..."}` — WebRTC signaling
@@ -584,13 +522,15 @@ Rod uses Gun.js's JSON wire format. Messages are JSON objects with these fields:
 | `--multicast` | `MULTICAST` | false | Enable UDP multicast LAN discovery |
 | `--memory-storage` | `MEMORY_STORAGE` | false | Use in-memory storage (ephemeral) |
 | `--redb-storage` | `REDB_STORAGE` | true | Use redb persistent storage |
-| `--redb-path` | `REDB_PATH` | `rod.redb` | Path to redb database file |
+| `--redb-path` | `REDB_PATH` | `beam.redb` | Path to redb database file |
 | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true | Accept unsigned writes to public space |
 | `--stats` | `STATS` | true | Expose stats at `/stats` on web UI port |
 
 ### Programmatic Config
 
 ```rust
+use beam::Config;
+
 let config = Config {
     allow_public_space: false,   // Reject unsigned public writes
     stats: true,                 // Expose stats endpoint
@@ -645,8 +585,9 @@ cargo test --test integration websocket_sync_over_relay_peer
 | Feature | Default | Enables |
 |---------|---------|---------|
 | `webrtc` | No | `dep:str0m`, `dep:stun` — direct P2P connections via WebRTC data channels |
+| `persy` | No | `dep:persy` — Persy storage backend for high-concurrency workloads |
 
-Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (functions return `None`).
+Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (functions return `None`). Without `persy`, the `PersyStorage` adapter is not compiled in and `--persy-storage` will error at startup.
 
 ---
 
@@ -654,11 +595,13 @@ Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (fu
 
 MIT — see [LICENSE](LICENSE).
 
+---
+
 ## Credits
 
-Rod was originally created by [Martti Malmi](https://github.com/mmalmi) as a from-scratch Rust port of [Gun.js](https://github.com/amark/gun) by Mark Nadal. The original Gun.js project is maintained by Mark Nadal.
+BEAM was originally created by [Martti Malmi](https://github.com/mmalmi) as a from-scratch Rust port of [Gun.js](https://github.com/amark/gun) by Mark Nadal. The original Gun.js project is maintained by Mark Nadal.
 
-This is an actively maintained fork with continued development by **Guan** (2026–present), comprising 109 commits across features, fixes, tests, and documentation.
+This is an actively maintained fork with continued development by **Guan** and maintained by **David Newman** (2026–present), comprising 367+ commits across features, fixes, tests, and documentation.
 
 ### Major Contributions
 
@@ -666,20 +609,28 @@ This is an actively maintained fork with continued development by **Guan** (2026
 
 **WebRTC P2P Transport** (`src/adapters/webrtc.rs`) — Built str0m-based WebRTC data channel support behind a feature flag: STUN discovery, TURN relay allocation, `connect_webrtc_peer()` public API, `RtcSignal` message variant for signaling, and peer ID collision guards. Resolved 10+ integration bugs including ICE starvation, offer-miss races, and cross-node signal routing.
 
-**Persistent Storage** (`src/adapters/redb_storage.rs`) — Added redb embedded database adapter with atomic `BatchPut` transactions, flush acknowledgement protocol, CLI flags (`--redb-storage`, `--redb-path`), and warm-schema startup to prevent `TableDoesNotExist` on first read.
+**Persistent Storage** (`src/adapters/redb_storage.rs`, `src/adapters/persy_storage.rs`) — Added redb embedded database adapter with atomic `BatchPut` transactions, flush acknowledgement protocol, CLI flags (`--redb-storage`, `--redb-path`), and warm-schema startup to prevent `TableDoesNotExist` on first read. Added Persy segment-store adapter with cross-backend mesh interop and migration tooling (`beam migrate`).
 
 **DAM Protocol Parity** — Implemented Gun.js's deduplication protocol: `Dup` TTL cache (999 entries / 9s), `##` checksum dedup for ack responses, `><` peer-hop lists for anti-loop relay. Removed dead `BoundedHashSet` code.
 
+**Network Fanout Ack (Quorum)** — Sentinel-driven async ack pattern across 6 surfaces (put, batch_put, flush, map, put_quorum, put_quorum_timeout). One oneshot registry (`pending_puts`), one timeout envelope (`tokio::time::timeout`), different decoders per use case. Gun.js ask-pattern wire compatibility.
+
+**Bounded Channel with Drop Logging** — `BoundedHashMap::push` returns `Result`, with `try_send_or_log` pattern for non-blocking writes. Fixed silent drop bug in Follow-up B.
+
 **Runtime Peer Addition** — `Node::connect_peer()` for dynamic WebSocket peer connections at runtime with exponential backoff retry.
 
-**Flush Protocol** — `Flush` message variant with oneshot ack channels, `flush_storage()` API, and `__rod_replay_complete__` sentinel for deterministic `map()` replay termination.
+**Flush Protocol** — `Flush` message variant with oneshot ack channels, `flush_storage()` API, and `__beam_replay_complete__` sentinel for deterministic `map()` replay termination.
 
 **BatchPut** — `Message::BatchPut` variant and `Node::batch_put()` for multi-value single-transaction writes, with router forwarding and storage adapter support.
 
+**Heavy Abusive Benchmarks** — Criterion suite comparing redb vs Persy across sequential writes, concurrent writes, reads, mixed 70/30, and memory pressure. Results documented in `benches/RESULTS.md`.
+
 **Bug Fixes** — Root-level children propagation in `add_parent_nodes`, `RwLock` self-deadlock in `Node::get`, synchronous redb Put for ACID ordering, AES key derivation alignment with Gun.js `aeskey.js`, and broadcast buffer configurability.
 
-**Production Review Pass** — Security audit, comprehensive inline documentation (module-level `//!`, item-level `///`, doctests), and test coverage across all 39 source files (178 unit + 9 integration + 7 doctests). Zero clippy warnings, zero compiler warnings. README, COMPASS (developer guide), and DEPLOY (operations guide) regenerated from code truth.
+**Production Review Pass** — Security audit, comprehensive inline documentation (module-level `//!`, item-level `///`, doctests), and test coverage across all source files. Zero clippy warnings on introduced code. README, COMPASS (developer guide), and DEPLOY (operations guide) regenerated from code truth.
+
+**Enterprise Stabilization** — Eliminated test flakiness by replacing blind `sleep()` patterns with active readiness polling (`wait_for_peer_count`, `wait_for_port`, `wait_for_handshake`). 5-consecutive-pass discipline verified across 4 feature configs.
 
 **Data Model Semantics** — Documented and verified the `on()`/`map()`/`once()` behavior model, including the key divergence from Gun.js's object reconstruction and the rationale for omitting debounce.
 
-Deep gratitude to Martti for the original implementation and to Mark Nadal for Gun.js itself — a visionary approach to decentralized data. This fork carries that work forward.
+Deep gratitude to Martti for the original implementation and to Mark Nadal for Gun.js itself — a visionary approach to decentralized data. This fork carries that work forward under the BEAM identity.
