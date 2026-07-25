@@ -9,13 +9,13 @@
 
 ## Context
 
-Rod's `Storage` trait abstracts the persistence layer behind `insert`, `get`, `range_scan`, and `delete`. The default implementation is `redb`, an embedded ACID database chosen for stability and the canonical "single-crate embedded store" pattern.
+BEAM's `Storage` trait abstracts the persistence layer behind `insert`, `get`, `range_scan`, and `delete`. The default implementation is `redb`, an embedded ACID database chosen for stability and the canonical "single-crate embedded store" pattern.
 
 Gun.js-style distributed graphs are write-heavy and concurrent: many peers put data simultaneously, replication fans out via `Put` messages, and storage commits happen at the leaf of each message path. redb's `WriteTransaction::open` serializes writes through a single `RwLock`, and every Put fsyncs before returning the ack. This is bulletproof for correctness but limits throughput on workloads with high concurrent write fanout.
 
 Persy offers a different shape: a segment-based embedded store with **per-transaction isolation** and optional **background_ops** for fsync offloading. The theory: concurrent writers on disjoint keys should not serialize, so aggregate throughput scales with cores rather than collapsing to single-writer. The cost: Persy is younger than redb, has a smaller ecosystem, and its fsync semantics require careful handling.
 
-The question: should Rod adopt Persy as a peer storage backend alongside redb? If yes, what is the API surface, what are the guarantees, and how do users migrate?
+The question: should BEAM adopt Persy as a peer storage backend alongside redb? If yes, what is the API surface, what are the guarantees, and how do users migrate?
 
 ---
 
@@ -33,7 +33,7 @@ The question: should Rod adopt Persy as a peer storage backend alongside redb? I
    - `--redb-storage true` (default, persistent)
    - `--persy-storage true` (opt-in, persistent, requires `--features persy` build)
    - Pattern mirrors existing flag conventions — no new abstraction layer
-3. **Migration tool (`rod migrate --from X --to Y --source P --target P`):**
+3. **Migration tool (`beam migrate --from X --to Y --source P --target P`):**
    - Bidirectional redb ↔ Persy
    - Single transaction per batch (canonical Persy pattern)
    - Dry-run support, empty source handling, byte-for-byte checksum verification
@@ -97,7 +97,7 @@ The v0.6.0 work cycle included a premature attempt to disable Persy's `backgroun
 
 If Persy causes production issues:
 
-1. **Migrate back**: `rod migrate --from persy --to redb --source ./data.persy --target ./data.redb`
+1. **Migrate back**: `beam migrate --from persy --to redb --source ./data.persy --target ./data.redb`
 2. **Roll forward**: If a specific workload regresses, switch that node's CLI to `--redb-storage` and resync via the standard mesh protocol
 3. **Drop the feature**: Remove `--features persy` from the build; PersyStorage compiles out cleanly
 4. **Wire compatibility**: Nodes that never used Persy are unaffected — they never had `PersyStorage` in their binary
@@ -121,8 +121,8 @@ The verdict will land in `benches/RESULTS.md` after Epic 5. This ADR will be ame
 ## Cross-References
 
 - Plan doc: `docs/plans/PERSY-STORAGE-ADAPTER.md` (Epics 0-4 shipped, E5 next, E6 in progress)
-- v0.5.0 ship log: `.serena/memories/rod/v0.5.0-persy-storage-adapter-shipped.md`
-- v0.6.0 ship log: `.serena/memories/rod/v0.6.0-persy-migration-tool-shipped.md`
+- v0.5.0 ship log: `.serena/memories/beam/v0.5.0-persy-storage-adapter-shipped.md`
+- v0.6.0 ship log: `.serena/memories/beam/v0.6.0-persy-migration-tool-shipped.md`
 - Always-reply invariant: commit `b6a3d7b` in `src/adapters/redb_storage.rs`
 - ADR-011 (sentinel-driven ack pattern): shared async-ack discipline across all storage backends
 - ADR-012 (Arc<Metrics>): shared observability across Node + Router (both adapter-aware)
