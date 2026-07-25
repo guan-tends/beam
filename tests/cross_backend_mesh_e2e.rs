@@ -35,13 +35,13 @@
 //! # Feature gate
 //!
 //! ```bash
-//! cargo test -p rod --features persy --test cross_backend_mesh_e2e -- --test-threads=1
+//! cargo test -p beam --features persy --test cross_backend_mesh_e2e -- --test-threads=1
 //! ```
 
 #![cfg(feature = "persy")]
 
-use rod::adapters::{OutgoingWebsocketManager, RedbStorage, WsServer, WsServerConfig};
-use rod::{Config, Node, Value};
+use beam::adapters::{OutgoingWebsocketManager, RedbStorage, WsServer, WsServerConfig};
+use beam::{Config, Node, Value};
 use std::env;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -102,7 +102,7 @@ async fn wait_for_peer_count(
 }
 
 /// Build a unique redb path for test isolation. Each test gets its own
-/// file under `/tmp/rod-redb-{name}-{pid}-{nanos}.redb`.
+/// file under `/tmp/beam-redb-{name}-{pid}-{nanos}.redb`.
 fn unique_redb_path(test_name: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -110,7 +110,7 @@ fn unique_redb_path(test_name: &str) -> String {
         .as_nanos();
     env::temp_dir()
         .join(format!(
-            "rod-redb-{}-{}-{}.redb",
+            "beam-redb-{}-{}-{}.redb",
             test_name,
             std::process::id(),
             nanos
@@ -128,7 +128,7 @@ fn unique_persy_path(test_name: &str) -> String {
         .as_nanos();
     env::temp_dir()
         .join(format!(
-            "rod-persy-{}-{}-{}.persy",
+            "beam-persy-{}-{}-{}.persy",
             test_name,
             std::process::id(),
             nanos
@@ -144,7 +144,7 @@ fn unique_persy_path(test_name: &str) -> String {
 /// Both peer2 (redb) and peer3 (persy) connect to peer1.
 #[tokio::test]
 async fn e2e_cross_backend_three_node_mesh_convergence() {
-    use rod::adapters::PersyStorage;
+    use beam::adapters::PersyStorage;
 
     let port = 4956;
     let key = "from_peer1";
@@ -163,7 +163,7 @@ async fn e2e_cross_backend_three_node_mesh_convergence() {
     );
     let mut peer1 = Node::new_with_config(
         config1.clone(),
-        vec![Box::new(storage1) as Box<dyn rod::actor::Actor>],
+        vec![Box::new(storage1) as Box<dyn beam::actor::Actor>],
         vec![Box::new(ws_server1.clone())],
     );
 
@@ -175,7 +175,7 @@ async fn e2e_cross_backend_three_node_mesh_convergence() {
     let storage2 = RedbStorage::new_with_config(Config::default(), &redb_path_b, None);
     let mut peer2 = Node::new_with_config(
         Config::default(),
-        vec![Box::new(storage2) as Box<dyn rod::actor::Actor>],
+        vec![Box::new(storage2) as Box<dyn beam::actor::Actor>],
         vec![Box::new(ws_client2)],
     );
 
@@ -187,7 +187,7 @@ async fn e2e_cross_backend_three_node_mesh_convergence() {
     let storage3 = PersyStorage::new_with_path(&persy_path);
     let mut peer3 = Node::new_with_config(
         Config::default(),
-        vec![Box::new(storage3) as Box<dyn rod::actor::Actor>],
+        vec![Box::new(storage3) as Box<dyn beam::actor::Actor>],
         vec![Box::new(ws_client3)],
     );
 
@@ -230,7 +230,7 @@ async fn e2e_cross_backend_three_node_mesh_convergence() {
 /// Reverse: persy puts, redb nodes receive. Proves the wire is symmetric.
 #[tokio::test]
 async fn e2e_cross_backend_persy_initiator_convergence() {
-    use rod::adapters::PersyStorage;
+    use beam::adapters::PersyStorage;
 
     let port = 4958;
     let key = "from_peer3";
@@ -248,7 +248,7 @@ async fn e2e_cross_backend_persy_initiator_convergence() {
     let storage1 = RedbStorage::new_with_config(Config::default(), &redb_path_a, None);
     let mut peer1 = Node::new_with_config(
         Config::default(),
-        vec![Box::new(storage1) as Box<dyn rod::actor::Actor>],
+        vec![Box::new(storage1) as Box<dyn beam::actor::Actor>],
         vec![Box::new(ws_server1.clone())],
     );
 
@@ -260,7 +260,7 @@ async fn e2e_cross_backend_persy_initiator_convergence() {
     let storage2 = RedbStorage::new_with_config(Config::default(), &redb_path_b, None);
     let mut peer2 = Node::new_with_config(
         Config::default(),
-        vec![Box::new(storage2) as Box<dyn rod::actor::Actor>],
+        vec![Box::new(storage2) as Box<dyn beam::actor::Actor>],
         vec![Box::new(ws_client2)],
     );
 
@@ -272,7 +272,7 @@ async fn e2e_cross_backend_persy_initiator_convergence() {
     let storage3 = PersyStorage::new_with_path(&persy_path);
     let mut peer3 = Node::new_with_config(
         Config::default(),
-        vec![Box::new(storage3) as Box<dyn rod::actor::Actor>],
+        vec![Box::new(storage3) as Box<dyn beam::actor::Actor>],
         vec![Box::new(ws_client3)],
     );
 

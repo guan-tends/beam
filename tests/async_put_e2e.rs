@@ -22,10 +22,10 @@
 //! | e2e_concurrent_puts_serialize_correctly| MemoryStorage | 50 rapid puts, all observed    |
 //! | e2e_redb_put_await_durability          | RedbStorage   | Ack fires after fsync (gated)  |
 
-use rod::Node;
-use rod::actor::Actor;
-use rod::adapters::MemoryStorage;
-use rod::types::Value;
+use beam::Node;
+use beam::actor::Actor;
+use beam::adapters::MemoryStorage;
+use beam::types::Value;
 use std::time::Duration;
 
 /// Basic race-fix verification: put returns only after commit, so a
@@ -123,18 +123,18 @@ async fn e2e_memory_storage_roundtrip() {
 /// same path and confirm the value persists — proof that ack fired AFTER
 /// fsync, not before.
 ///
-/// Note: rod does not gate redb behind a feature flag, so this test runs
+/// Note: beam does not gate redb behind a feature flag, so this test runs
 /// unconditionally. If a `redb` feature is later added, this test should
 /// be gated with `#[cfg(feature = "redb")]`.
 #[tokio::test]
 async fn e2e_redb_put_await_durability() {
-    use rod::adapters::RedbStorage;
+    use beam::adapters::RedbStorage;
     use std::env;
 
-    use rod::Config;
+    use beam::Config;
     // Manual tmpdir to avoid pulling in the `tempfile` crate.
     let tmp_path = env::temp_dir().join(format!(
-        "rod-redb-{}-{}.redb",
+        "beam-redb-{}-{}.redb",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -143,7 +143,7 @@ async fn e2e_redb_put_await_durability() {
     ));
     let path = tmp_path.to_str().expect("temp path");
     // `new_with_config` is infallible — it panics on failure rather than
-    // returning a Result. This matches the existing rod API.
+    // returning a Result. This matches the existing beam API.
     let storage = RedbStorage::new_with_config(Config::default(), path, None);
     let mut node = Node::new_with_config(
         Config::default(),

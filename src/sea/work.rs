@@ -16,7 +16,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use rod::sea::{work, WorkOptions};
+//! use beam::sea::{work, WorkOptions};
 //!
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! let hash = work(b"password", None, WorkOptions::default()).await.unwrap();

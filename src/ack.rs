@@ -51,7 +51,7 @@
 //! # Why a sentinel, not a new Result variant
 //!
 //! The codebase has converged on sentinel-drain as the canonical ack
-//! pattern (see `feat/rod-redux-async-ack-and-drain` branch):
+//! pattern (see `feat/beam-redux-async-ack-and-drain` branch):
 //!
 //! - `_ack`/`_err` sentinels for storage commit confirmation
 //! - `__rod_replay_complete__` sentinel for replay drain

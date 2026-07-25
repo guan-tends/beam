@@ -1,4 +1,4 @@
-//! End-to-end tests for the `rod migrate` tool.
+//! End-to-end tests for the `beam migrate` tool.
 //!
 //! # What this proves
 //!
@@ -22,13 +22,13 @@
 //! # Feature gate
 //!
 //! ```bash
-//! cargo test -p rod --features persy --test migration_e2e -- --test-threads=1
+//! cargo test -p beam --features persy --test migration_e2e -- --test-threads=1
 //! ```
 
 #![cfg(feature = "persy")]
 
-use rod::migration::{migrate, Backend, MigrateOpts};
-use rod::types::{NodeData, Value};
+use beam::migration::{migrate, Backend, MigrateOpts};
+use beam::types::{NodeData, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
@@ -46,7 +46,7 @@ fn temp_path(name: &str, ext: &str) -> PathBuf {
         .as_nanos();
     let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
     env::temp_dir().join(format!(
-        "rod-migrate-{}-{}-{}-{}{}",
+        "beam-migrate-{}-{}-{}-{}{}",
         name,
         std::process::id(),
         nanos,

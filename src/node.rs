@@ -25,7 +25,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use rod::{Node, Value};
+//! use beam::{Node, Value};
 //!
 //! let mut db = Node::new();
 //! let mut sub = db.get("greeting").on();
@@ -681,7 +681,7 @@ impl Node {
     /// # Examples
     ///
     /// ```ignore
-    /// use rod::{Node, Value, AckPolicy};
+    /// use beam::{Node, Value, AckPolicy};
     ///
     /// let node = Node::new();
     /// let policy = AckPolicy::for_peer_count(3); // majority of 3 peers

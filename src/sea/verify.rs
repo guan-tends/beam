@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use rod::sea::{generate_pair, sign, verify_sync};
+//! use beam::sea::{generate_pair, sign, verify_sync};
 //!
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! let pair = generate_pair().await.unwrap();

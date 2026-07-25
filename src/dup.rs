@@ -21,7 +21,7 @@
 //! ## Example
 //!
 //! ```
-//! use rod::Dup;
+//! use beam::Dup;
 //!
 //! let mut dup = Dup::default_gun();
 //! assert!(!dup.check("msg-1"));    // not seen yet
