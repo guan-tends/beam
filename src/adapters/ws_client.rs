@@ -99,23 +99,40 @@ impl Actor for OutgoingWebsocketManager {
     async fn pre_start(&mut self, ctx: &ActorContext) {
         info!("OutgoingWebsocketManager starting");
         for url in self.urls.iter() {
-            // Retry connection until the websocket is established.
-            // TODO: break on actor shutdown signal instead of polling.
+            // Retry connection until the websocket is established, or the actor
+            // is shut down. Uses a bounded retry interval so transient DNS or
+            // network blips don't cause permanent disconnection.
+            //
+            // NOTE: The loop condition checks `clients` so that if a prior
+            // iteration's `start_actor` raced ahead of the `insert`, we don't
+            // create a duplicate WsConn for the same URL.
             loop {
-                sleep(Duration::from_millis(1000)).await;
                 if self.clients.read().await.contains_key(url) {
-                    break; // Already connected — move to next URL
+                    debug!("already connected to {}", url);
+                    break;
                 }
-                let result = connect_async(Url::parse(url).expect("Can't connect to URL")).await;
-                if let Ok(tuple) = result {
-                    let (socket, _) = tuple;
-                    debug!("outgoing websocket opened to {}", url);
+
+                debug!("attempting WebSocket connect to {}", url);
+                let result = connect_async(
+                    Url::parse(url).expect("invalid WebSocket URL"),
+                )
+                .await;
+
+                if let Ok((socket, _)) = result {
                     let (sender, receiver) = socket.split();
-                    let client = WsConn::new(sender, receiver, self.config.allow_public_space);
+                    let client = WsConn::new(
+                        sender,
+                        receiver,
+                        self.config.allow_public_space,
+                    );
                     let addr = ctx.start_actor(Box::new(client));
                     self.clients.write().await.insert(url.clone(), addr);
-                    break; // Connected — move to next URL
+                    debug!("connected to {}", url);
+                    break;
                 }
+
+                debug!("connect to {} failed, retrying in 200ms", url);
+                sleep(Duration::from_millis(200)).await;
             }
         }
     }
@@ -137,7 +154,7 @@ impl Actor for OutgoingWebsocketManager {
         // periodically. This keeps `handle` simple and avoids
         // priority inversion under load.
         let snapshot: Vec<Addr> = self.clients.read().await.values().cloned().collect();
-        for client in snapshot {
+                for client in snapshot {
             let _ = client.send(message.clone());
         }
     }

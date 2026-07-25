@@ -86,10 +86,11 @@ pub async fn wait_for_port(port: u16, timeout_ms: u64) {
 ///
 /// # Why this is correct
 ///
-/// `WsServer::peer_count()` increments when a [`rod::adapters::ws_conn::WsConn`]
-/// actor finishes the WS upgrade and registers its address. That happens
-/// AFTER the TCP listener accepts AND the WS handshake completes — the
-/// same condition the broadcast needs to succeed.
+/// `WsServer::peer_count()` increments when a
+/// `rod::adapters::ws_conn::WsConn` actor finishes the WS upgrade
+/// and registers its address. That happens AFTER the TCP listener
+/// accepts AND the WS handshake completes — the same condition the
+/// broadcast needs to succeed.
 ///
 /// # Panics
 /// If the expected peer count is not reached within `timeout_ms` ms.
@@ -133,7 +134,7 @@ pub async fn wait_for_connected_count(
     let start = Instant::now();
     let limit = Duration::from_millis(timeout_ms);
     while start.elapsed() < limit {
-        if client_manager.connected_count() >= expected_connections {
+        if client_manager.connected_count().await >= expected_connections {
             return;
         }
         sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
@@ -143,6 +144,6 @@ pub async fn wait_for_connected_count(
          observed {}. Likely cause: WsServer never bound or connect_async failed.",
         expected_connections,
         timeout_ms,
-        client_manager.connected_count()
+        client_manager.connected_count().await
     );
 }
