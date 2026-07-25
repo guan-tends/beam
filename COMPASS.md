@@ -1,4 +1,4 @@
-# Compass — Navigating the Rod Codebase
+# Compass — Navigating the BEAM Codebase
 
 > *A guide for contributors. If you're lost, start here. Every claim in this document is verified against the actual source code.*
 
@@ -175,7 +175,7 @@ epriv_key = "base64" — 32-byte ECDH private scalar
 
 #### Session Storage
 - **MemorySessionStorage** — `HashMap<alias, KeyPair>` in memory, lost on restart
-- **EncryptedFileSessionStorage** — persists to `~/.config/rod/sessions/` (or platform equivalent), encrypted with `BEAM_SEA_SESSION_KEY` environment variable (AES-256-GCM)
+- **EncryptedFileSessionStorage** — persists to `~/.config/beam/sessions/` (or platform equivalent), encrypted with `BEAM_SEA_SESSION_KEY` environment variable (AES-256-GCM)
 - Both implement the `SessionStorage` trait (async `save`, `load`, `clear`)
 
 #### User Identity Flow
