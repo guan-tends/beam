@@ -165,7 +165,15 @@ async fn e2e_redb_put_await_durability() {
 
     // Tear down the node, recreate it against the same path. The value
     // should still be there — proof that ack fired AFTER fsync, not before.
-    drop(node);
+    //
+    // `stop()` aborts all spawned actor tasks (Node, Router, and child
+    // tasks like the quorum-reaper). This drops the storage adapter and
+    // releases the `Arc<Database>`, which in turn releases redb's file
+    // lock. A bare `drop(node)` only decrements the local Arc — the
+    // Router task (a separate `tokio::spawn`) still holds the storage
+    // adapter and keeps the file locked.
+    node.stop();
+    tokio::task::yield_now().await;
     let storage2 = RedbStorage::new_with_config(Config::default(), path, None);
     let mut node2 = Node::new_with_config(
         Config::default(),

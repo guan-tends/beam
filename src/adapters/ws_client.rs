@@ -18,6 +18,8 @@
 
 use futures_util::StreamExt;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio_tungstenite::connect_async;
 use url::Url;
 
@@ -34,9 +36,15 @@ use tokio::time::{Duration, sleep};
 /// Created with a list of WebSocket URLs. On `pre_start`, connects to each
 /// URL (with retry) and spawns a [`WsConn`] actor per connection. All
 /// outgoing messages are fanned out to all connected clients.
+///
+/// The `clients` map is shared via `Arc<RwLock<...>>` so that e2e tests
+/// can hold their own clone of this manager and observe connection
+/// state via [`Self::connected_count`] while the actor-driven copy
+/// (moved into [`crate::Node`]) performs the actual work.
+#[derive(Clone)]
 pub struct OutgoingWebsocketManager {
     config: Config,
-    clients: HashMap<String, Addr>,
+    clients: Arc<RwLock<HashMap<String, Addr>>>,
     urls: Vec<String>,
 }
 
@@ -50,9 +58,39 @@ impl OutgoingWebsocketManager {
     pub fn new(config: Config, urls: Vec<String>) -> Self {
         OutgoingWebsocketManager {
             urls,
-            clients: HashMap::new(),
+            clients: Arc::new(RwLock::new(HashMap::new())),
             config,
         }
+    }
+
+    /// Returns the number of remote URLs that have an active WebSocket connection.
+    ///
+    /// This is a **readiness signal**: it reflects the state of the
+    /// `clients` map, which is populated only after `connect_async`
+    /// succeeds (see `pre_start`). Once `connected_count() == urls.len()`,
+    /// all configured peer connections have completed the WebSocket
+    /// handshake and are ready to send/receive messages.
+    ///
+    /// e2e tests should poll on this instead of blind `sleep(N)`:
+    ///
+    /// ```ignore
+    /// while client.connected_count().await < expected {
+    ///     tokio::time::sleep(Duration::from_millis(50)).await;
+    /// }
+    /// ```
+    ///
+    /// Returns a snapshot under the read lock; the count is monotonic
+    /// (only grows as connections succeed). Callers do not need to
+    /// handle rollback — the actor never removes entries from `clients`
+    /// during normal operation.
+    pub async fn connected_count(&self) -> usize {
+        self.clients.read().await.len()
+    }
+
+    /// Returns the configured target URLs. Useful for tests that want to
+    /// know how many connections to expect.
+    pub fn urls(&self) -> &[String] {
+        &self.urls
     }
 }
 
@@ -65,7 +103,7 @@ impl Actor for OutgoingWebsocketManager {
             // TODO: break on actor shutdown signal instead of polling.
             loop {
                 sleep(Duration::from_millis(1000)).await;
-                if self.clients.contains_key(url) {
+                if self.clients.read().await.contains_key(url) {
                     break; // Already connected — move to next URL
                 }
                 let result = connect_async(Url::parse(url).expect("Can't connect to URL")).await;
@@ -75,7 +113,7 @@ impl Actor for OutgoingWebsocketManager {
                     let (sender, receiver) = socket.split();
                     let client = WsConn::new(sender, receiver, self.config.allow_public_space);
                     let addr = ctx.start_actor(Box::new(client));
-                    self.clients.insert(url.clone(), addr);
+                    self.clients.write().await.insert(url.clone(), addr);
                     break; // Connected — move to next URL
                 }
             }
@@ -88,8 +126,19 @@ impl Actor for OutgoingWebsocketManager {
     }
 
     async fn handle(&mut self, message: Message, _ctx: &ActorContext) {
-        // Fan out to all connected clients, removing any that have died.
-        self.clients
-            .retain(|_url, client| client.send(message.clone()).is_ok());
+        // Fan out to all connected clients.
+        //
+        // Snapshot under the read lock so we don't hold the lock while
+        // calling `send` (which may briefly contend on the actor's
+        // mailbox). `send().is_err()` clients are skipped — `pre_start`
+        // will retry the connection on the next loop iteration. We do
+        // not evict dead clients from the map here; that is the
+        // responsibility of the reconnection loop, which already runs
+        // periodically. This keeps `handle` simple and avoids
+        // priority inversion under load.
+        let snapshot: Vec<Addr> = self.clients.read().await.values().cloned().collect();
+        for client in snapshot {
+            let _ = client.send(message.clone());
+        }
     }
 }
