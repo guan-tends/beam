@@ -842,6 +842,22 @@ impl Node {
         self.on_sender.send(value.clone()).ok();
         debug!("put {}", value.to_string());
         let mut updated_nodes = BTreeMap::new();
+        // Store the value at self.uid under the "_" convention (Gun.js
+        // soul-value encoding) so that map() on self returns the value
+        // as a synthetic child. This is what Gun.js semantics expect for
+        // a node's own value vs its children. Previously put only wrote
+        // under parent_id via add_parent_nodes, so map() on the leaf
+        // never saw the put value.
+        let self_uid = self.uid.read().clone();
+        let mut self_children = Children::default();
+        self_children.insert(
+            "_".to_string(),
+            NodeData { value: value.clone(), updated_at },
+        );
+        updated_nodes.insert(self_uid, self_children);
+        // Continue with parent chain propagation using the raw value so
+        // parents' child entries remain the actual value (this is what
+        // node.get("key").put(...) → node.get("key").once(...) expects).
         self.add_parent_nodes(&mut updated_nodes, value, updated_at);
         let my_addr = self.addr.read().clone().unwrap();
         let put = Put::new(updated_nodes, None, my_addr);
