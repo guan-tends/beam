@@ -481,9 +481,16 @@ impl Message {
             let node_data = node_data
                 .as_object()
                 .ok_or("put node data was not an object")?;
-            let updated_at_times = node_data["_"][">"] // TODO this panics if _ is not an object and silently crashes the websocket
-                .as_object()
-                .ok_or("no metadata _ in Put node object")?;
+
+            // Gun.js treats the `_` metadata as optional — some relay
+            // messages omit it entirely. Use an empty map as fallback
+            // so children without timestamp entries default to 0.0.
+            let empty_map = serde_json::Map::new();
+            let updated_at_times = node_data
+                .get("_")
+                .and_then(|m| m.get(">"))
+                .and_then(|t| t.as_object())
+                .unwrap_or(&empty_map);
 
             let mut is_public_space = true;
             if let Some(first_letter) = node_id.chars().next() {
@@ -503,11 +510,21 @@ impl Message {
                 if child_key == "_" {
                     continue;
                 }
+                // Default to 0.0 when timestamp is missing — Gun.js
+                // tolerates absent `>` entries for relay messages.
                 let updated_at = updated_at_times
                     .get(child_key)
-                    .ok_or("no updated_at found for Put key")?;
-                let updated_at = updated_at.as_f64().ok_or("updated_at was not a number")?;
-                let value = Value::try_from(child_val.clone())?;
+                    .and_then(|t| t.as_f64())
+                    .unwrap_or(0.0);
+                let value = match Value::try_from(child_val.clone()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        // Skip values we can't convert rather than rejecting
+                        // the entire Put — Gun.js is lenient with relay data.
+                        debug!("skipping unconvertible value for key {}: {}", child_key, e);
+                        continue;
+                    }
+                };
 
                 if node_id == "#" {
                     // Content-hash addressed data. Gun.js relays these
