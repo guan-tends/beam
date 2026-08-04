@@ -199,11 +199,16 @@ impl WsServer {
 #[async_trait]
 impl Actor for WsServer {
     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
+        let client_count = self.clients.read().await.len();
+        eprintln!("[WSSERVER-DIAG] handle called with {} clients, msg type: {}", client_count, match &msg { Message::Put(_) => "Put", Message::Get(_) => "Get", _ => "Other" });
         for conn in self.clients.read().await.iter() {
             if msg.is_from(conn) {
+                eprintln!("[WSSERVER-DIAG] skipping msg.from == conn");
                 continue;
             }
+            eprintln!("[WSSERVER-DIAG] relaying to WsConn client");
             if conn.send(msg.clone()).is_err() {
+                eprintln!("[WSSERVER-DIAG] send failed, removing client");
                 self.clients.write().await.remove(conn);
             }
         }
