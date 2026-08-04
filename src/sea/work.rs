@@ -72,7 +72,7 @@ pub async fn work(data: &[u8], salt: Option<&[u8]>, opts: WorkOptions) -> Result
             let mut hasher = Sha256::new();
             hasher.update(&data);
             let hash = hasher.finalize();
-            let encoded = base64::encode_config(&hash[..], base64::STANDARD_NO_PAD);
+            let encoded = base64::encode_config(&hash[..], base64::URL_SAFE_NO_PAD);
             Ok(encoded)
         })
         .await
@@ -105,7 +105,7 @@ pub async fn work(data: &[u8], salt: Option<&[u8]>, opts: WorkOptions) -> Result
     .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?;
 
     // Encode result as base64
-    let encoded = base64::encode_config(&result, base64::STANDARD_NO_PAD);
+    let encoded = base64::encode_config(&result, base64::URL_SAFE_NO_PAD);
     Ok(encoded)
 }
 
@@ -192,7 +192,7 @@ mod tests {
         };
         let result = work(b"", None, opts).await.unwrap();
         // base64 no-pad of the known SHA-256 of empty string
-        let expected = "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU";
+        let expected = "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU";
         assert_eq!(result, expected);
     }
 }
