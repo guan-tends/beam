@@ -34,7 +34,7 @@ pub fn secret_sync(their_epub: &str, pair: &KeyPair) -> Result<String, SeaError>
         .as_ref()
         .ok_or_else(|| SeaError::Crypto("missing epriv key".to_string()))?;
 
-    let our_priv_bytes = base64::decode_config(our_epriv, base64::STANDARD_NO_PAD)
+    let our_priv_bytes = base64::decode_config(our_epriv, base64::URL_SAFE_NO_PAD)
         .map_err(|_| SeaError::InvalidKey)?;
 
     if our_priv_bytes.len() != 32 {
@@ -58,7 +58,7 @@ pub fn secret_sync(their_epub: &str, pair: &KeyPair) -> Result<String, SeaError>
     // Return as base64 (matching Gun.js format)
     Ok(base64::encode_config(
         &shared_bytes[..],
-        base64::STANDARD_NO_PAD,
+        base64::URL_SAFE_NO_PAD,
     ))
 }
 
@@ -69,9 +69,9 @@ fn parse_epub(epub: &str) -> Result<p256::PublicKey, SeaError> {
         return Err(SeaError::InvalidKey);
     }
 
-    let x = base64::decode_config(parts[0], base64::STANDARD_NO_PAD)
+    let x = base64::decode_config(parts[0], base64::URL_SAFE_NO_PAD)
         .map_err(|_| SeaError::InvalidKey)?;
-    let y = base64::decode_config(parts[1], base64::STANDARD_NO_PAD)
+    let y = base64::decode_config(parts[1], base64::URL_SAFE_NO_PAD)
         .map_err(|_| SeaError::InvalidKey)?;
 
     // Reconstruct uncompressed public key (0x04 || x || y)

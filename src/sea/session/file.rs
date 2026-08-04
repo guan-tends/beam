@@ -237,9 +237,9 @@ impl SessionStorage for EncryptedFileSessionStorage {
 
             let expires_at = Self::now() + expiry;
             Ok::<SessionFile, SeaError>(SessionFile {
-                ct: base64::encode_config(&ciphertext, base64::STANDARD_NO_PAD),
-                iv: base64::encode_config(nonce, base64::STANDARD_NO_PAD),
-                s: base64::encode_config(salt, base64::STANDARD_NO_PAD),
+                ct: base64::encode_config(&ciphertext, base64::URL_SAFE_NO_PAD),
+                iv: base64::encode_config(nonce, base64::URL_SAFE_NO_PAD),
+                s: base64::encode_config(salt, base64::URL_SAFE_NO_PAD),
                 alias,
                 expires_at,
             })
@@ -285,9 +285,9 @@ impl SessionStorage for EncryptedFileSessionStorage {
             return Ok(None);
         }
 
-        let ciphertext = base64::decode_config(&session_file.ct, base64::STANDARD_NO_PAD)
+        let ciphertext = base64::decode_config(&session_file.ct, base64::URL_SAFE_NO_PAD)
             .map_err(|_| SeaError::SessionStorage("bad ct".to_string()))?;
-        let nonce = base64::decode_config(&session_file.iv, base64::STANDARD_NO_PAD)
+        let nonce = base64::decode_config(&session_file.iv, base64::URL_SAFE_NO_PAD)
             .map_err(|_| SeaError::SessionStorage("bad iv".to_string()))?;
 
         // Decrypt in spawn_blocking

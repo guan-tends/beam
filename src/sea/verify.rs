@@ -65,9 +65,9 @@ pub fn verify_sync(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError
         return Err(SeaError::InvalidKey);
     }
 
-    let x = base64::decode_config(parts[0], base64::STANDARD_NO_PAD)
+    let x = base64::decode_config(parts[0], base64::URL_SAFE_NO_PAD)
         .map_err(|_| SeaError::InvalidKey)?;
-    let y = base64::decode_config(parts[1], base64::STANDARD_NO_PAD)
+    let y = base64::decode_config(parts[1], base64::URL_SAFE_NO_PAD)
         .map_err(|_| SeaError::InvalidKey)?;
 
     // Reconstruct uncompressed public key (0x04 || x || y)
@@ -80,7 +80,7 @@ pub fn verify_sync(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError
         .map_err(|e| SeaError::Crypto(format!("invalid public key: {}", e)))?;
 
     // Decode signature (r||s, 64 bytes)
-    let sig_bytes = base64::decode_config(signature, base64::STANDARD_NO_PAD)
+    let sig_bytes = base64::decode_config(signature, base64::URL_SAFE_NO_PAD)
         .map_err(|_| SeaError::VerificationFailed)?;
 
     if sig_bytes.len() != 64 {

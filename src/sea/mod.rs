@@ -699,7 +699,7 @@ mod tests {
 
         let epub = pair.epub_key.as_ref().unwrap();
         let dh = secret(epub, &pair).await.unwrap();
-        let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD).unwrap();
+        let dh_bytes = base64::decode_config(&dh, base64::URL_SAFE_NO_PAD).unwrap();
 
         let decrypted = decrypt_symmetric(&enc, &dh_bytes).await.unwrap();
         assert_eq!(decrypted, payload);
@@ -782,7 +782,7 @@ mod tests {
 
         let epub = alice_pair.epub_key.as_ref().unwrap();
         let dh = secret(epub, &alice_pair).await.unwrap();
-        let dh_bytes = base64::decode_config(&dh, base64::STANDARD_NO_PAD).unwrap();
+        let dh_bytes = base64::decode_config(&dh, base64::URL_SAFE_NO_PAD).unwrap();
 
         let decrypted = decrypt_symmetric(&enc, &dh_bytes).await.unwrap();
         assert_eq!(
