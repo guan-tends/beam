@@ -328,14 +328,23 @@ impl Message {
         node_id: &str,
         node_data: &serde_json::Map<String, JsonValue>,
     ) -> Result<(), &'static str> {
-        for (child_key, timestamp) in node_data["_"][">"]
-            .as_object()
-            .ok_or("not an object")?
-            .iter()
+        // If the `_` metadata or `>` timestamps are absent or not an
+        // object, there are no signed values to verify. Gun.js tolerates
+        // missing metadata in relay messages.
+        let timestamps = match node_data
+            .get("_")
+            .and_then(|m| m.get(">"))
+            .and_then(|t| t.as_object())
         {
-            let value = node_data
-                .get(child_key)
-                .ok_or("no matching key in object and _")?;
+            Some(t) => t,
+            None => return Ok(()),
+        };
+
+        for (child_key, timestamp) in timestamps.iter() {
+            let value = match node_data.get(child_key) {
+                Some(v) => v,
+                None => continue, // child in > but not in node — skip
+            };
 
             // Skip non-string values — these are Links ({"#":"soul"}) or
             // numeric/boolean metadata, not signed data. Gun.js only
