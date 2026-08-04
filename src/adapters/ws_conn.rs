@@ -91,18 +91,18 @@ impl Actor for WsConn {
                         eprintln!("[WSCONN-DIAG] received {} bytes from wire", s.len());
                         if s.len() < 5000 { eprintln!("[WSCONN-DIAG] content: {}", s); }
                         debug!("WsConn received: {}", s);
-                        if let Ok(msgs) =
-                            Message::try_from(s, ctx2.addr.clone(), allow_public_space)
-                        {
-                            eprintln!("[WSCONN-DIAG] parsed {} messages, forwarding to router", msgs.len());
+                        match Message::try_from(s, ctx2.addr.clone(), allow_public_space) {
+                            Ok(msgs) => {
+                                eprintln!("[WSCONN-DIAG] parsed {} messages, forwarding to router", msgs.len());
                                 for msg in msgs.into_iter() {
                                     if ctx2.router.send(msg).is_err() {
                                         error!("failed to forward incoming message to router");
                                     }
-
+                                }
                             }
-                        } else {
-                            eprintln!("[WSCONN-DIAG] try_from FAILED — message rejected");
+                            Err(e) => {
+                                eprintln!("[WSCONN-DIAG] try_from FAILED — err: '{}' (len={})", e, s.len());
+                            }
                         }
                     }
                     future::ok(())
