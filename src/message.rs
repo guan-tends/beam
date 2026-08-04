@@ -779,7 +779,11 @@ mod tests {
             Addr::noop(),
             false,
         );
-        assert!(res.is_err());
+        // Content-hash verification now happens at the storage layer, not
+        // the transport layer. The relay accepts content-addressed data
+        // without hash verification (matching Gun.js behavior). This test
+        // previously asserted is_err() — now the relay accepts it.
+        assert!(res.is_ok());
     }
 
     #[test]
