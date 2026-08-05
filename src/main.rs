@@ -41,11 +41,11 @@
 
 extern crate clap;
 use clap::{App, Arg, SubCommand};
-use beamdb::actor::Actor;
-use beamdb::adapters::{
+use beam::actor::Actor;
+use beam::adapters::{
     MemoryStorage, Multicast, OutgoingWebsocketManager, RedbStorage, WsServer, WsServerConfig,
 };
-use beamdb::{Config, Node};
+use beam::{Config, Node};
 
 #[tokio::main]
 async fn main() {
@@ -221,7 +221,7 @@ async fn main() {
     #[cfg(feature = "persy")]
     {
         if let Some(migrate_matches) = matches.subcommand_matches("migrate") {
-            use beamdb::migration::{migrate, Backend, MigrateOpts};
+            use beam::migration::{migrate, Backend, MigrateOpts};
             use std::path::PathBuf;
 
             // Parse backend selector
