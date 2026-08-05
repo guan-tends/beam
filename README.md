@@ -634,3 +634,17 @@ This is an actively maintained fork with continued development by **Guan** and m
 **Data Model Semantics** — Documented and verified the `on()`/`map()`/`once()` behavior model, including the key divergence from Gun.js's object reconstruction and the rationale for omitting debounce.
 
 Deep gratitude to Martti for the original implementation and to Mark Nadal for Gun.js itself — a visionary approach to decentralized data. This fork carries that work forward under the BEAM identity.
+
+---
+
+## Sponsors
+
+BEAM is open-source and built by a small team. If this crate is useful to your work, consider sponsoring to support ongoing development, faster updates, and new features.
+
+### Donate
+
+| Chain | Address |
+|-------|---------|
+| **Solana** | `Eu8wQcW68TKMs1a6eqzZu8znzU52QLqQugAMG8uCD6y6` |
+| **Ethereum / EVM** | `0x2733ff7c865C56d565a99BE1DC11B81cc76850A5` |
+| **XRP Ledger** | `r4X6e7McAQj7e8vBCeued1RYu4mCJrREDG` |
