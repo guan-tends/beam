@@ -6,7 +6,7 @@
 //! cargo run --example minimal
 //! ```
 
-use beam::{Node, adapters::*};
+use beam::Node;
 
 #[tokio::main]
 async fn main() {
@@ -16,7 +16,7 @@ async fn main() {
     let mut node = db.get("greeting");
     eprintln!("C: id = {}", node.id());
     eprintln!("D: put value");
-    node.put("Hello World!".into());
+    let _ = node.put("Hello World!".into());
     eprintln!("E: subscribe");
     let mut sub = node.on();
     eprintln!("F: recv");

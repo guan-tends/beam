@@ -32,20 +32,9 @@ mod common;
 #[cfg(test)]
 mod tests {
     use crate::common;
-    use log::info;
     use beam::adapters::*;
     use beam::{Config, Node, Value};
-    use std::sync::Once;
     use tokio::time::{Duration, timeout};
-
-    static INIT: Once = Once::new();
-
-    fn enable_logger() {
-        INIT.call_once(|| {
-            env_logger::init();
-        });
-    }
-
     // TODO proper test
     // TODO test .map()
     // TODO benchmark

@@ -86,8 +86,6 @@
 //!   `QuorumEntry` before fan-out
 //! - **Sentinel-driven completion** — `__quorum_met__` in `updated_nodes`,
 //!   matching the `_ack`/`_err` convention
-//! - **DRY** — `Node::put_quorum` extracts a `put_internal` helper shared
-//!   with `Node::put`, so the ack-drain plumbing is not duplicated
 //! - **No new dependency** — uses existing `std`, `tokio`
 
 use std::time::Duration;

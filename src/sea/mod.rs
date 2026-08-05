@@ -323,7 +323,7 @@ pub async fn sign_value(data: &JsonValue, pair: &KeyPair) -> Result<RodValue, Se
 mod tests {
     use super::*;
     use crate::sea::session::InMemorySessionStorage;
-    use crate::sea::{KeyPair, SessionStorage};
+    
     use serde_json::json;
 
     #[tokio::test]

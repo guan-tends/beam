@@ -161,28 +161,6 @@ impl Actor for Node {
     }
 }
 
-/// Internal enum: discriminates ack strategy for the unified put drain.
-///
-/// Both [`Node::put`] and [`Node::put_quorum`] register oneshots in the
-/// same `pending_puts` map keyed by `Put.id`. The drain in
-/// [`Node::handle_put`] branches on which sentinel the reply carries:
-///
-/// - `Local` waits for the storage adapter's `_ack`/`_err` reply.
-/// - `Quorum(policy)` waits for the Router's `__quorum_met__` sentinel
-///   after the configured number of peer acks arrive.
-///
-/// Decoding happens in two sibling functions:
-/// [`Node::decode_put_ack_payload`] for local, [`Node::decode_quorum_payload`]
-/// for quorum. The drain tries quorum first because the sentinel is more
-/// specific than `_ack` and a misclassification would be a subtle bug.
-#[derive(Debug, Clone, Copy)]
-enum AckKind {
-    /// Wait for storage adapter's `_ack` / `_err` reply.
-    Local,
-    /// Wait for Router's `__quorum_met__` sentinel after N peer acks.
-    Quorum(AckPolicy),
-}
-
 impl Node {
     /// Creates a new root-level node with default configuration and in-memory storage.
     ///
@@ -758,76 +736,6 @@ impl Node {
                 Err(format!(
                     "put_quorum timed out after {:?} (required {} peers)",
                     policy.timeout, policy.quorum
-                ))
-            }
-        }
-    }
-
-    /// Internal helper: dispatches a put with the given ack strategy.
-    ///
-    /// Currently both [`Node::put`] and [`Node::put_quorum`] inline their own
-    /// bodies for clarity — this helper exists as a future DRY surface and
-    /// is exercised by tests for the AckKind logic. Once both methods
-    /// stabilize, callers can migrate to share the helper.
-    #[allow(dead_code)] // Future DRY — both put and put_quorum will call this
-    async fn put_internal(
-        &mut self,
-        value: Value,
-        ack_kind: AckKind,
-    ) -> Result<ReplicationStatus, String> {
-        let updated_at: f64 = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as f64;
-        let mut updated_nodes = BTreeMap::new();
-        self.add_parent_nodes(&mut updated_nodes, value, updated_at);
-        let my_addr = self.addr.read().clone().unwrap();
-        let put = Put::new(updated_nodes, None, my_addr.clone());
-        let put_id = put.id.clone();
-        let (tx, rx) = oneshot::channel();
-        self.pending_puts.write().insert(put_id.clone(), tx);
-
-        let router_addr = match &*self.router.read() {
-            Some(addr) => addr.clone(),
-            None => {
-                self.pending_puts.write().remove(&put_id);
-                return Err("router not initialized".to_string());
-            }
-        };
-
-        // Quorum requires the Router to know about this put_id before any
-        // peer ack arrives. Register FIRST, then send the put.
-        if let AckKind::Quorum(policy) = &ack_kind {
-            if router_addr
-                .send(Message::RegisterQuorum {
-                    put_id: put_id.clone(),
-                    requester: my_addr.clone(),
-                    policy: *policy,
-                })
-                .is_err()
-            {
-                self.pending_puts.write().remove(&put_id);
-                return Err("failed to send RegisterQuorum to router".to_string());
-            }
-        }
-
-        if router_addr.send(Message::Put(put)).is_err() {
-            self.pending_puts.write().remove(&put_id);
-            return Err("failed to send put to router".to_string());
-        }
-
-        let dur = match &ack_kind {
-            AckKind::Local => Duration::from_secs(30),
-            AckKind::Quorum(policy) => policy.timeout,
-        };
-        match tokio::time::timeout(dur, rx).await {
-            Ok(Ok(status)) => status,
-            Ok(Err(_)) => Err("put ack channel closed".to_string()),
-            Err(_) => {
-                self.pending_puts.write().remove(&put_id);
-                Err(format!(
-                    "put timed out after {:?} (ack_kind={:?})",
-                    dur, ack_kind
                 ))
             }
         }
@@ -1484,7 +1392,6 @@ mod tests {
             "pending_puts should be empty after router-send failure"
         );
     }
-}
         // ========================================================================
         // Phase 5: Quorum Drain Tests (Network Fanout Ack)
         // ========================================================================
@@ -1704,3 +1611,4 @@ mod tests {
         // ========================================================================
         // End Phase 5 tests
         // ========================================================================
+}
