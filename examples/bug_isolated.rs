@@ -1,7 +1,7 @@
 // Minimal reproducer for Node::put + Node::map interaction.
 // Tests single-key (broken), multi-key (mnemos pattern), and batch_put (reference).
 
-use beamdb::{Node, Value};
+use beam::{Node, Value};
 use std::time::Duration;
 
 async fn drain_map(rx: &mut tokio::sync::broadcast::Receiver<(String, Value)>) -> Vec<(String, Value)> {
