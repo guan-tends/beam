@@ -1,6 +1,6 @@
 [package]
 name = "beamdb"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 repository = "http://192.168.8.142:8561/guan/beamdb.git"
 description = "BEAM — distributed graph database syncing over WebSocket, WebRTC, and multicast. Successor to rod."
