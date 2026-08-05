@@ -55,7 +55,6 @@ use crate::utils::{try_send_or_log, BoundedHashMap};
 use async_trait::async_trait;
 use log::{debug, error, info};
 use rand::{seq::IteratorRandom, thread_rng};
-use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -119,6 +118,7 @@ pub(crate) struct QuorumEntry {
 
 impl QuorumEntry {
     /// Create a new `QuorumEntry` from a registered policy.
+    #[cfg(test)]
     fn new(requester: Addr, policy: &AckPolicy) -> Self {
         Self {
             requester,
@@ -339,7 +339,7 @@ impl Actor for Router {
                 requester,
                 policy,
             } => {
-                self.handle_register_quorum(put_id, requester, policy);
+                let _ = self.handle_register_quorum(put_id, requester, policy);
             }
             Message::CheckQuorumTimeouts => {
                 self.handle_quorum_timeout_reaper();
@@ -400,6 +400,7 @@ impl Router {
     ///
     /// Cloning the `Arc` is cheap (refcount bump); the atomic counters
     /// are shared across all clones.
+    #[allow(dead_code)]
     pub fn metrics(&self) -> Arc<crate::metrics::Metrics> {
         self.metrics.clone()
     }

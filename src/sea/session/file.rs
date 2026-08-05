@@ -467,10 +467,10 @@ mod tests {
         clear_test_env();
         let dir = test_dir();
         // Use new() constructor which auto-generates key when env/file missing
-        let storage = EncryptedFileSessionStorage::with_dir_and_key(dir.clone(), vec![]);
+        let _storage = EncryptedFileSessionStorage::with_dir_and_key(dir.clone(), vec![]);
         // Sync save/load need a key — auto-gen happens on first op
         // Actually with_dir_and_key bypasses auto-gen. Test the real new() path:
-        let storage2 = EncryptedFileSessionStorage::new().unwrap();
+        let _storage2 = EncryptedFileSessionStorage::new().unwrap();
         // Can't easily test without env pollution. Skip for now.
         let _ = std::fs::remove_dir_all(&dir);
     }
