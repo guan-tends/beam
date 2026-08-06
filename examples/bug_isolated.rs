@@ -1,5 +1,5 @@
 // Minimal reproducer for Node::put + Node::map interaction.
-// Tests single-key (broken), multi-key (mnemos pattern), and batch_put (reference).
+// Tests single-key (broken), multi-key (client multi-key pattern), and batch_put (reference).
 
 use beam::{Node, Value};
 use std::time::Duration;
@@ -39,11 +39,11 @@ async fn main() {
         for (k, v) in &children { println!("  child: {} = {:?}", k, v); }
     }
 
-    // TEST 2: multi-key path (mnemos audit pattern)
+    // TEST 2: multi-key path (client audit pattern)
     {
-        println!("--- TEST 2: multi-key path (mnemos audit pattern) ---");
+        println!("--- TEST 2: multi-key path (client audit pattern) ---");
         let mut root = Node::new();
-        // mnemos does: traverse(&root, ["audit", "chain1"]).put(value)
+        // the client does: traverse(&root, ["audit", "chain1"]).put(value)
         let mut leaf = root.get("audit").get("chain1");
         leaf.put(Value::Text("audit_value".into())).await.unwrap();
 
