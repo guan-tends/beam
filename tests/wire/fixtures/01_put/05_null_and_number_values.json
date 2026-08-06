@@ -1,0 +1,15 @@
+{
+  "name": "put_null_and_number",
+  "description": "Put with null and number values — tests Value enum conversion",
+  "category": "put",
+  "input": "{\"put\":{\"soul/types\":{\"_\":{\"#\":\"soul/types\",\">\":{\"nothing\":10,\"pi\":20}},\"nothing\":null,\"pi\":3.14159}},\"#\":\"msg005\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soul/types"],
+    "fields": {"soul/types": ["nothing","pi"]},
+    "values": {"soul/types": {"nothing": null,"pi": 3.14159}},
+    "timestamps": {"soul/types": {"nothing": 10.0,"pi": 20.0}}
+  }
+}

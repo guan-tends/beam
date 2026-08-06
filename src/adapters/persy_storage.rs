@@ -5,11 +5,11 @@
 //! read+write actor pair, LWW conflict resolution per child, the
 //! `_ack`/`_err` sentinel convention, and the always-reply invariant
 //! from commit `b6a3d7b`. Storage backends are wire-format opaque to
-//! the rest of Rod — a node pair mixing redb and persy peers works.
+//! the rest of BEAM — a node pair mixing redb and persy peers works.
 //!
 //! # Schema
 //!
-//! One segment, `rod_nodes_v1`. Each record encodes a `NodeRecord`:
+//! One segment, `beam_nodes_v1`. Each record encodes a `NodeRecord`:
 //!
 //! ```text
 //! bincode(NodeRecord { node_id: String, children: Children })
@@ -22,7 +22,7 @@
 //! - **Get**: Scan the segment, find the record whose `node_id` matches,
 //!   deserialize, and reply with its children. If no record matches,
 //!   reply with an empty `Children` so `.map()` listeners drain the
-//!   `__rod_replay_complete__` sentinel instead of hanging.
+//!   `__beam_replay_complete__` sentinel instead of hanging.
 //! - **Put**: Scan for existing records with the same `node_id`,
 //!   LWW-merge their children, delete the stale records, and insert
 //!   a fresh merged record. Each put commits inline (ACID) inside
@@ -54,8 +54,8 @@ use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
 
 /// Segment name holding all node records. Single segment, mirrors the
-/// single-table redb pattern (`rod_nodes_v1`).
-pub(crate) const ROD_NODES: &str = "rod_nodes_v1";
+/// single-table redb pattern (`beam_nodes_v1`).
+pub(crate) const BEAM_NODES: &str = "beam_nodes_v1";
 
 /// On-disk record encoding. Persy stores opaque bytes, so we encode
 /// the node_id alongside its children so a Get scan can find the
@@ -78,7 +78,7 @@ pub(crate) struct NodeRecord {
 // are bound inline with `match` so each error path can log the operation
 // that failed — clearer than a generic "persy operation failed" log line.)
 
-/// Persy-backed persistent storage adapter for Rod.
+/// Persy-backed persistent storage adapter for BEAM.
 ///
 /// Shares the same conceptual shape as [`RedbStorage`]: open at a path,
 /// spawn as a read+write actor pair via the Router, handle Get/Put/
@@ -136,7 +136,7 @@ impl PersyStorage {
             let mut tx = persy
                 .begin()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            tx.create_segment(ROD_NODES)
+            tx.create_segment(BEAM_NODES)
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             tx.prepare()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?
@@ -156,7 +156,7 @@ impl PersyStorage {
     /// Handles a `Get` by scanning for the matching node and replying.
     ///
     /// If the node doesn't exist, sends an empty reply (sentinel) so
-    /// `.map()` listeners drain `__rod_replay_complete__` instead of
+    /// `.map()` listeners drain `__beam_replay_complete__` instead of
     /// hanging. If the reply is an ack (`in_response_to` is set), it
     /// is ALWAYS sent — checksum suppression is reserved for live
     /// broadcasts.
@@ -164,7 +164,7 @@ impl PersyStorage {
         // `solve_segment_id` returns the runtime `SegmentId` for the named
         // segment. `scan` returns `Result<SegmentIter>` — bind the iter first,
         // then iterate (each yielded item is `(PersyId, Vec<u8>)`, not a Result).
-        let segment_id = match self.db.solve_segment_id(ROD_NODES) {
+        let segment_id = match self.db.solve_segment_id(BEAM_NODES) {
             Ok(id) => id,
             Err(e) => {
                 error!("persy solve_segment_id failed: {:?}", e);
@@ -310,7 +310,7 @@ impl PersyStorage {
         let mut tx = self.db.begin().map_err(|e| format!("begin tx: {:?}", e))?;
         let segment_id = self
             .db
-            .solve_segment_id(ROD_NODES)
+            .solve_segment_id(BEAM_NODES)
             .map_err(|e| format!("solve_segment_id: {:?}", e))?;
         self.apply_put_to_tx(&mut tx, segment_id, put)?;
         let prepared = tx
@@ -328,7 +328,7 @@ impl PersyStorage {
         let mut tx = self.db.begin().map_err(|e| format!("begin tx: {:?}", e))?;
         let segment_id = self
             .db
-            .solve_segment_id(ROD_NODES)
+            .solve_segment_id(BEAM_NODES)
             .map_err(|e| format!("solve_segment_id: {:?}", e))?;
         for put in batch.puts {
             self.apply_put_to_tx(&mut tx, segment_id, put)?;
@@ -518,7 +518,7 @@ mod tests {
 
     fn fresh_path(name: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("rod_persy_test_{}_{}", name, std::process::id()));
+        p.push(format!("beam_persy_test_{}_{}", name, std::process::id()));
         // Ensure clean state
         let _ = std::fs::remove_file(&p);
         p
@@ -529,7 +529,7 @@ mod tests {
         let path = fresh_path("open");
         let storage = PersyStorage::new_with_path(&path);
         // Segment must exist after open_or_create_with
-        assert!(storage.db.exists_segment(ROD_NODES).unwrap_or(false));
+        assert!(storage.db.exists_segment(BEAM_NODES).unwrap_or(false));
         // File should exist
         assert!(path.exists());
         let _ = std::fs::remove_file(&path);
@@ -562,7 +562,7 @@ mod tests {
             .expect("put commit should succeed");
 
         // Now scan and verify the record is there
-        let segment_id = storage.db.solve_segment_id(ROD_NODES).unwrap();
+        let segment_id = storage.db.solve_segment_id(BEAM_NODES).unwrap();
         let scan_iter = storage.db.scan(&segment_id).unwrap();
         let mut found = false;
         for (_id, bytes) in scan_iter {
@@ -617,7 +617,7 @@ mod tests {
 
         // Verify: only the "newest" value should be in the segment,
         // and the stale records must have been deleted.
-        let segment_id = storage.db.solve_segment_id(ROD_NODES).unwrap();
+        let segment_id = storage.db.solve_segment_id(BEAM_NODES).unwrap();
         let scan_iter = storage.db.scan(&segment_id).unwrap();
         let mut record_count = 0;
         let mut found_value = None;
@@ -646,7 +646,7 @@ mod tests {
         // not hang or panic. We can't easily inspect the reply without an
         // actor, but we can verify the scan finds nothing and the flow
         // doesn't error.
-        let segment_id = storage.db.solve_segment_id(ROD_NODES).unwrap();
+        let segment_id = storage.db.solve_segment_id(BEAM_NODES).unwrap();
         let scan_iter = storage.db.scan(&segment_id).unwrap();
         let mut count = 0;
         for _ in scan_iter {

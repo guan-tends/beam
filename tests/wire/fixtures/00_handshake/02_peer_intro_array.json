@@ -1,0 +1,11 @@
+{
+  "name": "peer_intro_array",
+  "description": "Peer introduction wrapped in an array (Gun.js batch wire format)",
+  "category": "handshake",
+  "input": "[{\"dam\":\"hi\",\"#\":\"peer002\"}]",
+  "expected": {
+    "parses": true,
+    "kind": "Hi",
+    "souls": ["peer002"]
+  }
+}

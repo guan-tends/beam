@@ -1,6 +1,6 @@
 //! UDP multicast LAN discovery and sync adapter.
 //!
-//! [`Multicast`] uses UDP multicast to discover and sync with Rod peers on
+//! [`Multicast`] uses UDP multicast to discover and sync with BEAM peers on
 //! the local network. It broadcasts `Put` and `Get` messages to a multicast
 //! group, enabling zero-config peer discovery on LANs.
 //!

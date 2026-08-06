@@ -1,4 +1,4 @@
-//! Graph node — the core API for reading and writing data in the Rod graph.
+//! Graph node — the core API for reading and writing data in the BEAM graph.
 //!
 //! [`Node`] is the primary user-facing type. It represents a node in the
 //! distributed graph database and provides methods for:
@@ -98,7 +98,7 @@ impl Default for Config {
     }
 }
 
-/// A graph node — the primary API for reading and writing data in Rod.
+/// A graph node — the primary API for reading and writing data in BEAM.
 ///
 /// A `Node` represents a position in the distributed graph. The root node
 /// (created via [`Node::new`] or [`Node::new_with_config`]) owns the router
@@ -164,7 +164,7 @@ impl Actor for Node {
 impl Node {
     /// Creates a new root-level node with default configuration and in-memory storage.
     ///
-    /// This is the simplest way to get started with Rod. The node will use
+    /// This is the simplest way to get started with BEAM. The node will use
     /// [`MemoryStorage`] and have no network adapters connected.
     pub fn new() -> Self {
         let storage = MemoryStorage::new();
@@ -258,7 +258,7 @@ impl Node {
     /// If the put is a flush acknowledgement (has `in_response_to` matching a
     /// pending flush), the flush's oneshot sender is triggered instead.
     ///
-    /// For replay puts (have `in_response_to`), a `__rod_replay_complete__`
+    /// For replay puts (have `in_response_to`), a `__beam_replay_complete__`
     /// marker is sent on the map channel after all child values are dispatched.
     fn handle_put(&mut self, put: Put) {
         // Intercept acks BEFORE processing the message as data. Two ack
@@ -307,7 +307,7 @@ impl Node {
             if node_id == *self.uid.read() {
                 for (child, child_data) in node_data {
                     // Skip internal control keys
-                    if child.starts_with("__rod_") {
+                    if child.starts_with("__beam_") {
                         continue;
                     }
                     if let Some(child) = self.children.read().get(&child) {
@@ -320,7 +320,7 @@ impl Node {
                 if is_replay {
                     let _ = self
                         .map_sender
-                        .send(("__rod_replay_complete__".to_string(), Value::Null));
+                        .send(("__beam_replay_complete__".to_string(), Value::Null));
                 }
             }
         }

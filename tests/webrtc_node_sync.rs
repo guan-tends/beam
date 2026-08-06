@@ -1,4 +1,4 @@
-//! Phase D3.5: Two Rod Node WebRTC DataChannel sync test.
+//! Phase D3.5: Two BEAM Node WebRTC DataChannel sync test.
 //!
 //! Creates two Node instances connected via WebSocket mesh for signaling,
 //! then bootstraps a direct WebRTC DataChannel between them.

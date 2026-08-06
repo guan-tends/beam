@@ -1,4 +1,4 @@
-//! Integration tests for Rod — the Rust Gun Protocol implementation.
+//! Integration tests for BEAM — the Rust Gun Protocol implementation.
 //!
 //! These tests exercise the full stack: Node + adapters + network protocols.
 //! They spin up real WebSocket servers on localhost and verify mesh sync,

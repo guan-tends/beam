@@ -1,4 +1,4 @@
-//! In-memory storage adapter — the default storage backend for Rod.
+//! In-memory storage adapter — the default storage backend for BEAM.
 //!
 //! [`MemoryStorage`] stores all graph data in a `HashMap` protected by a
 //! `parking_lot::RwLock`. It is the simplest storage adapter and is used

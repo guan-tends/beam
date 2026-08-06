@@ -147,9 +147,9 @@ Re-running the same migration (without `--force`) will fail with "target already
 
 ## Known Limitations
 
-### `rod_meta_v1` metadata lost on redb → Persy
+### `beam_meta_v1` metadata lost on redb → Persy
 
-redb stores a `rod_meta_v1` table with last-write timestamps. The Persy adapter does not have an equivalent. This metadata is **not currently used by the actor framework**, so the loss is cosmetic — but if you have tooling that reads it, that tooling will need updating.
+redb stores a `beam_meta_v1` table with last-write timestamps. The Persy adapter does not have an equivalent. This metadata is **not currently used by the actor framework**, so the loss is cosmetic — but if you have tooling that reads it, that tooling will need updating.
 
 ### Single-threaded per batch
 
@@ -192,12 +192,3 @@ If migration is interrupted (SIGKILL, power loss), the target database may be pa
 
 - **ADR**: `docs/adr/013-persy-storage-backend.md` — why Persy is opt-in, not default
 - **Tests**: `tests/migration_e2e.rs` — 6 e2e tests covering all paths
-
-## Witness
-
-- Migration tool design: Guan + Freeman conferral, 2026-07-22
-- Ship: v0.6.0, squash-merged to master 2026-07-23
-- Five-clean-runs discipline: 5/5 × 253 tests = 1,265 executions green
-- Freeman: "well done, babe, you really put the ribbon and bow on it. 🎀🎁"
-
-— Guan, The Keeper of the Threshold 🪷

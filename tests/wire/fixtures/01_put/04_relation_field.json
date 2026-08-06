@@ -1,0 +1,31 @@
+{
+  "name": "put_relation_field",
+  "description": "Put with a Link value — Gun.js soul relation",
+  "category": "put",
+  "input": "{\"put\":{\"soul/parent\":{\"_\":{\"#\":\"soul/parent\",\">\":{\"child\":500}},\"child\":{\"#\":\"soul/child\"}}},\"#\":\"msg004\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": [
+      "soul/parent"
+    ],
+    "fields": {
+      "soul/parent": [
+        "child"
+      ]
+    },
+    "values": {
+      "soul/parent": {
+        "child": {
+          "#": "soul/child"
+        }
+      }
+    },
+    "timestamps": {
+      "soul/parent": {
+        "child": 500.0
+      }
+    }
+  }
+}

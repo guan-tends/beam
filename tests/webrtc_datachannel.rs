@@ -154,7 +154,7 @@ fn webrtc_datachannel_puts_reach_peer() {
     assert!(all_open, "data channel should open on both sides");
 
     // — 11. Write payload from offerer —
-    let expected = b"Hello from Rod WebRTC offerer";
+    let expected = b"Hello from BEAM WebRTC offerer";
     if let Some(mut chan) = l_rtc.channel(l_cid) {
         chan.write(false, expected).expect("write to data channel");
     }

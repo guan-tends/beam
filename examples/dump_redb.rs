@@ -1,4 +1,4 @@
-//! Dump redb storage — inspect on-disk contents of a Rod redb database.
+//! Dump redb storage — inspect on-disk contents of a BEAM redb database.
 //!
 //! Usage:
 //! ```bash
@@ -9,13 +9,13 @@
 use redb::{Database, ReadableTable, TableDefinition};
 use redb::{ReadableDatabase, ReadableTableMetadata};
 
-const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
+const BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 
 fn main() {
     let path = std::env::args().nth(1).expect("Usage: dump_redb <path>");
     let db = Database::create(&path).unwrap();
     let rtx = db.begin_read().unwrap();
-    let table = rtx.open_table(ROD_NODES).unwrap();
+    let table = rtx.open_table(BEAM_NODES).unwrap();
 
     for entry in table.iter().unwrap() {
         let (k, v) = entry.unwrap();

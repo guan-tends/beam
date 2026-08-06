@@ -1,0 +1,10 @@
+{
+  "name": "empty_get",
+  "description": "Get without # (soul) in the get field — parser must reject",
+  "category": "edge",
+  "input": "{\"get\":{},\"#\":\"msg402\"}",
+  "expected": {
+    "parses": false,
+    "error": "no node id (#) found in get message"
+  }
+}

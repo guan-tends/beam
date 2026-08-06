@@ -5,3 +5,4 @@
 # Criterion benchmark persistent state
 benches/_data/
 
+.serena/

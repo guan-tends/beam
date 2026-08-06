@@ -72,7 +72,7 @@ impl EncryptedFileSessionStorage {
         }
     }
 
-    /// Config-friendly constructor with explicit session directory (used by Mnemos CLI)
+    /// Config-friendly constructor with explicit session directory (used by CLI tools)
     ///
     /// The `session_dir` is the FULL path — no "beam/sessions" suffix is appended.
     /// Pass `~/.config/beam/sessions` expanded to an absolute path.

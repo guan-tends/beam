@@ -69,7 +69,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-beamdb = { git = "http://192.168.8.142:8561/guan/beamdb.git" }
+beamdb = { git = "https://github.com/guan-tends/beam.git" }
 ```
 
 In your code:

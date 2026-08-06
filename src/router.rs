@@ -1,6 +1,6 @@
 #![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
 
-//! Message router — the central hub for Rod's P2P message routing.
+//! Message router — the central hub for BEAM's P2P message routing.
 //!
 //! The [`Router`] actor sits between [`crate::Node`] and all storage/network
 //! adapters. It handles:
@@ -748,7 +748,7 @@ impl Router {
     ///
     /// `quorum_entries` is borrowed mutably only inside `handle()`. A sibling
     /// task touching the map directly would conflict with the actor's
-    /// single-threaded borrow model. The canonical Rod pattern — used by all
+    /// single-threaded borrow model. The canonical BEAM pattern — used by all
     /// background work — is: spawn task → task sends self-message →
     /// `handle()` processes with full access.
     fn handle_quorum_timeout_reaper(&mut self) {

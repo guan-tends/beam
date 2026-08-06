@@ -1,0 +1,10 @@
+{
+  "name": "missing_msg_id",
+  "description": "Message without # (msg id) field — parser must reject",
+  "category": "edge",
+  "input": "{\"put\":{\"soul/a\":{\"name\":\"test\"}}}",
+  "expected": {
+    "parses": false,
+    "error": "msg id not a string"
+  }
+}

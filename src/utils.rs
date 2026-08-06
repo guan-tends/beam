@@ -1,4 +1,4 @@
-//! Utility functions and data structures for Rod.
+//! Utility functions and data structures for BEAM.
 //!
 //! This module provides:
 //!
@@ -272,7 +272,7 @@ use crate::metrics::Metrics;
 /// the [`Metrics::dropped_sends`] counter and log at debug level instead
 /// of silently dropping the error.
 ///
-/// This is the canonical Rod pattern for fire-and-forget sends. It
+/// This is the canonical BEAM pattern for fire-and-forget sends. It
 /// converts the previously invisible `let _ = addr.send(msg)` pattern
 /// into observable behavior without introducing a new abstraction layer.
 ///

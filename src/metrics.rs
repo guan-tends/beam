@@ -1,4 +1,4 @@
-//! Lock-free metrics for Rod actor send/fanout observability.
+//! Lock-free metrics for BEAM actor send/fanout observability.
 //!
 //! # Why this exists
 //!
@@ -53,7 +53,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Lock-free counters for Rod actor sends and drops.
+/// Lock-free counters for BEAM actor sends and drops.
 ///
 /// Cheap to clone via `Arc<Metrics>`. Designed to be passed via
 /// `ActorContext` (Composition-Root IoC) so any actor can record

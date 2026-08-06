@@ -1,0 +1,15 @@
+{
+  "name": "nested_relation_deep",
+  "description": "Put with multiple relation links forming a graph chain — A→B→C",
+  "category": "edge",
+  "input": "{\"put\":{\"node/a\":{\"_\":{\"#\":\"node/a\",\">\":{\"next\":1}},\"next\":{\"#\":\"node/b\"}},\"node/b\":{\"_\":{\"#\":\"node/b\",\">\":{\"next\":2}},\"next\":{\"#\":\"node/c\"}}},\"#\":\"msg404\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["node/a","node/b"],
+    "fields": {"node/a": ["next"],"node/b": ["next"]},
+    "values": {"node/a": {"next": {"#": "node/b"}},"node/b": {"next": {"#": "node/c"}}},
+    "timestamps": {"node/a": {"next": 1.0},"node/b": {"next": 2.0}}
+  }
+}

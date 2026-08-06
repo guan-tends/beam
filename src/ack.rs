@@ -19,8 +19,8 @@
 //!
 //! # Reserved sentinel prefix
 //!
-//! `__rod__` is the reserved prefix for wire-level sentinels. Existing:
-//! - `__rod_replay_complete__` — emitted by `map()` replay to signal drain complete
+//! `__beam__` is the reserved prefix for wire-level sentinels. Existing:
+//! - `__beam_replay_complete__` — emitted by `map()` replay to signal drain complete
 //!
 //! New:
 //! - `__quorum_met__` — emitted by Router when quorum threshold is reached
@@ -54,7 +54,7 @@
 //! pattern (see `feat/beam-redux-async-ack-and-drain` branch):
 //!
 //! - `_ack`/`_err` sentinels for storage commit confirmation
-//! - `__rod_replay_complete__` sentinel for replay drain
+//! - `__beam_replay_complete__` sentinel for replay drain
 //!
 //! Adding `__quorum_met__` keeps the drain plumbing DRY — the same
 //! `pending_puts: Arc<RwLock<HashMap<String, oneshot::Sender<...>>>>` map
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn sentinel_constant_is_stable() {
         // The wire-format string is load-bearing — any change would
-        // break interop with existing Rod nodes. Lock it down.
+        // break interop with existing BEAM nodes. Lock it down.
         assert_eq!(QUORUM_MET_SENTINEL, "__quorum_met__");
     }
 

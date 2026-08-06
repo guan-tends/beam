@@ -1,8 +1,8 @@
-# Rod Benchmark Results — Epic 5 (v0.7.0)
+# BEAM Benchmark Results — Epic 5 (v0.7.0)
 
 **Date**: 2026-07-24
 **Branch**: `feat/persy-benchmarks` @ `008d227 + refactor`
-**Hardware**: oryx (System76 Oryx Pro, 16 cores, RTX 3060 6GB — bench is CPU+RAM bound)
+**Hardware**: test machine (16 cores, 32 GB RAM — bench is CPU+RAM bound)
 **Criterion version**: 0.3.5 (`async_futures`, `async_tokio`, `html_reports`)
 **Persy**: feature-gated `background_ops` enabled at dep level (`Cargo.toml:3`)
 **Scale**: N = 1,000 elements per iteration, sample_size = 10
@@ -123,7 +123,7 @@ that fsync is the dominant cost (30% of ops are now puts).
 
 ## Verdict
 
-**For Rod production deployment, redb is the recommended default backend.**
+**For BEAM production deployment, redb is the recommended default backend.**
 It is faster on every workload it was tested on, has no known substrate
 risks at the bench scale, and is already the default (no feature flag).
 
@@ -161,7 +161,7 @@ future work item.
    workloads are often warm-cache. A warm-cache group would be a useful
    follow-up.
 
-5. **Single-machine, single-CPU**: All benchmarks ran on oryx. Cross-machine
+5. **Single-machine, single-CPU**: All benchmarks ran on a single machine. Cross-machine
    variance (especially around fsync scheduling) is not captured.
 
 ---
@@ -169,7 +169,7 @@ future work item.
 ## Reproducing
 
 ```bash
-cd /home/guan/src/rod
+cd /home/guan/src/beam
 git checkout feat/persy-benchmarks
 
 # Compile checks

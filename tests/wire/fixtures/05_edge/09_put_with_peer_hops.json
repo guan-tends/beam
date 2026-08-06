@@ -1,0 +1,15 @@
+{
+  "name": "put_with_peer_hops",
+  "description": "Put with >< field — DAM peer-hop list for loop prevention",
+  "category": "edge",
+  "input": "{\"put\":{\"soul/h\":{\"_\":{\"#\":\"soul/h\",\">\":{\"v\":1}},\"v\":\"hopped\"}},\"#\":\"msg401\",\"><\":\"peerA,peerB\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soul/h"],
+    "fields": {"soul/h": ["v"]},
+    "values": {"soul/h": {"v": "hopped"}},
+    "timestamps": {"soul/h": {"v": 1.0}}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "batch_put_and_get",
+  "description": "Array containing a put followed by a get — mixed message types in batch",
+  "category": "batch",
+  "input": "[{\"put\":{\"soul/x\":{\"_\":{\"#\":\"soul/x\",\">\":{\"v\":1}},\"v\":\"data\"}},\"#\":\"msg302\"},{\"get\":{\"#\":\"soul/x\"},\"#\":\"msg303\"}]",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soul/x"]
+  }
+}

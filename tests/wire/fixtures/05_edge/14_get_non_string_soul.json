@@ -1,0 +1,10 @@
+{
+  "name": "get_non_string_soul",
+  "description": "Get with # as a number instead of string — parser must reject",
+  "category": "edge",
+  "input": "{\"get\":{\"#\":12345},\"#\":\"msg406\"}",
+  "expected": {
+    "parses": false,
+    "error": "no node id (#) found in get message"
+  }
+}

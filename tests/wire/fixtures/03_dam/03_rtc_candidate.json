@@ -1,0 +1,10 @@
+{
+  "name": "dam_rtc_candidate",
+  "description": "WebRTC ICE candidate signal relayed via dam:rtc",
+  "category": "dam",
+  "input": "{\"dam\":\"rtc\",\"#\":\"msg202\",\"candidate\":\"ice-candidate-data\",\"to\":\"peerDEF\"}",
+  "expected": {
+    "parses": true,
+    "kind": "RtcSignal"
+  }
+}

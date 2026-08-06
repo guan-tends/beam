@@ -13,7 +13,7 @@ pub mod user;
 pub mod verify;
 pub mod work;
 
-use crate::types::Value as RodValue;
+use crate::types::Value as BeamValue;
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 use std::fmt;
@@ -309,14 +309,14 @@ pub fn is_pubkey_certified(payload: &JsonValue, pubkey: &str) -> bool {
     certify::is_certified(payload, pubkey)
 }
 
-/// Sign JSON data and wrap as a Rod Value::Text for user-space puts.
+/// Sign JSON data and wrap as a BEAM Value::Text for user-space puts.
 /// The returned value is a JSON-serialized {"m": message, "s": signature} string.
 /// Call this before db.put(value) when writing authenticated user data.
-pub async fn sign_value(data: &JsonValue, pair: &KeyPair) -> Result<RodValue, SeaError> {
+pub async fn sign_value(data: &JsonValue, pair: &KeyPair) -> Result<BeamValue, SeaError> {
     let signed = sign(data, pair).await?;
     let text = serde_json::to_string(&signed)
         .map_err(|e| SeaError::Crypto(format!("serialize signed: {}", e)))?;
-    Ok(RodValue::Text(text))
+    Ok(BeamValue::Text(text))
 }
 
 #[cfg(test)]
@@ -647,7 +647,7 @@ mod tests {
             .get(&alice_pair.pub_key);
 
         let owner_text = owner_grant.once(None).await.and_then(|v| match v {
-            RodValue::Text(t) => Some(t),
+            BeamValue::Text(t) => Some(t),
             _ => None,
         });
 
@@ -688,7 +688,7 @@ mod tests {
             .once(None)
             .await
             .and_then(|v| match v {
-                RodValue::Text(t) => Some(t),
+                BeamValue::Text(t) => Some(t),
                 _ => None,
             })
             .expect("secret should be stored");
@@ -767,7 +767,7 @@ mod tests {
             .get("api__credentials");
 
         let self_enc = alice_secret.once(None).await.and_then(|v| match v {
-            RodValue::Text(t) => Some(t),
+            BeamValue::Text(t) => Some(t),
             _ => None,
         });
         assert!(

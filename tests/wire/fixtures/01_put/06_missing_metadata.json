@@ -1,0 +1,15 @@
+{
+  "name": "put_missing_metadata",
+  "description": "Put without _ metadata node — Gun.js relay messages may omit it; timestamps default to 0.0",
+  "category": "put",
+  "input": "{\"put\":{\"soul/bare\":{\"name\":\"NoMeta\"}},\"#\":\"msg006\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soul/bare"],
+    "fields": {"soul/bare": ["name"]},
+    "values": {"soul/bare": {"name": "NoMeta"}},
+    "timestamps": {"soul/bare": {"name": 0.0}}
+  }
+}

@@ -1,14 +1,14 @@
 #![allow(clippy::await_holding_lock)] // TODO: Refactor in SEA review pass — extract data from MutexGuard before await
 #![allow(deprecated)]
 //! User authentication and session management
-//! Provides create/auth/leave/recall using Rod's graph persistence
+//! Provides create/auth/leave/recall using BEAM's graph persistence
 
 use super::{
     KeyPair, SeaError, SessionState, SessionStorage, User, WorkOptions, certify, decrypt,
     decrypt_symmetric, encrypt, encrypt_symmetric, generate_pair, is_pubkey_certified, secret,
     sign_value, verify_certificate, work,
 };
-use crate::{Node, Value as RodValue};
+use crate::{Node, Value as BeamValue};
 use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
@@ -18,7 +18,7 @@ use serde_json::{Value as JsonValue, json};
 
 impl User {
     /// Create a new user with alias and password.
-    /// Stores encrypted key pair in Rod's graph at `~@alias`.
+    /// Stores encrypted key pair in BEAM's graph at `~@alias`.
     pub async fn create(alias: &str, pass: &str, db: &mut Node) -> Result<Self, SeaError> {
         let pair = generate_pair().await?;
 
@@ -45,7 +45,7 @@ impl User {
         // Encrypt auth data with proof
         let encrypted_auth = encrypt_pass(&auth_data, &proof).await?;
 
-        // Store in Rod at ~@alias as JSON text
+        // Store in BEAM at ~@alias as JSON text
         let alias_payload = json!({
             "pub": pair.pub_key,
             "epub": pair.epub_key,
@@ -53,7 +53,7 @@ impl User {
             "salt": base64::encode_config(salt_bytes, base64::URL_SAFE_NO_PAD),
         });
         let mut alias_node = db.get("~@").get(alias);
-        let _ = alias_node.put(RodValue::Text(alias_payload.to_string())).await;
+        let _ = alias_node.put(BeamValue::Text(alias_payload.to_string())).await;
 
         let state = SessionState {
             pair,
@@ -63,13 +63,13 @@ impl User {
         Ok(User::from_state(state))
     }
 
-    /// Authenticate existing user from Rod's graph.
+    /// Authenticate existing user from BEAM's graph.
     pub async fn auth(alias: &str, pass: &str, db: &mut Node) -> Result<Self, SeaError> {
         let mut alias_node = db.get("~@").get(alias);
         let value = alias_node.once(None).await.ok_or(SeaError::AuthFailed)?;
 
         let text = match value {
-            RodValue::Text(t) => t,
+            BeamValue::Text(t) => t,
             _ => return Err(SeaError::AuthFailed),
         };
 
@@ -285,7 +285,7 @@ impl<'a> UserBuilder<'a> {
 // ─── Social primitives: trust, grant, verify ───
 
 /// Encode a path string for safe use as a graph key.
-/// Replaces `/` with `__` to avoid segment collision in Rod's key-path graph.
+/// Replaces `/` with `__` to avoid segment collision in BEAM's key-path graph.
 fn encode_path(path: &str) -> String {
     path.replace('/', "__")
 }
@@ -318,7 +318,7 @@ impl User {
             .get(&format!("~{}", inner.pair.pub_key))
             .get("trust")
             .get(&path_key);
-        let _ = trust_node.put(RodValue::Text(signed.to_string())).await;
+        let _ = trust_node.put(BeamValue::Text(signed.to_string())).await;
 
         Ok(())
     }
@@ -349,7 +349,7 @@ impl User {
                 .get("secrets")
                 .get(&path_key);
             match secret_node.once(None).await {
-                Some(RodValue::Text(enc_text)) => {
+                Some(BeamValue::Text(enc_text)) => {
                     let outer: JsonValue = serde_json::from_str(&enc_text)
                         .map_err(|e| SeaError::Decryption(format!("bad secret json: {}", e)))?;
                     let enc = if outer.get("m").is_some() && outer.get("s").is_some() {
@@ -466,7 +466,7 @@ pub async fn verify_trust(
         .get(&path_key);
 
     let cert_text = match trust_node.once(None).await {
-        Some(RodValue::Text(t)) => t,
+        Some(BeamValue::Text(t)) => t,
         _ => return Ok(false),
     };
 
@@ -498,7 +498,7 @@ pub async fn accept_grant(
         .once(None)
         .await
         .and_then(|v| match v {
-            RodValue::Text(t) => Some(t),
+            BeamValue::Text(t) => Some(t),
             _ => None,
         })
         .ok_or_else(|| SeaError::Decryption("no grant found".into()))?;

@@ -1,0 +1,12 @@
+{
+  "name": "batch_two_puts",
+  "description": "Array of two put messages — Gun.js batch wire format",
+  "category": "batch",
+  "input": "[{\"put\":{\"soul/a\":{\"_\":{\"#\":\"soul/a\",\">\":{\"x\":1}},\"x\":1}},\"#\":\"msg300\"},{\"put\":{\"soul/b\":{\"_\":{\"#\":\"soul/b\",\">\":{\"y\":2}},\"y\":2}},\"#\":\"msg301\"}]",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soul/a"]
+  }
+}

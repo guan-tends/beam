@@ -1,0 +1,10 @@
+{
+  "name": "msg_id_too_long",
+  "description": "Message ID exceeds 32 character limit — parser must reject",
+  "category": "edge",
+  "input": "{\"put\":{\"soul/a\":{\"name\":\"x\"}},\"#\":\"abcdefghijklmnopqrstuvwxyz0123456789\"}",
+  "expected": {
+    "parses": false,
+    "error": "msg id too long"
+  }
+}

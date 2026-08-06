@@ -1,0 +1,10 @@
+{
+  "name": "dam_rtc_with_local_addr",
+  "description": "WebRTC signal with local_addr field for UDP ICE candidate",
+  "category": "dam",
+  "input": "{\"dam\":\"rtc\",\"#\":\"msg203\",\"offer\":\"sdp\",\"local_addr\":\"192.168.1.10:50000\",\"to\":\"peerGHI\"}",
+  "expected": {
+    "parses": true,
+    "kind": "RtcSignal"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "unknown_message_type",
+  "description": "Message with no put, get, or dam — unrecognized message type",
+  "category": "edge",
+  "input": "{\"foo\":\"bar\",\"#\":\"msg999\"}",
+  "expected": {
+    "parses": false,
+    "error": "Unrecognized message"
+  }
+}

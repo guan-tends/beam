@@ -1,0 +1,15 @@
+{
+  "name": "put_multiple_souls",
+  "description": "Put containing two souls in a single message",
+  "category": "put",
+  "input": "{\"put\":{\"soulA\":{\"_\":{\"#\":\"soulA\",\">\":{\"x\":100}},\"x\":42},\"soulB\":{\"_\":{\"#\":\"soulB\",\">\":{\"y\":200}},\"y\":\"hello\"}},\"#\":\"msg003\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soulA","soulB"],
+    "fields": {"soulA": ["x"],"soulB": ["y"]},
+    "values": {"soulA": {"x": 42.0},"soulB": {"y": "hello"}},
+    "timestamps": {"soulA": {"x": 100.0},"soulB": {"y": 200.0}}
+  }
+}

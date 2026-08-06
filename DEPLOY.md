@@ -279,7 +279,7 @@ export BEAM_SEA_SESSION_KEY=$(beam-sea-keygen)
 echo "$BEAM_SEA_SESSION_KEY" | sudo systemd-creds encrypt - beam-session.key
 
 # Docker secrets:
-echo "$BEAM_SEA_SESSION_KEY" | docker secret create rod_session_key -
+echo "$BEAM_SEA_SESSION_KEY" | docker secret create beam_session_key -
 ```
 
 **Session files** contain encrypted private keys. Protect the session directory (`~/.config/beam/sessions/`) with filesystem permissions:

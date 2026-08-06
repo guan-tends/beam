@@ -1,0 +1,10 @@
+{
+  "name": "get_non_string_child_key",
+  "description": "Get with . as a number instead of string — parser must reject",
+  "category": "edge",
+  "input": "{\"get\":{\"#\":\"soul/x\",\".\":42},\"#\":\"msg407\"}",
+  "expected": {
+    "parses": false,
+    "error": "get child_key . was not a string"
+  }
+}

@@ -1,4 +1,4 @@
-//! Storage and network adapters for Rod.
+//! Storage and network adapters for BEAM.
 //!
 //! This module contains all adapter implementations that connect the
 //! [`crate::Node`] graph engine to external systems:

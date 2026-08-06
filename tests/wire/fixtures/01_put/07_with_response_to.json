@@ -1,0 +1,15 @@
+{
+  "name": "put_in_response_to",
+  "description": "Put with @ field — response to a previous message (ack pattern)",
+  "category": "put",
+  "input": "{\"put\":{\"soul/resp\":{\"_\":{\"#\":\"soul/resp\",\">\":{\"val\":300}},\"val\":\"response\"}},\"#\":\"msg007\",\"@\":\"originalMsgId\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soul/resp"],
+    "fields": {"soul/resp": ["val"]},
+    "values": {"soul/resp": {"val": "response"}},
+    "timestamps": {"soul/resp": {"val": 300.0}}
+  }
+}
