@@ -1,0 +1,10 @@
+{
+  "name": "beam-wire-live",
+  "version": "1.0.0",
+  "description": "Layer 3: Live integration Gun.js relay for BEAM wire compat tests",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "gun": "^0.2020.1230"
+  }
+}

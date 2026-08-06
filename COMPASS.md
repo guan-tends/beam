@@ -355,7 +355,7 @@ Three-layer testing strategy to prove BEAM's wire protocol compatibility with Gu
    - 36 fixtures checked: 25 pass, 11 skip (wire-parse-error fixtures not testable at API level)
    - If both BEAM and Gun.js pass the same fixtures, wire compat is proven by construction
 
-3. **Layer 3: Live Integration** (planned — `tests/wire-live/`)
+3. **Layer 3: Live Integration** (✅ COMPLETE — `tests/wire-live/`)
    - Real bidirectional WebSocket sync between BEAM and Gun.js relay
    - `#[ignore]` gated, separate CI job
 
