@@ -110,3 +110,23 @@ jobs:
       - name: Run mirror tests
         working-directory: tests/wire-mirror
         run: node mirror_test.js
+
+  wire-live:
+    name: Gun.js live integration tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Install Gun.js
+        working-directory: tests/wire-live
+        run: npm ci
+      - name: Run live integration tests
+        run: cargo test --test wire_live -- --ignored
