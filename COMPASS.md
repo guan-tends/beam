@@ -350,8 +350,9 @@ Three-layer testing strategy to prove BEAM's wire protocol compatibility with Gu
    - No external test framework — `serde_json` + `std::fs` only (suckless)
    - Fixtures double as human-readable protocol specification
 
-2. **Layer 2: Node.js Mirror** (planned — `tests/wire-mirror/`)
+2. **Layer 2: Node.js Mirror** (✅ COMPLETE — `tests/wire-mirror/`)
    - Same JSON fixtures run against real Gun.js via `node:test`
+   - 36 fixtures checked: 25 pass, 11 skip (wire-parse-error fixtures not testable at API level)
    - If both BEAM and Gun.js pass the same fixtures, wire compat is proven by construction
 
 3. **Layer 3: Live Integration** (planned — `tests/wire-live/`)
