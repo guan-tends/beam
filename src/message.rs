@@ -543,7 +543,7 @@ impl Message {
                     // addressed data they don't need to validate.
                     // (Previous code compared base64::encode(hash) against
                     // a hex-encoded child key — a format mismatch that
-                    // rejected all mnemos audit log entries.)
+                    // rejected all client audit log entries.)
                 } else if is_public_space && !allow_public_space {
                     return Err("public space writes not allowed (allow_public_space == false)");
                 }

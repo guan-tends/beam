@@ -19,7 +19,7 @@ quorum-ack, send-metrics). v0.8.0 makes that independence explicit.
 #### Changed
 
 - **Crate name:** `rod` → `beamdb`
-- **Repository:** `mmalmi/rod` → `guan/beamdb` (local Gitea, no GitHub)
+- **Repository:** `mmalmi/rod` → `guan/beamdb` 
 - **Module path:** `rod::*` → `beam::*`
 - **CLI binary:** `rod` → `beam`
 - **Keygen binary:** `beam-sea-keygen` (already named for BEAM)

@@ -541,7 +541,7 @@ mod tests {
     /// BEAM's `Node::handle_put` only sends the `__beam_replay_complete__`
     /// sentinel after a Put with `in_response_to` is received. If storage
     /// stays silent when checksum matches, the client's `drain_until_sentinel`
-    /// hangs forever. The mnemos use case doesn't pre-set checksum (so this
+    /// hangs forever. The client use case doesn't pre-set checksum (so this
     /// bug is latent), but ANY future caller who caches checksums would hit
     /// it.
     ///
