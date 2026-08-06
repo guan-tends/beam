@@ -1,0 +1,10 @@
+{
+  "name": "malformed_json",
+  "description": "Invalid JSON string — parser must reject",
+  "category": "edge",
+  "input": "{not valid json at all}",
+  "expected": {
+    "parses": false,
+    "error": "Failed to parse message as JSON"
+  }
+}

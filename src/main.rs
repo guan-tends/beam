@@ -1,6 +1,6 @@
-//! Rod — a Rust implementation of the Gun.js P2P synchronized graph database.
+//! BEAM — a Rust implementation of the Gun.js P2P synchronized graph database.
 //!
-//! This is the command-line entry point for running a Rod node server. It
+//! This is the command-line entry point for running a BEAM node server. It
 //! configures storage and network adapters, then starts the node until
 //! interrupted with Ctrl-C.
 //!
@@ -50,10 +50,10 @@ use beam::{Config, Node};
 #[tokio::main]
 async fn main() {
     let default_port = WsServerConfig::default().port.to_string();
-    let matches = App::new("Rod")
+    let matches = App::new("BEAM")
         .version("1.0")
         .author("Martti Malmi")
-        .about("Rod node runner")
+        .about("BEAM node runner")
         .arg(
             Arg::with_name("config")
                 .short("c")
@@ -341,7 +341,7 @@ async fn main() {
 
         let node = Node::new_with_config(config, storage_adapters, network_adapters);
 
-        println!("Rod node starting...");
+        println!("BEAM node starting...");
 
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
 

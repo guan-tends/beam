@@ -1,0 +1,15 @@
+{
+  "name": "put_boolean_value",
+  "description": "Put with boolean true/false values — tests Value::Bit conversion",
+  "category": "put",
+  "input": "{\"put\":{\"soul/bool\":{\"_\":{\"#\":\"soul/bool\",\">\":{\"yes\":1,\"no\":2}},\"yes\":true,\"no\":false}},\"#\":\"msg010\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soul/bool"],
+    "fields": {"soul/bool": ["no","yes"]},
+    "values": {"soul/bool": {"yes": true,"no": false}},
+    "timestamps": {"soul/bool": {"yes": 1.0,"no": 2.0}}
+  }
+}

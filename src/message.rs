@@ -623,7 +623,7 @@ impl Message {
                 return Err("not a json object");
             }
         };
-        let msg_id = match obj["#"].as_str() {
+        let msg_id = match obj.get("#").and_then(|v| v.as_str()) {
             Some(str) => str.to_string(),
             _ => {
                 return Err("msg id not a string");

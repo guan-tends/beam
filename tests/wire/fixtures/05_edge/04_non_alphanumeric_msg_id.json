@@ -1,0 +1,10 @@
+{
+  "name": "non_alphanumeric_msg_id",
+  "description": "Message ID with special characters — parser must reject",
+  "category": "edge",
+  "input": "{\"put\":{\"soul/a\":{\"name\":\"x\"}},\"#\":\"msg!@#$\"}",
+  "expected": {
+    "parses": false,
+    "error": "alphanumeric"
+  }
+}

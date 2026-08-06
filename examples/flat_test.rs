@@ -1,4 +1,4 @@
-//! Flat vs nested key test — explores Rod's data model.
+//! Flat vs nested key test — explores BEAM's data model.
 //!
 //! Compares flat keys (`db.get("a")`) vs nested keys (`db.get("x").get("y")`)
 //! for both `once()` and `on()` subscription patterns.
@@ -25,7 +25,7 @@ async fn main() {
     let flat_recv = sub.recv().await;
     println!("FLAT recv(): {:?}", flat_recv);
 
-    // NESTED (same pattern as Rod tests)
+    // NESTED (same pattern as BEAM tests)
     let mut db3 = Node::new();
     let mut nested = db3.get("x").get("y");
     let _ = nested.put("nested_val".into());

@@ -1,0 +1,9 @@
+{
+  "name": "empty_array",
+  "description": "Empty JSON array — parser produces empty vec (no messages, no error)",
+  "category": "edge",
+  "input": "[]",
+  "expected": {
+    "parses": true
+  }
+}

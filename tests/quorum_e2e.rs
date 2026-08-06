@@ -6,7 +6,7 @@
 //!
 //! # Substrate semantics exercised
 //!
-//! Rod's quorum drain (router.rs:402) checks `quorum_entries` first, then
+//! BEAM's quorum drain (router.rs:402) checks `quorum_entries` first, then
 //! falls through to `seen_get_messages` which routes the local storage
 //! `_ack` to the drain. The local MemoryStorage adapter sends `_ack` for
 //! every put — and the drain wraps any local ack as

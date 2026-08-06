@@ -1,0 +1,10 @@
+{
+  "name": "dam_rtc_answer",
+  "description": "WebRTC answer signal relayed via dam:rtc",
+  "category": "dam",
+  "input": "{\"dam\":\"rtc\",\"#\":\"msg201\",\"answer\":\"sdp-answer-data\",\"to\":\"peerXYZ\"}",
+  "expected": {
+    "parses": true,
+    "kind": "RtcSignal"
+  }
+}

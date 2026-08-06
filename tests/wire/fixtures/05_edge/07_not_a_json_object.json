@@ -1,0 +1,10 @@
+{
+  "name": "not_a_json_object",
+  "description": "Top-level JSON is a number, not an object — parser must reject",
+  "category": "edge",
+  "input": "42",
+  "expected": {
+    "parses": false,
+    "error": "not a json object"
+  }
+}

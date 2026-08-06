@@ -1,0 +1,11 @@
+{
+  "name": "simple_get",
+  "description": "Basic get request for a soul by ID",
+  "category": "get",
+  "input": "{\"get\":{\"#\":\"soul/target\"},\"#\":\"msg100\"}",
+  "expected": {
+    "parses": true,
+    "kind": "Get",
+    "souls": ["soul/target"]
+  }
+}

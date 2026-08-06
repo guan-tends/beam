@@ -1,0 +1,10 @@
+{
+  "name": "put_value_not_object",
+  "description": "Put field is a string instead of an object — parser must reject",
+  "category": "edge",
+  "input": "{\"put\":\"not-an-object\",\"#\":\"msg403\"}",
+  "expected": {
+    "parses": false,
+    "error": "invalid message: msg.put was not an object"
+  }
+}

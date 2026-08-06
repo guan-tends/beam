@@ -1,0 +1,11 @@
+{
+  "name": "empty_put",
+  "description": "Put with empty put object — no souls in the message",
+  "category": "edge",
+  "input": "{\"put\":{},\"#\":\"msg400\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "put_unicode_soul",
+  "description": "Soul ID with non-ASCII characters — tests Unicode handling in node IDs",
+  "category": "put",
+  "input": "{\"put\":{\"user/名前\":{\"_\":{\"#\":\"user/名前\",\">\":{\"greeting\":1}},\"greeting\":\"こんにちは\"}},\"#\":\"msg009\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["user/名前"],
+    "fields": {"user/名前": ["greeting"]},
+    "values": {"user/名前": {"greeting": "こんにちは"}},
+    "timestamps": {"user/名前": {"greeting": 1.0}}
+  }
+}

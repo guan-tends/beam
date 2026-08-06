@@ -2,7 +2,7 @@
 //! End-to-end tests for the shared `Arc<Metrics>` observability handle.
 //!
 //! These tests validate that the `Metrics` substrate — wired per
-//! `rod_followup_b_plan_v3` (Follow-up B, Quorum-B2 sibling feature) — is
+//! `beam_followup_b_plan_v3` (Follow-up B, Quorum-B2 sibling feature) — is
 //! actually shared between the Node and Router actors and that counters
 //! incremented internally by the Router are observable through the Node.
 //!

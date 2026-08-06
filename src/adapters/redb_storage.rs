@@ -1,13 +1,13 @@
 //! Persistent embedded storage adapter using [`redb`](https://crates.io/crates/redb).
 //!
-//! [`RedbStorage`] stores the Rod graph in a redb database file on disk.
+//! [`RedbStorage`] stores the BEAM graph in a redb database file on disk.
 //! It provides ACID transactions with automatic crash recovery.
 //!
 //! # Schema
 //!
 //! Two tables:
-//! - `rod_nodes_v1`: key = `node_id` (&str), value = `bincode(Children)` (BTreeMap<String, NodeData>)
-//! - `rod_meta_v1`: key = metadata key (&str), value = `u64` timestamp
+//! - `beam_nodes_v1`: key = `node_id` (&str), value = `bincode(Children)` (BTreeMap<String, NodeData>)
+//! - `beam_meta_v1`: key = metadata key (&str), value = `u64` timestamp
 //!
 //! # Semantics
 //!
@@ -48,9 +48,9 @@ use log::{debug, error};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 /// Table definition for graph node data.
-const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
+const BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 /// Table definition for metadata (e.g. last write timestamp).
-const ROD_META: TableDefinition<&str, u64> = TableDefinition::new("rod_meta_v1");
+const BEAM_META: TableDefinition<&str, u64> = TableDefinition::new("beam_meta_v1");
 
 /// Macro to unwrap a redb result or log and return early on error.
 macro_rules! unwrap_or_return {
@@ -65,7 +65,7 @@ macro_rules! unwrap_or_return {
     };
 }
 
-/// redb-backed persistent storage adapter for Rod.
+/// redb-backed persistent storage adapter for BEAM.
 ///
 /// Stores the graph in a single redb database file. Each `Put` commits
 /// inline (ACID) inside `spawn_blocking` so the fsync does not block the
@@ -140,7 +140,7 @@ impl RedbStorage {
     /// is suppressed (already sent the same data).
     fn handle_get(&self, get: Get, ctx: &ActorContext) {
         let read_txn = unwrap_or_return!(self.db.begin_read());
-        let table = unwrap_or_return!(read_txn.open_table(ROD_NODES));
+        let table = unwrap_or_return!(read_txn.open_table(BEAM_NODES));
 
         let children_for_node = match table.get(&*get.node_id) {
             Ok(Some(access_guard)) => {
@@ -182,7 +182,7 @@ impl RedbStorage {
 
         // Ack replies (those with `in_response_to`) MUST always be sent,
         // regardless of checksum match. The client uses the reply's
-        // presence to drive its `__rod_replay_complete__` sentinel-drain;
+        // presence to drive its `__beam_replay_complete__` sentinel-drain;
         // a silent ack would hang the drain forever. The checksum-match
         // optimization is reserved for live broadcasts where the caller
         // already has the data.
@@ -203,8 +203,8 @@ impl RedbStorage {
         wtxn: &mut redb::WriteTransaction,
         put: Put,
     ) -> Result<(), redb::Error> {
-        let mut node_table = wtxn.open_table(ROD_NODES)?;
-        let mut meta_table = wtxn.open_table(ROD_META)?;
+        let mut node_table = wtxn.open_table(BEAM_NODES)?;
+        let mut meta_table = wtxn.open_table(BEAM_META)?;
 
         for (node_id, update_data) in put.updated_nodes.into_iter().rev() {
             // Skip internal control keys (e.g. _flushed, _ack)
@@ -277,8 +277,8 @@ impl Actor for RedbStorage {
         debug!("RedbStorage started at {}", self.path);
         // Warm the schema so the first read finds tables already present.
         if let Ok(wtxn) = self.db.begin_write() {
-            let _ = wtxn.open_table(ROD_NODES);
-            let _ = wtxn.open_table(ROD_META);
+            let _ = wtxn.open_table(BEAM_NODES);
+            let _ = wtxn.open_table(BEAM_META);
             let _ = wtxn.commit();
         }
     }
@@ -538,7 +538,7 @@ mod tests {
     ///
     /// # Why this test exists
     ///
-    /// Rod's `Node::handle_put` only sends the `__rod_replay_complete__`
+    /// BEAM's `Node::handle_put` only sends the `__beam_replay_complete__`
     /// sentinel after a Put with `in_response_to` is received. If storage
     /// stays silent when checksum matches, the client's `drain_until_sentinel`
     /// hangs forever. The mnemos use case doesn't pre-set checksum (so this

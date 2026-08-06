@@ -1,15 +1,15 @@
 //! Storage backend migration: redb ↔ Persy.
 //!
-//! Provides one-shot batch migration between Rod's two storage backends.
+//! Provides one-shot batch migration between BEAM's two storage backends.
 //! The translation is format-only: the inner `Children` data is byte-identical
 //! between redb and Persy; only the wrapper struct ([`NodeRecord`]) differs.
 //!
 //! # On-disk formats
 //!
-//! **redb**: `TableDefinition<&str, &[u8]>` in the `rod_nodes_v1` table.
+//! **redb**: `TableDefinition<&str, &[u8]>` in the `beam_nodes_v1` table.
 //! Key is the node_id directly; value is `bincode(Children)` (no wrapper).
 //!
-//! **Persy**: A segment named `rod_nodes_v1` containing opaque records.
+//! **Persy**: A segment named `beam_nodes_v1` containing opaque records.
 //! Each record is `bincode(NodeRecord { node_id, children })`.
 //!
 //! # CLI
@@ -229,9 +229,9 @@ pub(crate) mod io {
 
     use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
-    use crate::adapters::persy_storage::ROD_NODES as PERSY_ROD_NODES;
+    use crate::adapters::persy_storage::BEAM_NODES as PERSY_BEAM_NODES;
 
-    const REDB_ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
+    const REDB_BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 
     /// Run a storage migration. Dispatches on the (from, to) backend pair.
     ///
@@ -298,10 +298,10 @@ pub(crate) mod io {
                 source,
             }
         })?;
-        // An empty source DB (or one without the rod_nodes_v1 table) is a
+        // An empty source DB (or one without the beam_nodes_v1 table) is a
         // valid input — treat it as zero records rather than an error.
         // This matches the e2e_migration_empty_dataset contract.
-        let src_table = match src_tx.open_table(REDB_ROD_NODES) {
+        let src_table = match src_tx.open_table(REDB_BEAM_NODES) {
             Ok(t) => t,
             Err(e) => {
                 use redb::TableError;
@@ -373,7 +373,7 @@ pub(crate) mod io {
                     .begin()
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
                 create_tx
-                    .create_segment(PERSY_ROD_NODES)
+                    .create_segment(PERSY_BEAM_NODES)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
                 create_tx
                     .prepare()
@@ -386,7 +386,7 @@ pub(crate) mod io {
         .map_err(|source| MigrateError::Persy(format!("{}: {}\nhelp: ensure the target directory is writable", opts.target_path.display(), source)))?;
 
         let target_seg = target_db
-            .solve_segment_id(PERSY_ROD_NODES)
+            .solve_segment_id(PERSY_BEAM_NODES)
             .map_err(|e| MigrateError::Persy(format!("{}: solve_segment_id: {}", opts.target_path.display(), e)))?;
 
         let mut tx = target_db.begin().map_err(|source| {
@@ -422,7 +422,7 @@ pub(crate) mod io {
         let src_db = persy::Persy::open(opts.source_path.to_string_lossy().as_ref(), persy::Config::new()).map_err(
             |source| MigrateError::Persy(format!("{}: {}", opts.source_path.clone().display(), source)),
         )?;
-        let src_seg = src_db.solve_segment_id(PERSY_ROD_NODES).map_err(|e| {
+        let src_seg = src_db.solve_segment_id(PERSY_BEAM_NODES).map_err(|e| {
             MigrateError::Persy(format!("{}: solve_segment_id failed: {}", opts.source_path.display(), e))
         })?;
 
@@ -438,7 +438,7 @@ pub(crate) mod io {
                 source,
             }
         })?;
-        let mut target_table = target_tx.open_table(REDB_ROD_NODES).map_err(|source| {
+        let mut target_table = target_tx.open_table(REDB_BEAM_NODES).map_err(|source| {
             MigrateError::RedbTable {
                 path: opts.target_path.clone(),
                 source,
@@ -507,7 +507,7 @@ mod tests {
     use std::collections::BTreeMap;
     use crate::types::{NodeData, Value};
 
-    /// Helper: build a representative `Children` map using the real Rod value types.
+    /// Helper: build a representative `Children` map using the real BEAM value types.
     fn make_test_children() -> Children {
         let mut children = BTreeMap::new();
         children.insert(
@@ -592,7 +592,7 @@ mod tests {
         children.insert("null".to_string(), NodeData { value: Value::Null, updated_at: 1.0 });
         children.insert("bit".to_string(), NodeData { value: Value::Bit(false), updated_at: 2.0 });
         children.insert("num".to_string(), NodeData { value: Value::Number(-3.14), updated_at: 3.0 });
-        children.insert("text".to_string(), NodeData { value: Value::Text("unicode: 🪷".to_string()), updated_at: 4.0 });
+        children.insert("text".to_string(), NodeData { value: Value::Text("unicode: ☃ snowman".to_string()), updated_at: 4.0 });
         children.insert("link".to_string(), NodeData { value: Value::Link("node/abc".to_string()), updated_at: 5.0 });
 
         let bytes = bincode::serialize(&children).unwrap();

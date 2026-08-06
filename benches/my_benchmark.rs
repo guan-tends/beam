@@ -1,4 +1,4 @@
-//! Criterion benchmarks for Rod — measuring throughput and latency of core operations.
+//! Criterion benchmarks for BEAM — measuring throughput and latency of core operations.
 //!
 //! ## Benchmark groups
 //!

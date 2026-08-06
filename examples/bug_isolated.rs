@@ -11,7 +11,7 @@ async fn drain_map(rx: &mut tokio::sync::broadcast::Receiver<(String, Value)>) -
     loop {
         tokio::select! {
             Ok((k, v)) = rx.recv() => {
-                if k == "__rod_replay_complete__" {
+                if k == "__beam_replay_complete__" {
                     break;
                 }
                 children.push((k, v));

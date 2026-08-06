@@ -1,0 +1,11 @@
+{
+  "name": "get_with_checksum",
+  "description": "Get request with ## checksum field for dedup",
+  "category": "get",
+  "input": "{\"get\":{\"#\":\"soul/c\"},\"#\":\"msg102\",\"##\":999}",
+  "expected": {
+    "parses": true,
+    "kind": "Get",
+    "souls": ["soul/c"]
+  }
+}

@@ -91,7 +91,7 @@ pub struct Node {
 2. Sends a `Get` to the router requesting all children of this node
 3. Storage responds with existing children → router sends `Put` (with `in_response_to` set) back to the node
 4. `handle_put()` fans out each child to `map_sender` as `(child_key, value)` tuples
-5. A `__rod_replay_complete__` marker is sent when replay finishes
+5. A `__beam_replay_complete__` marker is sent when replay finishes
 
 **Key gotcha:** `map()` replays ALL existing children. Use `once()` for single reads.
 
@@ -208,7 +208,7 @@ User::leave()
 
 #### RedbStorage
 - `redb::Database` — embedded key-value store
-- Single table: `rod_nodes_v1` (`&str` → `&[u8]` via bincode serialization)
+- Single table: `beam_nodes_v1` (`&str` → `&[u8]` via bincode serialization)
 - `BatchPut` — single `read_write_transaction` for all puts (atomic)
 - `Flush` — commits and acknowledges via `in_response_to` matching
 - Schema warmed at startup to prevent `TableDoesNotExist` on first read
@@ -325,7 +325,7 @@ See `adapters/memory_storage.rs` for the simplest example, `adapters/redb_storag
 ## Gotchas
 
 1. **`uid = ""` is the ROOT node** — not an error, not empty, it's the root. `add_parent_nodes` reaches root and stops.
-2. **`map()` replays ALL existing children** — use `once()` for single reads. The `__rod_replay_complete__` marker signals end of replay.
+2. **`map()` replays ALL existing children** — use `once()` for single reads. The `__beam_replay_complete__` marker signals end of replay.
 3. **`stun.rs` is feature-gated** — `mod stun;` only exists with `#[cfg(feature = "webrtc")]`. The module has stub implementations for non-webrtc builds.
 4. **`Addr` hashes by `id` field** — not the channel sender. Two `Addr`s are equal iff they refer to the same actor. This is why `HashSet<Addr>` works correctly for peer tracking.
 5. **Signature verification happens on receive** — in `Message::try_from()`, not in the router. The `allow_public_space` flag is passed through to control whether unsigned puts are accepted.
@@ -336,3 +336,59 @@ See `adapters/memory_storage.rs` for the simplest example, `adapters/redb_storag
 10. **`extern crate clap;` in main.rs** — unnecessary in Rust 2024 edition but harmless. Kept for compatibility with the original code.
 11. **`redb` schema must be warmed** — `RedbStorage::pre_start` opens the table to prevent `TableDoesNotExist` errors on first read. This was a bug fix (commit `979139b`).
 12. **Stats reporting is a placeholder** — `Router::update_stats()` is a no-op. The `msg_counter` atomic tracks total messages but doesn't expose them yet.
+
+## Wire Compatibility Test Suite
+
+### Architecture
+
+Three-layer testing strategy to prove BEAM's wire protocol compatibility with Gun.js:
+
+1. **Layer 1: Golden JSON Fixtures** (`tests/wire/`)
+   - 36 fixture files across 7 categories: handshake, put, get, dam, batch, edge
+   - Each fixture is a JSON file containing a raw Gun.js wire message and expected BEAM parser behaviour
+   - Single `#[test]` function (`tests/wire_tests.rs`) discovers and asserts all fixtures
+   - No external test framework — `serde_json` + `std::fs` only (suckless)
+   - Fixtures double as human-readable protocol specification
+
+2. **Layer 2: Node.js Mirror** (planned — `tests/wire-mirror/`)
+   - Same JSON fixtures run against real Gun.js via `node:test`
+   - If both BEAM and Gun.js pass the same fixtures, wire compat is proven by construction
+
+3. **Layer 3: Live Integration** (planned — `tests/wire-live/`)
+   - Real bidirectional WebSocket sync between BEAM and Gun.js relay
+   - `#[ignore]` gated, separate CI job
+
+### Adding Wire Fixtures
+
+Drop a `.json` file into the appropriate category subdirectory under `tests/wire/fixtures/`. No code changes needed — the harness discovers fixtures by walking the directory tree at test time.
+
+### Fixture Schema
+
+```json
+{
+  "name": "unique_identifier",
+  "description": "what this fixture tests",
+  "category": "put|get|handshake|dam|batch|edge",
+  "input": "<raw Gun.js wire message as JSON string>",
+  "allow_public_space": false,
+  "expected": {
+    "parses": true,
+    "kind": "Put|Get|Hi|RtcSignal",
+    "souls": ["soul1"],
+    "fields": { "soul1": ["key1"] },
+    "values": { "soul1": { "key1": "value" } },
+    "timestamps": { "soul1": { "key1": 12345.0 } },
+    "error": null
+  }
+}
+```
+
+- `parses: false` → expect `Err` (check `error` substring)
+- `parses: true` + `kind` → check `Message` variant
+- `souls`, `fields`, `values`, `timestamps` → checked when present (Put messages)
+- `allow_public_space: true` → pass `allow_public_space=true` to parser (unsigned souls)
+- **Note**: BEAM's `Value::Number(f64)` always produces floats — use `30.0` not `30` in expected values
+
+### Bug Found by Fixtures
+
+The wire fixture suite found a real bug in `Message::try_from`: the parser used `obj["#"]` (BTreeMap indexing) to access the message ID, which panics on missing key instead of returning an error. Fixed to use `obj.get("#").and_then(|v| v.as_str())` — now returns `Err("msg id not a string")` gracefully.

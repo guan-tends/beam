@@ -1,6 +1,6 @@
 #![allow(clippy::inherent_to_string)] // to_string is wire-format serialization, not Display
 
-//! Core type system for Rod — the Rust port of Gun.js.
+//! Core type system for BEAM — the Rust port of Gun.js.
 //!
 //! This module defines the fundamental data types that flow through the
 //! distributed graph database:
@@ -78,7 +78,7 @@ impl Default for NodeData {
     }
 }
 
-/// Value types supported by Rod and Gun.js.
+/// Value types supported by BEAM and Gun.js.
 ///
 /// These are the five valid leaf types in the distributed graph. Each variant
 /// maps to a JSON type, with the exception of [`Value::Link`] which represents
@@ -216,7 +216,7 @@ impl Value {
     }
 }
 
-/// Converts a [`serde_json::Value`] into a Rod [`Value`].
+/// Converts a [`serde_json::Value`] into a BEAM [`Value`].
 ///
 /// This conversion validates that the JSON value is one of the five
 /// supported types. Objects are accepted *only* if they are a Gun.js
@@ -225,7 +225,7 @@ impl Value {
 /// # Errors
 ///
 /// Returns `&'static str` if the JSON value cannot be represented as a
-/// Rod [`Value`]:
+/// BEAM [`Value`]:
 /// - Arrays → `"cannot convert array into Value"`
 /// - Non-soul objects → `"cannot convert json object into Value"`
 /// - Numbers not convertible to f64 → `"not convertible to f64"`
@@ -260,7 +260,7 @@ impl TryFrom<SerdeJsonValue> for Value {
     }
 }
 
-/// Converts a Rod [`Value`] into a [`serde_json::Value`].
+/// Converts a BEAM [`Value`] into a [`serde_json::Value`].
 ///
 /// This is the inverse of [`TryFrom<SerdeJsonValue> for Value`]. The
 /// [`Value::Link`] variant serializes to a Gun.js soul relation object

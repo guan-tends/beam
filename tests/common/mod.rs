@@ -2,7 +2,7 @@
 //!
 //! # The Flakiness Pattern
 //!
-//! Rod tests traditionally used `tokio::time::sleep(N)` as a "ready"
+//! BEAM tests traditionally used `tokio::time::sleep(N)` as a "ready"
 //! signal. This is wrong on two axes:
 //!
 //! 1. **Time is not readiness.** A 1500ms sleep might be too short on

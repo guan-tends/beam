@@ -1,0 +1,11 @@
+{
+  "name": "get_with_child_key",
+  "description": "Get request targeting a specific child key within a soul",
+  "category": "get",
+  "input": "{\"get\":{\"#\":\"soul/target\",\".\":\"name\"},\"#\":\"msg101\"}",
+  "expected": {
+    "parses": true,
+    "kind": "Get",
+    "souls": ["soul/target"]
+  }
+}

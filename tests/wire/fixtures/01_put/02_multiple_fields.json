@@ -1,0 +1,15 @@
+{
+  "name": "put_multiple_fields",
+  "description": "Single soul with multiple child keys of different types",
+  "category": "put",
+  "input": "{\"put\":{\"user/alice\":{\"_\":{\"#\":\"user/alice\",\">\":{\"name\":1653463165115,\"age\":1653463165116,\"active\":1653463165117}},\"name\":\"Alice\",\"age\":30,\"active\":true}},\"#\":\"msg002\"}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["user/alice"],
+    "fields": {"user/alice": ["active","age","name"]},
+    "values": {"user/alice": {"name": "Alice","age": 30.0,"active": true}},
+    "timestamps": {"user/alice": {"name": 1653463165115.0,"age": 1653463165116.0,"active": 1653463165117.0}}
+  }
+}

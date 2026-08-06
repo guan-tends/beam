@@ -1,0 +1,15 @@
+{
+  "name": "put_with_checksum",
+  "description": "Put with ## checksum field — Gun.js hash-based dedup",
+  "category": "put",
+  "input": "{\"put\":{\"soul/c\":{\"_\":{\"#\":\"soul/c\",\">\":{\"v\":1}},\"v\":\"checksummed\"}},\"#\":\"msg008\",\"##\":12345}",
+  "allow_public_space": true,
+  "expected": {
+    "parses": true,
+    "kind": "Put",
+    "souls": ["soul/c"],
+    "fields": {"soul/c": ["v"]},
+    "values": {"soul/c": {"v": "checksummed"}},
+    "timestamps": {"soul/c": {"v": 1.0}}
+  }
+}

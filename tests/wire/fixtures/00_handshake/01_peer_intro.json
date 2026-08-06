@@ -1,0 +1,11 @@
+{
+  "name": "peer_intro_simple",
+  "description": "Basic peer introduction message with dam:hi",
+  "category": "handshake",
+  "input": "{\"dam\":\"hi\",\"#\":\"peer001\"}",
+  "expected": {
+    "parses": true,
+    "kind": "Hi",
+    "souls": ["peer001"]
+  }
+}

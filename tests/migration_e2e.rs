@@ -56,17 +56,17 @@ fn temp_path(name: &str, ext: &str) -> PathBuf {
 }
 
 /// Helper: write `count` records to a redb file at `path`. Each record is
-/// a separate row in the `rod_nodes_v1` table with key `node_NNNN` and value
+/// a separate row in the `beam_nodes_v1` table with key `node_NNNN` and value
 /// being a single-child `Children` map (so we test N records, not 1 record
 /// with N children).
 fn write_redb_records(path: &std::path::Path, count: usize) -> Result<usize, String> {
     use redb::{Database, TableDefinition};
-    const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
+    const BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 
     let db = Database::create(path).map_err(|e| format!("create: {:?}", e))?;
     let txn = db.begin_write().map_err(|e| format!("begin_write: {:?}", e))?;
     {
-        let mut table = txn.open_table(ROD_NODES).map_err(|e| format!("open_table: {:?}", e))?;
+        let mut table = txn.open_table(BEAM_NODES).map_err(|e| format!("open_table: {:?}", e))?;
 
         for i in 0..count {
             let mut children: BTreeMap<String, NodeData> = BTreeMap::new();
@@ -94,7 +94,7 @@ fn count_persy_records(path: &std::path::Path) -> Result<usize, String> {
     use persy::Persy;
     let db = Persy::open(path, persy::Config::default()).map_err(|e| format!("open: {:?}", e))?;
     let segment_id = db
-        .solve_segment_id("rod_nodes_v1")
+        .solve_segment_id("beam_nodes_v1")
         .map_err(|e| format!("solve_segment_id: {:?}", e))?;
     // CRITICAL: db.scan() returns Result<SegmentIter, PE<SegmentError>>.
     // If we naively `for entry in db.scan(&segment_id)`, Rust iterates over
@@ -107,11 +107,11 @@ fn count_persy_records(path: &std::path::Path) -> Result<usize, String> {
 /// Helper: read all records from a redb file at `path` and count them.
 fn count_redb_records(path: &std::path::Path) -> Result<usize, String> {
     use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
-    const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
+    const BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 
     let db = Database::open(path).map_err(|e| format!("open: {:?}", e))?;
     let txn = db.begin_read().map_err(|e| format!("begin_read: {:?}", e))?;
-    let table = match txn.open_table(ROD_NODES) {
+    let table = match txn.open_table(BEAM_NODES) {
         Ok(t) => t,
         Err(_) => return Ok(0), // empty database
     };
@@ -221,12 +221,12 @@ async fn e2e_migration_preserves_children() {
     // Write a 3-level nested graph:
     // root → { level1_a → { level2_a → { leaf1, leaf2 } } }
     use redb::{Database, TableDefinition};
-    const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
+    const BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 
     let db = Database::create(&source).expect("create");
     let txn = db.begin_write().expect("begin_write");
     {
-        let mut table = txn.open_table(ROD_NODES).expect("open_table");
+        let mut table = txn.open_table(BEAM_NODES).expect("open_table");
 
         // root node with child "level1_a"
         let mut root_children: BTreeMap<String, NodeData> = BTreeMap::new();
@@ -358,7 +358,7 @@ async fn e2e_migration_dry_run_no_write() {
 async fn diag_persy_count_basic() {
     use redb::{Database, TableDefinition};
 
-    const ROD_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("rod_nodes_v1");
+    const BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 
     let source = temp_path("diag-source", ".redb");
     let target = temp_path("diag-target", ".persy");
@@ -369,7 +369,7 @@ async fn diag_persy_count_basic() {
     let db = Database::create(&source).unwrap();
     let txn = db.begin_write().unwrap();
     {
-        let mut table = txn.open_table(ROD_NODES).unwrap();
+        let mut table = txn.open_table(BEAM_NODES).unwrap();
         for i in 0..100 {
             let mut children: BTreeMap<String, NodeData> = BTreeMap::new();
             children.insert(
