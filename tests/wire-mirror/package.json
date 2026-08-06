@@ -1,0 +1,13 @@
+{
+  "name": "beam-wire-mirror",
+  "version": "1.0.0",
+  "description": "Layer 2: Node.js mirror tests for BEAM Gun.js wire compatibility",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node mirror_test.js"
+  },
+  "devDependencies": {
+    "gun": "^0.2020.1230"
+  }
+}
