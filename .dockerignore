@@ -1,1 +1,10 @@
 target
+.git
+.github
+docs
+benches/RESULTS.md
+benches/_data
+*.md
+!README.md
+tests
+examples
