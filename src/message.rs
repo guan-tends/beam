@@ -12,6 +12,7 @@ use ring::digest::{SHA256, digest};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
+use base64::prelude::*;
 
 #[derive(Clone, Debug)]
 pub struct Get {
@@ -409,9 +410,9 @@ impl Message {
             let signature = signature
                 .as_str()
                 .ok_or("signature (~) in signature json was not a string")?;
-            let signature64 = base64::decode(signature)
+            let signature64 = BASE64_STANDARD.decode(signature)
                 .or(Err("signature (~) in signature json was not base64"))?;
-            let signature = base64::encode_config(signature64, base64::URL_SAFE_NO_PAD);
+            let signature = BASE64_URL_SAFE_NO_PAD.encode(signature64);
 
             let mut split = key.split(".");
             let x = split.next().unwrap().to_string();
@@ -541,7 +542,7 @@ impl Message {
                     // verification belongs at the storage layer. We skip
                     // the check here so relay nodes can forward content-
                     // addressed data they don't need to validate.
-                    // (Previous code compared base64::encode(hash) against
+                    // (Previous code compared BASE64_STANDARD.encode(hash) against
                     // a hex-encoded child key — a format mismatch that
                     // rejected all client audit log entries.)
                 } else if is_public_space && !allow_public_space {

@@ -21,10 +21,11 @@
 //! 4. Rotate by clearing session directory and distributing new key
 //!
 use rand::RngCore;
+use base64::prelude::*;
 
 fn main() {
     let mut key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut key);
-    let encoded = base64::encode_config(key, base64::STANDARD);
+    let encoded = BASE64_STANDARD.encode(key);
     println!("{}", encoded);
 }

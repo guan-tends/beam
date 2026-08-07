@@ -12,6 +12,7 @@ use aes_gcm::{
 use rand::RngCore;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use base64::prelude::*;
 
 /// Encrypt data using AES-256-GCM
 ///
@@ -72,9 +73,9 @@ pub async fn encrypt(
             .map_err(|e| SeaError::Encryption(format!("encryption failed: {}", e)))?;
 
         // Encode everything as base64
-        let ct_b64 = base64::encode_config(&ciphertext, base64::URL_SAFE_NO_PAD);
-        let iv_b64 = base64::encode_config(&nonce_owned, base64::URL_SAFE_NO_PAD);
-        let s_b64 = base64::encode_config(&salt_owned, base64::URL_SAFE_NO_PAD);
+        let ct_b64 = BASE64_URL_SAFE_NO_PAD.encode(&ciphertext);
+        let iv_b64 = BASE64_URL_SAFE_NO_PAD.encode(&nonce_owned);
+        let s_b64 = BASE64_URL_SAFE_NO_PAD.encode(&salt_owned);
 
         Ok::<(String, String, String), SeaError>((ct_b64, iv_b64, s_b64))
     })
@@ -141,8 +142,8 @@ pub async fn encrypt_symmetric(data: &Value, key: &[u8]) -> Result<Value, SeaErr
             .encrypt(nonce, msg.as_bytes())
             .map_err(|e| SeaError::Encryption(format!("symmetric encryption failed: {}", e)))?;
 
-        let ct_b64 = base64::encode_config(&ciphertext, base64::URL_SAFE_NO_PAD);
-        let iv_b64 = base64::encode_config(&nonce_owned, base64::URL_SAFE_NO_PAD);
+        let ct_b64 = BASE64_URL_SAFE_NO_PAD.encode(&ciphertext);
+        let iv_b64 = BASE64_URL_SAFE_NO_PAD.encode(&nonce_owned);
 
         Ok::<(String, String), SeaError>((ct_b64, iv_b64))
     })

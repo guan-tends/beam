@@ -29,6 +29,7 @@ use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use base64::prelude::*;
 
 /// Compute proof-of-work or content hash.
 ///
@@ -72,7 +73,7 @@ pub async fn work(data: &[u8], salt: Option<&[u8]>, opts: WorkOptions) -> Result
             let mut hasher = Sha256::new();
             hasher.update(&data);
             let hash = hasher.finalize();
-            let encoded = base64::encode_config(&hash[..], base64::URL_SAFE_NO_PAD);
+            let encoded = BASE64_URL_SAFE_NO_PAD.encode(&hash[..]);
             Ok(encoded)
         })
         .await
@@ -105,7 +106,7 @@ pub async fn work(data: &[u8], salt: Option<&[u8]>, opts: WorkOptions) -> Result
     .map_err(|e| SeaError::Crypto(format!("task join error: {}", e)))?;
 
     // Encode result as base64
-    let encoded = base64::encode_config(&result, base64::URL_SAFE_NO_PAD);
+    let encoded = BASE64_URL_SAFE_NO_PAD.encode(&result);
     Ok(encoded)
 }
 

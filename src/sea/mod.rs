@@ -322,6 +322,7 @@ pub async fn sign_value(data: &JsonValue, pair: &KeyPair) -> Result<BeamValue, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::prelude::*;
     use crate::sea::session::InMemorySessionStorage;
     
     use serde_json::json;
@@ -699,7 +700,7 @@ mod tests {
 
         let epub = pair.epub_key.as_ref().unwrap();
         let dh = secret(epub, &pair).await.unwrap();
-        let dh_bytes = base64::decode_config(&dh, base64::URL_SAFE_NO_PAD).unwrap();
+        let dh_bytes = BASE64_URL_SAFE_NO_PAD.decode(&dh).unwrap();
 
         let decrypted = decrypt_symmetric(&enc, &dh_bytes).await.unwrap();
         assert_eq!(decrypted, payload);
@@ -782,7 +783,7 @@ mod tests {
 
         let epub = alice_pair.epub_key.as_ref().unwrap();
         let dh = secret(epub, &alice_pair).await.unwrap();
-        let dh_bytes = base64::decode_config(&dh, base64::URL_SAFE_NO_PAD).unwrap();
+        let dh_bytes = BASE64_URL_SAFE_NO_PAD.decode(&dh).unwrap();
 
         let decrypted = decrypt_symmetric(&enc, &dh_bytes).await.unwrap();
         assert_eq!(

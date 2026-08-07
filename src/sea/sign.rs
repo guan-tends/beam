@@ -29,6 +29,7 @@ use super::{KeyPair, SeaError};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use serde_json::Value;
 use std::convert::TryInto;
+use base64::prelude::*;
 
 /// Sign JSON data with a key pair's private key.
 ///
@@ -55,7 +56,7 @@ pub async fn sign(data: &Value, pair: &KeyPair) -> Result<Value, SeaError> {
             .map_err(|e| SeaError::Crypto(format!("serialization error: {}", e)))?;
 
         // Decode private key from base64
-        let priv_bytes = base64::decode_config(&priv_key, base64::URL_SAFE_NO_PAD)
+        let priv_bytes = BASE64_URL_SAFE_NO_PAD.decode(&priv_key)
             .map_err(|_| SeaError::InvalidKey)?;
 
         if priv_bytes.len() != 32 {
@@ -73,7 +74,7 @@ pub async fn sign(data: &Value, pair: &KeyPair) -> Result<Value, SeaError> {
         let sig_bytes = signature.to_bytes();
 
         // Encode signature as base64 (r||s, 64 bytes)
-        let sig_b64 = base64::encode_config(&sig_bytes[..], base64::URL_SAFE_NO_PAD);
+        let sig_b64 = BASE64_URL_SAFE_NO_PAD.encode(&sig_bytes[..]);
 
         // Return in Gun.js format: {m: message, s: signature}
         Ok(serde_json::json!({
@@ -152,7 +153,7 @@ mod tests {
         let pair = generate_pair().await.unwrap();
         let mut bad_pair = pair.clone();
         // 16 bytes instead of 32
-        bad_pair.priv_key = base64::encode_config([0u8; 16], base64::URL_SAFE_NO_PAD);
+        bad_pair.priv_key = BASE64_URL_SAFE_NO_PAD.encode([0u8; 16]);
         let data = json!({"test": 1});
         assert!(sign(&data, &bad_pair).await.is_err());
     }

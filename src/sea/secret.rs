@@ -3,6 +3,7 @@
 //! Derives a shared secret from ECDH key exchange
 
 use super::{KeyPair, SeaError};
+use base64::prelude::*;
 
 /// Derive shared secret from ECDH key exchange
 ///
@@ -34,7 +35,7 @@ pub fn secret_sync(their_epub: &str, pair: &KeyPair) -> Result<String, SeaError>
         .as_ref()
         .ok_or_else(|| SeaError::Crypto("missing epriv key".to_string()))?;
 
-    let our_priv_bytes = base64::decode_config(our_epriv, base64::URL_SAFE_NO_PAD)
+    let our_priv_bytes = BASE64_URL_SAFE_NO_PAD.decode(our_epriv)
         .map_err(|_| SeaError::InvalidKey)?;
 
     if our_priv_bytes.len() != 32 {
@@ -56,10 +57,7 @@ pub fn secret_sync(their_epub: &str, pair: &KeyPair) -> Result<String, SeaError>
     let shared_bytes = shared_secret.raw_secret_bytes();
 
     // Return as base64 (matching Gun.js format)
-    Ok(base64::encode_config(
-        &shared_bytes[..],
-        base64::URL_SAFE_NO_PAD,
-    ))
+    Ok(BASE64_URL_SAFE_NO_PAD.encode(&shared_bytes[..]))
 }
 
 /// Parse an epub key (format: x.y base64) into a p256 PublicKey
@@ -69,9 +67,9 @@ fn parse_epub(epub: &str) -> Result<p256::PublicKey, SeaError> {
         return Err(SeaError::InvalidKey);
     }
 
-    let x = base64::decode_config(parts[0], base64::URL_SAFE_NO_PAD)
+    let x = BASE64_URL_SAFE_NO_PAD.decode(parts[0])
         .map_err(|_| SeaError::InvalidKey)?;
-    let y = base64::decode_config(parts[1], base64::URL_SAFE_NO_PAD)
+    let y = BASE64_URL_SAFE_NO_PAD.decode(parts[1])
         .map_err(|_| SeaError::InvalidKey)?;
 
     // Reconstruct uncompressed public key (0x04 || x || y)
