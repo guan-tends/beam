@@ -45,7 +45,6 @@
 //! 1. Message ID (`#` field) — prevents echo and re-processing
 //! 2. Ack + hash (`@` + `##` fields) — deduplicates identical responses
 
-use crate::Config;
 use crate::Dup;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL};
@@ -170,7 +169,6 @@ impl QuorumEntry {
 /// Uses [`crate::Dup`] for message-ID dedup and a [`BoundedHashMap`] for
 /// Get message tracking. Response dedup uses checksum comparison.
 pub struct Router {
-    config: Config,
     /// Lock-free observability counters for actor mailbox drops and other
     /// async events of interest. See [`crate::metrics::Metrics`].
     ///
@@ -222,7 +220,7 @@ pub struct Router {
 #[async_trait]
 impl Actor for Router {
     /// Starts storage and network adapter actors, registers them, and
-    /// optionally begins stats reporting.
+    /// optionally begins quorum reaping.
     async fn pre_start(&mut self, ctx: &ActorContext) {
         // Start storage adapters, splitting each into a concurrent read
         // actor and a serialized write actor when the adapter supports it.
@@ -253,11 +251,6 @@ impl Actor for Router {
             if subscribe_to_everything {
                 self.server_peers.insert(addr);
             }
-        }
-
-        // Stats collection is currently unimplemented (see update_stats)
-        if self.config.stats {
-            self.update_stats();
         }
 
         // Quorum cleanup reaper: ticks every second, sends a self-message to
@@ -366,13 +359,11 @@ impl Router {
     /// same counters. The Router records drops internally; the Node exposes
     /// the snapshot to external observers via `Node::metrics()`.
     pub fn new(
-        config: Config,
         storage_adapter_actors: Vec<Box<dyn Actor>>,
         network_adapter_actors: Vec<Box<dyn Actor>>,
         metrics: Arc<crate::metrics::Metrics>,
     ) -> Self {
         Self {
-            config,
             metrics,
             known_peers: HashSet::new(),
             peer_addrs: HashMap::new(),
@@ -403,17 +394,6 @@ impl Router {
     #[allow(dead_code)]
     pub fn metrics(&self) -> Arc<crate::metrics::Metrics> {
         self.metrics.clone()
-    }
-
-    /// Stats reporting placeholder.
-    ///
-    /// Stats collection is not yet implemented. The original implementation
-    /// used `sysinfo` to report memory/CPU/uptime but was removed due to
-    /// dependency weight. A future implementation could use lightweight
-    /// metrics via the `msg_counter` atomic.
-    fn update_stats(&self) {
-        // Stats collection not yet implemented.
-        // TODO: implement lightweight stats via msg_counter and broadcast channel.
     }
 
     /// Handles a `Get` message: records subscription, queries storage and peers.
@@ -900,10 +880,9 @@ mod tests {
 
     #[test]
     fn test_router_new() {
-        let config = Config::default();
         let storage = vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
         let metrics = Arc::new(Metrics::new());
-        let router = Router::new(config, storage, vec![], metrics);
+        let router = Router::new(storage, vec![], metrics);
         assert!(router.known_peers.is_empty());
         assert!(router.read_adapters.is_empty());
         assert!(router.write_adapters.is_empty());
@@ -913,7 +892,7 @@ mod tests {
     #[test]
     fn test_router_default_dedup() {
         let metrics = Arc::new(Metrics::new());
-        let router = Router::new(Config::default(), vec![], vec![], metrics);
+        let router = Router::new(vec![], vec![], metrics);
         assert_eq!(router.dup.max(), 999);
         assert_eq!(router.dup.age(), std::time::Duration::from_secs(9));
     }
@@ -921,7 +900,7 @@ mod tests {
     #[test]
     fn test_router_seen_msg_capacity() {
         let metrics = Arc::new(Metrics::new());
-        let router = Router::new(Config::default(), vec![], vec![], metrics);
+        let router = Router::new(vec![], vec![], metrics);
         // The seen_get_messages BoundedHashMap should have capacity SEEN_MSGS_MAX_SIZE
         assert_eq!(SEEN_MSGS_MAX_SIZE, 10000);
         let _ = router; // just verify it constructs
@@ -930,7 +909,7 @@ mod tests {
     #[test]
     fn test_router_msg_counter_starts_zero() {
         let metrics = Arc::new(Metrics::new());
-        let router = Router::new(Config::default(), vec![], vec![], metrics);
+        let router = Router::new(vec![], vec![], metrics);
         assert_eq!(router.msg_counter.load(Ordering::Relaxed), 0);
     }
     // ========================================================================

@@ -602,7 +602,6 @@ BEAM uses Gun.js's JSON wire format. Messages are JSON objects with these fields
 | `--redb-storage` | `REDB_STORAGE` | true | Use redb persistent storage |
 | `--redb-path` | `REDB_PATH` | `beam.redb` | Path to redb database file |
 | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true | Accept unsigned writes to public space |
-| `--stats` | `STATS` | true | Expose stats at `/stats` on web UI port |
 
 ### Migrate Subcommand Flags
 
@@ -623,7 +622,6 @@ BEAM uses Gun.js's JSON wire format. Messages are JSON objects with these fields
 # fn main() {
 let config = Config {
     allow_public_space: false,
-    stats: true,
     my_pub: Some("x.y".into()),
     broadcast_buffer_size: 4096,
     ice_servers: vec!["stun:stun.l.google.com:19302".into()],

@@ -37,7 +37,6 @@
 //! | `--redb-storage` | `REDB_STORAGE` | true |
 //! | `--redb-path` | `REDB_PATH` | beam.redb |
 //! | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true |
-//! | `--stats` | `STATS` | true |
 
 extern crate clap;
 use clap::{App, Arg, SubCommand};
@@ -153,15 +152,6 @@ async fn main() {
                         .default_value("true")
                         .takes_value(true),
                 )
-                .arg(
-                    Arg::with_name("stats")
-                        .long("stats")
-                        .env("STATS")
-                        .value_name("BOOL")
-                        .help("Show stats at /stats?")
-                        .default_value("true")
-                        .takes_value(true),
-                ),
         )
         .subcommand(
             SubCommand::with_name("migrate")
@@ -301,7 +291,6 @@ async fn main() {
 
         let config = Config {
             allow_public_space: matches.value_of("allow-public-space").unwrap() != "false",
-            stats: matches.value_of("stats").unwrap() == "true",
             ..Config::default()
         };
 

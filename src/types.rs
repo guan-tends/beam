@@ -120,7 +120,7 @@ impl Value {
     /// For [`Value::Text`], this is the string's byte length. For all other
     /// variants, it is the `size_of_val` of the enum discriminant + data.
     ///
-    /// This is used for stats reporting and memory budgeting.
+    /// This is used for memory budgeting.
     pub fn size(&self) -> usize {
         match self {
             Value::Text(s) => s.len(),

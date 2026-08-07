@@ -221,7 +221,7 @@ User::leave()
 - Binds TCP on `config.port` (default 4944)
 - Accepts WebSocket connections (plain or TLS via `tokio-native-tls`)
 - Spawns a `WsConn` actor per connection
-- Web UI on `port + 1` (default 4945): `/peer_id` endpoint, `/stats/*` static files
+- Web UI on `port + 1` (default 4945): `/peer_id` endpoint
 - `subscribe_to_everything() = true` — receives all messages for relay
 
 #### OutgoingWebsocketManager
@@ -337,7 +337,6 @@ See `adapters/memory_storage.rs` for the simplest example, `adapters/redb_storag
 9. **`BoundedHashMap` eviction is FIFO** — not LRU. The oldest *inserted* entry is evicted, not the oldest *accessed*.
 10. **`extern crate clap;` in main.rs** — unnecessary in Rust 2024 edition but harmless. Kept for compatibility with the original code.
 11. **`redb` schema must be warmed** — `RedbStorage::pre_start` opens the table to prevent `TableDoesNotExist` errors on first read. This was a bug fix (commit `979139b`).
-12. **Stats reporting is a placeholder** — `Router::update_stats()` is a no-op. The `msg_counter` atomic tracks total messages but doesn't expose them yet.
 
 ## Wire Compatibility Test Suite
 
