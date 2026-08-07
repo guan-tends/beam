@@ -27,6 +27,7 @@ use p256::ecdsa::{SigningKey, VerifyingKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{PublicKey as EcdhPublicKey, SecretKey};
 use rand::rngs::OsRng;
+use base64::prelude::*;
 
 /// Generate a new ECDSA + ECDH key pair.
 ///
@@ -44,7 +45,7 @@ pub async fn generate_pair() -> Result<KeyPair, SeaError> {
 
     // Export signing private key (32 bytes)
     let priv_bytes = signing_key.to_bytes();
-    let priv_key = base64::encode_config(priv_bytes, base64::URL_SAFE_NO_PAD);
+    let priv_key = BASE64_URL_SAFE_NO_PAD.encode(priv_bytes);
 
     // Get uncompressed public key point
     let pub_point = verifying_key.to_encoded_point(false);
@@ -61,8 +62,8 @@ pub async fn generate_pair() -> Result<KeyPair, SeaError> {
     // Convert to base64 (matching Gun.js format: x.y)
     let pub_key = format!(
         "{}.{}",
-        base64::encode_config(x, base64::URL_SAFE_NO_PAD),
-        base64::encode_config(y, base64::URL_SAFE_NO_PAD)
+        BASE64_URL_SAFE_NO_PAD.encode(x),
+        BASE64_URL_SAFE_NO_PAD.encode(y)
     );
 
     // ECDH encryption key pair
@@ -84,13 +85,13 @@ pub async fn generate_pair() -> Result<KeyPair, SeaError> {
 
     let epub_key = Some(format!(
         "{}.{}",
-        base64::encode_config(ex, base64::URL_SAFE_NO_PAD),
-        base64::encode_config(ey, base64::URL_SAFE_NO_PAD)
+        BASE64_URL_SAFE_NO_PAD.encode(ex),
+        BASE64_URL_SAFE_NO_PAD.encode(ey)
     ));
 
     // Export ECDH private key (32 bytes for P-256)
     let epriv_bytes = ecdh_secret.to_bytes();
-    let epriv_key = Some(base64::encode_config(epriv_bytes, base64::URL_SAFE_NO_PAD));
+    let epriv_key = Some(BASE64_URL_SAFE_NO_PAD.encode(epriv_bytes));
 
     Ok(KeyPair {
         pub_key,
@@ -130,7 +131,7 @@ mod tests {
     #[tokio::test]
     async fn test_priv_key_is_32_bytes() {
         let pair = generate_pair().await.unwrap();
-        let priv_bytes = base64::decode_config(&pair.priv_key, base64::URL_SAFE_NO_PAD).unwrap();
+        let priv_bytes = BASE64_URL_SAFE_NO_PAD.decode(&pair.priv_key).unwrap();
         assert_eq!(priv_bytes.len(), 32, "P-256 private key is 32 bytes");
     }
 
@@ -150,7 +151,7 @@ mod tests {
     async fn test_epriv_key_is_32_bytes() {
         let pair = generate_pair().await.unwrap();
         let epriv = pair.epriv_key.unwrap();
-        let epriv_bytes = base64::decode_config(&epriv, base64::URL_SAFE_NO_PAD).unwrap();
+        let epriv_bytes = BASE64_URL_SAFE_NO_PAD.decode(&epriv).unwrap();
         assert_eq!(epriv_bytes.len(), 32, "P-256 ECDH private key is 32 bytes");
     }
 

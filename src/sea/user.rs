@@ -50,7 +50,7 @@ impl User {
             "pub": pair.pub_key,
             "epub": pair.epub_key,
             "auth": encrypted_auth,
-            "salt": base64::encode_config(salt_bytes, base64::URL_SAFE_NO_PAD),
+            "salt": BASE64_URL_SAFE_NO_PAD.encode(salt_bytes),
         });
         let mut alias_node = db.get("~@").get(alias);
         let _ = alias_node.put(BeamValue::Text(alias_payload.to_string())).await;
@@ -79,7 +79,7 @@ impl User {
         let encrypted_auth = alias_data.get("auth").ok_or(SeaError::AuthFailed)?;
 
         let salt_decoded = if let Some(salt_b64) = alias_data.get("salt").and_then(|v| v.as_str()) {
-            base64::decode_config(salt_b64, base64::URL_SAFE_NO_PAD)
+            BASE64_URL_SAFE_NO_PAD.decode(salt_b64)
                 .unwrap_or_else(|_| alias.as_bytes().to_vec())
         } else {
             alias.as_bytes().to_vec()
@@ -202,9 +202,9 @@ async fn encrypt_pass(data: &JsonValue, passphrase: &str) -> Result<JsonValue, S
             .map_err(|e| SeaError::Encryption(format!("encrypt: {}", e)))?;
 
         Ok(json!({
-            "ct": base64::encode_config(&ciphertext, base64::URL_SAFE_NO_PAD),
-            "iv": base64::encode_config(nonce, base64::URL_SAFE_NO_PAD),
-            "s": base64::encode_config(salt, base64::URL_SAFE_NO_PAD),
+            "ct": BASE64_URL_SAFE_NO_PAD.encode(&ciphertext),
+            "iv": BASE64_URL_SAFE_NO_PAD.encode(nonce),
+            "s": BASE64_URL_SAFE_NO_PAD.encode(salt),
         }))
     })
     .await
@@ -229,11 +229,11 @@ async fn decrypt_pass(encrypted: &JsonValue, passphrase: &str) -> Result<JsonVal
             .and_then(|v| v.as_str())
             .ok_or_else(|| SeaError::Decryption("missing s".to_string()))?;
 
-        let ciphertext = base64::decode_config(ct, base64::URL_SAFE_NO_PAD)
+        let ciphertext = BASE64_URL_SAFE_NO_PAD.decode(ct)
             .map_err(|_| SeaError::Decryption("bad ct".to_string()))?;
-        let nonce = base64::decode_config(iv, base64::URL_SAFE_NO_PAD)
+        let nonce = BASE64_URL_SAFE_NO_PAD.decode(iv)
             .map_err(|_| SeaError::Decryption("bad iv".to_string()))?;
-        let salt = base64::decode_config(s, base64::URL_SAFE_NO_PAD)
+        let salt = BASE64_URL_SAFE_NO_PAD.decode(s)
             .map_err(|_| SeaError::Decryption("bad s".to_string()))?;
 
         let aes_key = derive_key_sync(&passphrase, &salt)?;
@@ -257,6 +257,7 @@ async fn decrypt_pass(encrypted: &JsonValue, passphrase: &str) -> Result<JsonVal
 // Passphrase-based key derivation uses the shared `derive_aes_key_sync` from
 // `encrypt.rs` — SHA-256(key_string + salt_utf8), matching Gun.js aeskey.js.
 use super::encrypt::derive_aes_key_sync as derive_key_sync;
+use base64::prelude::*;
 
 /// Builder for creating or authenticating users from a Node
 pub struct UserBuilder<'a> {
@@ -370,7 +371,7 @@ impl User {
                 _ => {
                     let mut bytes = [0u8; 16];
                     rand::thread_rng().fill_bytes(&mut bytes);
-                    let new_sec = base64::encode_config(bytes, base64::URL_SAFE_NO_PAD);
+                    let new_sec = BASE64_URL_SAFE_NO_PAD.encode(bytes);
                     let enc = encrypt(&json!(new_sec), pair, None).await?;
                     let signed = sign_value(&enc, pair).await?;
                     let _ = secret_node.put(signed).await;
@@ -381,7 +382,7 @@ impl User {
 
         // 2. ECDH shared secret with recipient
         let dh = secret(recipient_epub, pair).await?;
-        let dh_bytes = base64::decode_config(&dh, base64::URL_SAFE_NO_PAD)
+        let dh_bytes = BASE64_URL_SAFE_NO_PAD.decode(&dh)
             .map_err(|_| SeaError::Crypto("bad dh".into()))?;
 
         // 3. Encrypt data secret with shared secret
@@ -435,7 +436,7 @@ impl User {
             .as_ref()
             .ok_or_else(|| SeaError::Crypto("no epub".into()))?;
         let dh = secret(epub, pair).await?;
-        let dh_bytes = base64::decode_config(&dh, base64::URL_SAFE_NO_PAD)
+        let dh_bytes = BASE64_URL_SAFE_NO_PAD.decode(&dh)
             .map_err(|_| SeaError::Crypto("bad dh".into()))?;
 
         // Encrypt and sign
@@ -515,7 +516,7 @@ pub async fn accept_grant(
     };
 
     let dh = secret(owner_epub, pair).await?;
-    let dh_bytes = base64::decode_config(&dh, base64::URL_SAFE_NO_PAD)
+    let dh_bytes = BASE64_URL_SAFE_NO_PAD.decode(&dh)
         .map_err(|_| SeaError::Decryption("bad dh".into()))?;
 
     let sec_json = decrypt_symmetric(&enc_json, &dh_bytes).await?;

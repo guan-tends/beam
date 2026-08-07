@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use base64::prelude::*;
 
 #[derive(Serialize, Deserialize)]
 struct SessionFile {
@@ -118,7 +119,7 @@ impl EncryptedFileSessionStorage {
 
         // 1. Env var
         if let Ok(b64) = std::env::var("BEAM_SEA_SESSION_KEY") {
-            let key = base64::decode_config(&b64, base64::STANDARD).map_err(|_| {
+            let key = BASE64_STANDARD.decode(&b64).map_err(|_| {
                 SeaError::SessionStorage("bad base64 in BEAM_SEA_SESSION_KEY".to_string())
             })?;
             if key.len() != 32 {
@@ -136,7 +137,7 @@ impl EncryptedFileSessionStorage {
         let key_file = self.key_file_path();
         if let Ok(contents) = std::fs::read_to_string(&key_file) {
             let b64 = contents.trim();
-            if let Ok(key) = base64::decode_config(b64, base64::STANDARD) {
+            if let Ok(key) = BASE64_STANDARD.decode(b64) {
                 if key.len() == 32 {
                     log::info!(target: "beam::sea::session", "Loaded session master key from {}", key_file.display());
                     self.master_key = Some(key.clone());
@@ -148,7 +149,7 @@ impl EncryptedFileSessionStorage {
         // 3. Generate new key, save, alert devops
         let mut key = vec![0u8; 32];
         rand::thread_rng().fill_bytes(&mut key);
-        let b64 = base64::encode_config(&key, base64::STANDARD);
+        let b64 = BASE64_STANDARD.encode(&key);
 
         // Ensure parent dir exists
         if let Some(parent) = key_file.parent() {
@@ -237,9 +238,9 @@ impl SessionStorage for EncryptedFileSessionStorage {
 
             let expires_at = Self::now() + expiry;
             Ok::<SessionFile, SeaError>(SessionFile {
-                ct: base64::encode_config(&ciphertext, base64::URL_SAFE_NO_PAD),
-                iv: base64::encode_config(nonce, base64::URL_SAFE_NO_PAD),
-                s: base64::encode_config(salt, base64::URL_SAFE_NO_PAD),
+                ct: BASE64_URL_SAFE_NO_PAD.encode(&ciphertext),
+                iv: BASE64_URL_SAFE_NO_PAD.encode(nonce),
+                s: BASE64_URL_SAFE_NO_PAD.encode(salt),
                 alias,
                 expires_at,
             })
@@ -285,9 +286,9 @@ impl SessionStorage for EncryptedFileSessionStorage {
             return Ok(None);
         }
 
-        let ciphertext = base64::decode_config(&session_file.ct, base64::URL_SAFE_NO_PAD)
+        let ciphertext = BASE64_URL_SAFE_NO_PAD.decode(&session_file.ct)
             .map_err(|_| SeaError::SessionStorage("bad ct".to_string()))?;
-        let nonce = base64::decode_config(&session_file.iv, base64::URL_SAFE_NO_PAD)
+        let nonce = BASE64_URL_SAFE_NO_PAD.decode(&session_file.iv)
             .map_err(|_| SeaError::SessionStorage("bad iv".to_string()))?;
 
         // Decrypt in spawn_blocking
