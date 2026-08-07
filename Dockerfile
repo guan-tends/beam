@@ -7,19 +7,17 @@ WORKDIR /app
 COPY Cargo.toml .
 COPY Cargo.lock .
 COPY benches benches
-COPY assets assets
 COPY src src
 
 RUN --mount=type=cache,target=/app/target \
     --mount=type=cache,target=/root/.cargo/registry \
-    cargo build --release --bin rod && \
-    mv /app/target/release/rod .
+    cargo build --release --bin beam && \
+    mv /app/target/release/beam .
 
 ####################################################################################################
 ## Final image
 ####################################################################################################
 FROM gcr.io/distroless/cc
-COPY assets /assets
-COPY --from=builder /app/rod /
+COPY --from=builder /app/beam /
 EXPOSE 4944 4945
-ENTRYPOINT ["./rod"]
+ENTRYPOINT ["./beam"]
