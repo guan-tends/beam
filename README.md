@@ -36,7 +36,7 @@
 
 BEAM is a distributed graph database where every node holds a partial replica of the graph and synchronizes with peers in real time. Data flows over WebSocket relays, UDP multicast, or direct WebRTC connections. All cryptographic operations — signatures, key exchange, encryption — use the SEA layer (Security, Encryption, Authorization), providing Gun.js-compatible wire protocol and cryptographic semantics.
 
-BEAM began as a from-scratch Rust port of [Gun.js](https://github.com/amark/gun), maintaining wire-format compatibility so BEAM nodes can interop with Gun.js peers. It has since grown into a comprehensive distributed-database system with multiple storage backends, WebRTC direct P2P, observability, and migration tooling.
+BEAM is a maintained fork of [rod](https://github.com/mmalmi/rod) — a from-scratch Rust port of [Gun.js](https://github.com/amark/gun) by Mark Nadal — maintaining wire-format compatibility so BEAM nodes can interop with Gun.js peers. BEAM has since grown into a comprehensive distributed-database system with multiple storage backends, WebRTC direct P2P, observability, and migration tooling.
 
 ### Key Properties
 
@@ -726,13 +726,11 @@ cargo test
 
 ## Credits
 
-BEAM was originally created by [Martti Malmi](https://github.com/mmalmi) as a from-scratch Rust port of [Gun.js](https://github.com/amark/gun) by Mark Nadal. The original Gun.js project is maintained by Mark Nadal.
+BEAM is a maintained and featureful fork of **[rod](https://github.com/mmalmi/rod)**, originally created by [Martti Malmi](https://github.com/mmalmi) as a from-scratch Rust port of [Gun.js](https://github.com/amark/gun) by Mark Nadal. Malmi wrote rod; BEAM is developed by Guan and David Newman (2026–present). The original Gun.js project is maintained by Mark Nadal.
 
-This is an actively maintained fork with continued development by Guan and David Newman (2026–present). See [CHANGELOG.md](CHANGELOG.md) for the full contribution history.
+BEAM builds on rod's foundation with substantial additions: SEA crypto layer (P-256 key generation, signing, verification, ECDH, AES-256-GCM, capability certificates, user system with session persistence), WebRTC P2P transport, persistent storage adapters (redb, Persy) with migration tooling, DAM protocol parity, network fanout ack/quorum, observability, and comprehensive wire compatibility testing against Gun.js. See [CHANGELOG.md](CHANGELOG.md) for the full contribution history.
 
-Major areas of continued development: SEA crypto layer (P-256 key generation, signing, verification, ECDH, AES-256-GCM, capability certificates, user system with session persistence), WebRTC P2P transport, persistent storage adapters (redb, Persy) with migration tooling, DAM protocol parity, network fanout ack/quorum, observability, and comprehensive wire compatibility testing against Gun.js.
-
-Deep gratitude to Martti for the original implementation and to Mark Nadal for Gun.js itself — a visionary approach to decentralized data. This fork carries that work forward under the BEAM identity.
+Deep gratitude to Martti Malmi for rod and to Mark Nadal for Gun.js itself — a visionary approach to decentralized data.
 
 ---
 
