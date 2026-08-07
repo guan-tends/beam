@@ -742,7 +742,7 @@ MIT — see [LICENSE](LICENSE).
 
 ## Sponsors
 
-BEAM is open-source and built by a small team. If this crate is useful to your work, consider sponsoring to support ongoing development.
+If BEAM saves you or your company time, consider sponsoring ongoing maintenance, dependency updates, and issue triage.
 
 ### Donate
 
