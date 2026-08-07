@@ -49,11 +49,11 @@ The storage adapter slot is filled at startup based on CLI flags. Both backends 
                                        │
                             parse --memory-storage
                                   --redb-storage
-                                  --persy-storage
+                                  (persy via migrate subcommand)
                                        │
                                        ▼
                             ┌──────────────────────┐
-                            │  Mutually exclusive  │
+                            │  Start subcommand    │
                             │  flag selection      │
                             └──────────┬───────────┘
                                        │

@@ -45,9 +45,14 @@ This starts:
 
 ### With WebRTC (Direct P2P)
 
+WebRTC support is a compile-time feature. Build with `--features webrtc`, then run normally:
+
 ```bash
-# Enable WebRTC data channels for direct peer connections
-./target/release/beam --features webrtc -- start --port 4944
+# Build with WebRTC support
+cargo build --release --features webrtc
+
+# Run (same as basic relay, but now supports WebRTC peer connections)
+./target/release/beam -- start --port 4944
 ```
 
 This adds:
@@ -193,32 +198,7 @@ journalctl -u beam -f
 
 ## Docker
 
-### Dockerfile
-
-```dockerfile
-FROM rust:1.85-slim AS builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/beam /usr/local/bin/beam
-COPY --from=builder /app/target/release/beam-sea-keygen /usr/local/bin/beam-sea-keygen
-
-# Default port
-EXPOSE 4944
-EXPOSE 4945
-
-# Data volume
-VOLUME ["/data"]
-
-ENV RUST_LOG=info
-ENV REDB_PATH=/data/beam.redb
-
-ENTRYPOINT ["beam"]
-CMD ["--", "start", "--port", "4944", "--redb-path", "/data/beam.redb"]
-```
+The repository includes a [Dockerfile](Dockerfile) using a multi-stage build with a distroless final image.
 
 ### docker-compose.yml
 
@@ -236,6 +216,7 @@ services:
       - RUST_LOG=info
       - ALLOW_PUBLIC_SPACE=false
       - PEERS=wss://relay.example.com:8443/ws
+      - REDB_PATH=/data/beam.redb
     restart: unless-stopped
 
 volumes:
@@ -250,9 +231,6 @@ docker-compose up -d
 
 # View logs
 docker-compose logs -f
-
-# Generate a session key
-docker-compose exec beam beam-sea-keygen
 ```
 
 ---
@@ -311,7 +289,7 @@ let cert = beam::sea::certify(
 
 // Verify a certificate
 let payload = beam::sea::verify_certificate(&cert, &authority_pub_key)?;
-let is_authorized = beam::sea::is_pubkey_certified(&payload, &alice_pub_key);
+let is_authorized = beam::sea::is_certified(&payload, &alice_pub_key);
 ```
 
 ---
@@ -397,7 +375,7 @@ Peer A ──→ Relay 1 ←──→ Relay 2 ←──→ Peer B
 
 When `--stats true` (default), the web UI server (port 4945) serves:
 - `/peer_id` — returns this node's peer ID
-- `/stats/*` — static files from `./assets/stats/` directory
+- `/stats/*` — static files from `./assets/stats/` directory (not included in the repo; create your own or disable with `--stats false`)
 
 The `WsServer` periodically reports WebSocket connection count to the node's stats graph (`node_stats/{peer_id}/ws_server_connections`).
 

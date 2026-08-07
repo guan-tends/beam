@@ -23,15 +23,14 @@ Full contributor history is preserved in the git log of the upstream project.
 
 **Copyright (c) 2026 David Newman <david.r.newman@proton.me>**
 
-BEAM is maintained by **David Newman** (2026–present) as an actively developed successor to rod. The codebase has grown to 367+ commits since the fork, encompassing:
+BEAM is maintained by **David Newman** (2026–present) as an actively developed successor to rod. Major additions over the upstream rod codebase include:
 
-- Complete SEA crypto layer (11 phases)
+- Complete SEA crypto layer (signing, encryption, ECDH, user identity, session persistence)
 - WebRTC P2P transport with str0m
 - Persy storage backend with cross-backend migration
 - Network fanout ack (quorum) protocol
-- Bounded channel with drop logging
-- Heavy abusive benchmarks
-- Enterprise stabilization (zero flakiness)
+- Observability via shared metrics
+- Comprehensive wire compatibility testing against Gun.js
 
 ## Development Partner
 
