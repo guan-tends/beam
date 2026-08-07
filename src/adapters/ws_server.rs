@@ -2,8 +2,7 @@
 //!
 //! [`WsServer`] listens on a TCP port and accepts incoming WebSocket
 //! connections. Each connection is handled by a [`WsConn`] actor. The
-//! server also optionally starts a web server (on `port + 1`) for stats
-//! and peer ID discovery.
+//! server also starts a web server (on `port + 1`) for peer ID discovery.
 //!
 //! # TLS Support
 //!
@@ -15,14 +14,8 @@
 //!
 //! - WebSocket port: `ws_config.port` (default 4944)
 //! - Web UI port: `ws_config.port + 1` (default 4945)
-//!
-//! # Stats
-//!
-//! When `Config::stats` is enabled, the server periodically reports the
-//! number of WebSocket connections to the node's stats graph.
 
 use crate::Config;
-use crate::Node;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::ws_conn::WsConn;
 use crate::message::Message;
@@ -33,7 +26,6 @@ use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::{Duration, sleep};
 
 use futures_util::StreamExt;
 use log::info;
@@ -70,7 +62,7 @@ impl Default for WsServerConfig {
 ///
 /// Listens on a TCP port and spawns a [`WsConn`] actor for each incoming
 /// WebSocket connection. Optionally serves a web UI on `port + 1` for
-/// stats and peer ID discovery.
+/// peer ID discovery.
 #[derive(Clone)]
 pub struct WsServer {
     config: Config,
@@ -122,23 +114,20 @@ impl WsServer {
         clients.write().await.insert(addr);
     }
 
-    /// Starts the web server for stats and peer ID discovery.
+    /// Starts the web server for peer ID discovery.
     ///
     /// Serves on `config.port + 1`. Routes:
-    /// - `/stats/*` — static files from `./assets/stats`
     /// - `/peer_id` — returns this node's peer ID
     async fn start_web_server(config: WsServerConfig, peer_id: String) {
         use warp::Filter;
-        let stats = warp::path("stats").and(warp::fs::dir("./assets/stats"));
         let peer_id_route = warp::path("peer_id").map(move || peer_id.to_string());
-        let routes = warp::get().and(stats.or(peer_id_route));
+        let routes = warp::get().and(peer_id_route);
 
         let port = config.port + 1;
         if let Some(cert_path) = config.cert_path {
             let key_path = config.key_path.unwrap();
             let addr = format!("https://localhost:{}", port);
             eprintln!("Web UI:             {}", addr);
-            eprintln!("Stats:              {}/stats", addr);
             warp::serve(routes)
                 .tls()
                 .cert_path(cert_path)
@@ -150,7 +139,6 @@ impl WsServer {
 
         let addr = format!("http://localhost:{}", port);
         eprintln!("Web UI:             {}", addr);
-        eprintln!("Stats:              {}/stats", addr);
         warp::serve(routes).run(([0, 0, 0, 0], port)).await;
     }
 
@@ -180,20 +168,6 @@ impl WsServer {
         }
     }
 
-    /// Periodically reports WebSocket connection count to the stats graph.
-    async fn update_stats(ctx: ActorContext, mut stats: Node) {
-        let _ = stats.put("a".into()).await;
-        let mut conns: usize = 0;
-        loop {
-            sleep(Duration::from_millis(1000)).await;
-            let conns_new = ctx.child_actor_count() - 1;
-            if conns_new == conns {
-                continue;
-            }
-            conns = conns_new;
-            let _ = stats.get("ws_server_connections").put(conns.into()).await;
-        }
-    }
 }
 
 #[async_trait]
@@ -219,20 +193,11 @@ impl Actor for WsServer {
         let ctx = ctx.clone();
 
         let peer_id = ctx.peer_id.read().clone();
-        let peer_id_clone = peer_id.clone();
         let config_clone = self.ws_config.clone();
         ctx.child_task(async move {
-            Self::start_web_server(config_clone, peer_id_clone).await;
+            Self::start_web_server(config_clone, peer_id).await;
         });
 
-        if self.config.stats {
-            let mut node = ctx.node.as_ref().unwrap().clone();
-            let stats = node.get("node_stats").get(&peer_id);
-            let ctx_clone = ctx.clone();
-            ctx.child_task(async move {
-                Self::update_stats(ctx_clone, stats).await;
-            });
-        }
 
         // Create the TCP listener
         let try_socket = TcpListener::bind(&addr).await;

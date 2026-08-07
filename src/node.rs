@@ -55,7 +55,7 @@ use url::Url;
 
 /// Configuration for a [`Node`] and its associated adapters.
 ///
-/// Controls public space access, stats reporting, broadcast channel sizing,
+/// Controls public space access, broadcast channel sizing,
 /// and WebRTC ICE server configuration.
 #[derive(Clone)]
 pub struct Config {
@@ -70,10 +70,6 @@ pub struct Config {
     /// When set, the node will preferentially cache data owned by this
     /// public key. Used for user-authenticated nodes.
     pub my_pub: Option<String>,
-    /// Whether to expose node stats at the `/stats` endpoint.
-    ///
-    /// Currently a no-op placeholder — stats collection is not implemented.
-    pub stats: bool,
     /// Buffer size for broadcast channels used by `on()` and `map()`.
     ///
     /// Defaults to 4096. Increase for high-throughput scenarios; decrease
@@ -90,7 +86,6 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             allow_public_space: true,
-            stats: true,
             my_pub: None,
             broadcast_buffer_size: 4096,
             ice_servers: vec!["stun:stun.l.google.com:19302".to_string()],
@@ -228,7 +223,6 @@ impl Node {
         *node.addr.write() = Some(addr);
 
         let router = Box::new(Router::new(
-            config,
             storage_adapters,
             network_adapters,
             metrics,
@@ -1115,7 +1109,6 @@ mod tests {
     fn test_config_default() {
         let config = Config::default();
         assert!(config.allow_public_space);
-        assert!(config.stats);
         assert_eq!(config.broadcast_buffer_size, 4096);
         assert!(!config.ice_servers.is_empty());
     }
@@ -1124,13 +1117,11 @@ mod tests {
     fn test_config_custom() {
         let config = Config {
             allow_public_space: false,
-            stats: false,
             my_pub: Some("test.pub".to_string()),
             broadcast_buffer_size: 1024,
             ice_servers: vec![],
         };
         assert!(!config.allow_public_space);
-        assert!(!config.stats);
         assert_eq!(config.broadcast_buffer_size, 1024);
         assert!(config.ice_servers.is_empty());
     }

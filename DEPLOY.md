@@ -40,7 +40,7 @@ A relay node accepts WebSocket connections from peers and synchronizes data betw
 
 This starts:
 - **WebSocket server** on port 4944 (accepts peer connections at `ws://your-host:4944/ws`)
-- **Web UI** on port 4945 (serves `/peer_id` and `/stats/*`)
+- **Web UI** on port 4945 (serves `/peer_id`)
 - **redb persistent storage** at `./beam.redb`
 
 ### With WebRTC (Direct P2P)
@@ -126,7 +126,6 @@ This matches Gun.js `opt.enforce` semantics. Useful for relay nodes that should 
 | `--redb-storage` | `REDB_STORAGE` | true | Enable redb persistent storage |
 | `--redb-path` | `REDB_PATH` | `beam.redb` | Path to redb database file |
 | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true | Accept unsigned writes to public nodes |
-| `--stats` | `STATS` | true | Expose stats endpoint on web UI |
 
 All flags can be set via environment variables (uppercase, underscore-separated). CLI flags take precedence over env vars.
 
@@ -137,7 +136,7 @@ All flags can be set via environment variables (uppercase, underscore-separated)
 | Port | Service | Protocol |
 |------|---------|----------|
 | 4944 (configurable) | WebSocket server (peer connections) | WS/WSS |
-| 4945 (port + 1) | Web UI (peer ID, stats) | HTTP/HTTPS |
+| 4945 (port + 1) | Web UI (peer ID) | HTTP/HTTPS |
 | 6969 | Multicast discovery (fixed) | UDP multicast (224.0.0.123) |
 
 ---
@@ -370,14 +369,6 @@ Peer A ──→ Relay 1 ←──→ Relay 2 ←──→ Peer B
 ---
 
 ## Monitoring
-
-### Stats Endpoint
-
-When `--stats true` (default), the web UI server (port 4945) serves:
-- `/peer_id` — returns this node's peer ID
-- `/stats/*` — static files from `./assets/stats/` directory (not included in the repo; create your own or disable with `--stats false`)
-
-The `WsServer` periodically reports WebSocket connection count to the node's stats graph (`node_stats/{peer_id}/ws_server_connections`).
 
 ### Prometheus / Grafana
 
