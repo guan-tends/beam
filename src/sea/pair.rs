@@ -9,9 +9,9 @@
 //!
 //! # Security
 //!
-//! Uses [`p256`] with [`rand::rngs::OsRng`] — the OS CSPRNG. Key generation
-//! happens in a blocking context (no `await`), which is fine since
-//! `OsRng::fill_bytes` is fast and does not require async.
+//! Uses [`p256`] with the [`Generate`] trait and the system's ambient CSPRNG
+//! (via the `getrandom` feature). Key generation happens in a blocking context
+//! (no `await`), which is fine since the OS RNG is fast and does not require async.
 //!
 //! # Example
 //!
@@ -24,9 +24,9 @@
 
 use super::{KeyPair, SeaError};
 use p256::ecdsa::{SigningKey, VerifyingKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey as EcdhPublicKey, SecretKey};
-use rand::rngs::OsRng;
+use p256::elliptic_curve::Generate;
 use base64::prelude::*;
 
 /// Generate a new ECDSA + ECDH key pair.
@@ -40,7 +40,7 @@ use base64::prelude::*;
 /// practice this should never happen with a functioning OS CSPRNG.
 pub async fn generate_pair() -> Result<KeyPair, SeaError> {
     // ECDSA signing key pair
-    let signing_key = SigningKey::random(&mut OsRng);
+    let signing_key = SigningKey::generate();
     let verifying_key = VerifyingKey::from(&signing_key);
 
     // Export signing private key (32 bytes)
@@ -48,7 +48,7 @@ pub async fn generate_pair() -> Result<KeyPair, SeaError> {
     let priv_key = BASE64_URL_SAFE_NO_PAD.encode(priv_bytes);
 
     // Get uncompressed public key point
-    let pub_point = verifying_key.to_encoded_point(false);
+    let pub_point = verifying_key.to_sec1_point(false);
     let pub_bytes = pub_point.as_bytes();
 
     // Extract x, y from uncompressed format (0x04 || x || y)
@@ -67,11 +67,11 @@ pub async fn generate_pair() -> Result<KeyPair, SeaError> {
     );
 
     // ECDH encryption key pair
-    let ecdh_secret = SecretKey::random(&mut OsRng);
+    let ecdh_secret = SecretKey::generate();
     let ecdh_public = EcdhPublicKey::from_secret_scalar(&ecdh_secret.to_nonzero_scalar());
 
     // Export ECDH keys in same format
-    let epub_point = ecdh_public.to_encoded_point(false);
+    let epub_point = ecdh_public.to_sec1_point(false);
     let epub_bytes = epub_point.as_bytes();
 
     if epub_bytes.len() != 65 || epub_bytes[0] != 0x04 {
