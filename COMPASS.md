@@ -32,7 +32,9 @@ Layer 1: Protocol & Crypto (depends on Layer 0)
 
 Layer 2: Core Engine (depends on Layers 0 + 1)
 ├── node.rs        — Node: put, get, on, once, map, batch_put, connect_peer, connect_webrtc_peer, stop
-└── router.rs      — Router: dedup, Get/Put routing, peer management, topic subscriptions, anti-loop relay
+├── router.rs      — Router: dedup, Get/Put routing, peer management, topic subscriptions, anti-loop relay
+├── ack.rs         — AckPolicy (any/quorum/all), ReplicationStatus, sentinel-driven async ack
+└── metrics.rs     — Metrics: atomic counters (puts, gets, peers, messages), shared via Arc<Metrics>
 
 Layer 3: Adapters (depends on Layer 2)
 ├── adapters/

@@ -1,6 +1,6 @@
 # BEAM Architecture
 
-This document provides the deep architectural view of BEAM — the Rust port of Gun.js. For quick-start usage, see `README.md`. Implementation plans and ship logs are preserved in git history. For architectural decisions, see `docs/adr/`.
+This document provides the deep architectural view of BEAM — a maintained fork of [rod](https://github.com/mmalmi/rod), a from-scratch Rust port of [Gun.js](https://github.com/amark/gun). For quick-start usage, see `README.md`.
 
 ## High-Level Actor Model
 
@@ -75,13 +75,12 @@ The storage adapter slot is filled at startup based on CLI flags. Both backends 
                                        │
                                        ▼
                             ┌──────────────────────┐
-                            │  implements Storage  │
-                            │  trait:              │
-                            │  - insert            │
-                            │  - get               │
-                            │  - range_scan        │
-                            │  - delete            │
-                            │  - flush (ack)       │
+                            │  implements Actor    │
+                            │  trait, handling:    │
+                            │  - Put (store)       │
+                            │  - Get (lookup)      │
+                            │  - BatchPut (atomic) │
+                            │  - Flush (fsync+ack) │
                             └──────────────────────┘
 ```
 
@@ -135,38 +134,40 @@ The always-reply invariant (commit `b6a3d7b`) is honored by all adapters: when `
 
 ## Module Map
 
-| Module | Lines | Responsibility |
-|--------|-------|----------------|
-| `types.rs` | 330 | Core data types: `Value` (Null/Bit/Number/Text/Link), `NodeData` (value + timestamp), `Children` (BTreeMap), JSON conversion |
-| `utils.rs` | 160 | `random_string()` (OS CSPRNG), `BoundedHashMap` (FIFO eviction for dedup tracking) |
-| `dup.rs` | 210 | `Dup` — Gun.js DAM-style message deduplication (TTL + bounded capacity, 999 entries / 9s default) |
-| `message.rs` | 817 | Wire protocol: `Get`, `Put`, `BatchPut`, `Flush`, `RtcSignal`, `Hi` — JSON serialization/deserialization, signature verification on inbound puts |
-| `actor.rs` | 197 | Actor framework: `Actor` trait, `ActorContext`, `Addr` (clonable, hashable address) — built on Tokio unbounded channels |
-| `node.rs` | 490 | Graph node API: `put()`, `get()`, `on()`, `once()`, `map()`, `batch_put()`, `connect_peer()`, `connect_webrtc_peer()`, `stop()` |
-| `router.rs` | 455 | Central router: dedup, Get/Put routing, peer management, topic subscriptions, anti-loop relay, flush forwarding, RtcSignal delivery |
-| `migration.rs` | 356 | `beam migrate` logic: format translation, single-tx-per-batch, dry-run, empty source handling |
-| `sea/pair.rs` | 75 | Key pair generation: ECDSA P-256 (signing) + ECDH P-256 (encryption), Gun.js `x.y` base64 format |
-| `sea/sign.rs` | 53 | Ed25519-style signature creation (uses P-256 ECDSA via `ring`) |
-| `sea/verify.rs` | 76 | Signature verification (sync + async variants) |
-| `sea/work.rs` | 75 | Proof-of-work / content hashing (PBKDF2, SHA-256, base64) |
-| `sea/secret.rs` | 85 | ECDH shared secret derivation between key pairs |
-| `sea/session/` | 516 | Session persistence: `MemorySessionStorage` (ephemeral) and `EncryptedFileSessionStorage` (disk, AES-GCM) |
-| `adapters/memory_storage.rs` | 124 | In-memory `HashMap<node_id, Children>` storage (ephemeral, default for `Node::new()`) |
-| `adapters/redb_storage.rs` | 261 | Persistent storage via `redb` embedded database — `BatchPut` atomic transactions, flush ack |
-| `adapters/persy_storage.rs` | 652 | Persistent storage via `Persy` (opt-in via `--features persy`) — per-tx isolation, optional `background_ops` fsync |
-| `adapters/ws_server.rs` | 223 | WebSocket server: accepts inbound connections, spawns `WsConn` per connection, optional TLS, web UI on port+1 |
-| `adapters/ws_client.rs` | 63 | `OutgoingWebsocketManager` — connects to remote WebSocket peers with retry |
-| `adapters/ws_conn.rs` | 76 | Per-connection WebSocket actor: bridges wire format ↔ Message types |
-| `adapters/multicast.rs` | 128 | UDP multicast peer discovery |
-| `adapters/webrtc.rs` | 483 | WebRTC peer connections (str0m-based), NAT traversal |
+| Module | Responsibility |
+|--------|----------------|
+| `types.rs` | Core data types: `Value` (Null/Bit/Number/Text/Link), `NodeData` (value + timestamp), `Children` (BTreeMap), JSON conversion |
+| `utils.rs` | `random_string()` (OS CSPRNG), `BoundedHashMap` (FIFO eviction for dedup tracking) |
+| `dup.rs` | `Dup` — Gun.js DAM-style message deduplication (TTL + bounded capacity, 999 entries / 9s default) |
+| `message.rs` | Wire protocol: `Get`, `Put`, `BatchPut`, `Flush`, `RtcSignal`, `Hi` — JSON serialization/deserialization, signature verification on inbound puts |
+| `actor.rs` | Actor framework: `Actor` trait, `ActorContext`, `Addr` (clonable, hashable address) — built on Tokio unbounded channels |
+| `ack.rs` | Ack protocol: `AckPolicy` (any/quorum/all), `ReplicationStatus`, sentinel-driven async ack for put, batch_put, flush, map replay |
+| `metrics.rs` | Observability: `Metrics` struct with atomic counters for puts, gets, peer connections, message routing. Shared via `Arc<Metrics>` between Node and Router |
+| `node.rs` | Graph node API: `put()`, `get()`, `on()`, `once()`, `map()`, `batch_put()`, `connect_peer()`, `connect_webrtc_peer()`, `stop()` |
+| `router.rs` | Central router: dedup, Get/Put routing, peer management, topic subscriptions, anti-loop relay, flush forwarding, RtcSignal delivery |
+| `migration.rs` | `beam migrate` logic: format translation, single-tx-per-batch, dry-run, empty source handling |
+| `sea/pair.rs` | Key pair generation: ECDSA P-256 (signing) + ECDH P-256 (encryption), Gun.js `x.y` base64 format |
+| `sea/sign.rs` | P-256 ECDSA signature creation via `ring` |
+| `sea/verify.rs` | Signature verification (sync + async variants) |
+| `sea/work.rs` | Proof-of-work / content hashing (PBKDF2, SHA-256, base64) |
+| `sea/secret.rs` | ECDH shared secret derivation between key pairs |
+| `sea/session/` | Session persistence: `MemorySessionStorage` (ephemeral) and `EncryptedFileSessionStorage` (disk, AES-GCM) |
+| `adapters/memory_storage.rs` | In-memory `HashMap<node_id, Children>` storage (ephemeral, default for `Node::new()`) |
+| `adapters/redb_storage.rs` | Persistent storage via `redb` embedded database — `BatchPut` atomic transactions, flush ack |
+| `adapters/persy_storage.rs` | Persistent storage via `Persy` (opt-in via `--features persy`) — per-tx isolation, optional `background_ops` fsync |
+| `adapters/ws_server.rs` | WebSocket server: accepts inbound connections, spawns `WsConn` per connection, optional TLS, web UI on port+1 |
+| `adapters/ws_client.rs` | `OutgoingWebsocketManager` — connects to remote WebSocket peers with retry |
+| `adapters/ws_conn.rs` | Per-connection WebSocket actor: bridges wire format ↔ Message types |
+| `adapters/multicast.rs` | UDP multicast peer discovery |
+| `adapters/webrtc.rs` | WebRTC peer connections (str0m-based), NAT traversal |
 
 ## Architectural Decisions
 
-Major decisions live in `docs/adr/`:
+Key design choices in the codebase:
 
-- **ADR-011**: Sentinel-driven drain for async acks (Put quorum, batch_put, Flush, map replay)
-- **ADR-012**: Shared observability via `Arc<Metrics>` for Node + Router
-- **ADR-013**: Persy as opt-in storage backend alongside redb
+- **Sentinel-driven async acks** — Put quorum, batch_put, Flush, and map replay all use sentinel markers flowing through the actor pipeline to track completion (see `ack.rs`)
+- **Shared observability** — `Arc<Metrics>` shared between Node and Router for atomic counter collection (see `metrics.rs`)
+- **Persy as opt-in storage backend** — feature-gated alongside the default redb backend
 
 ## Cross-References
 
