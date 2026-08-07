@@ -110,71 +110,69 @@ cargo run --release --bin beam-sea-keygen
 ### Use as a Library
 
 ```rust
-use beam::{Node, Value};
+# use beam::{Node, Value};
+# #[tokio::main]
+# async fn main() {
+let mut db = Node::new();
 
-#[tokio::main]
-async fn main() {
-    let mut db = Node::new();
+// Write
+db.get("greeting").put("Hello World!".into()).await.unwrap();
 
-    // Write
-    db.get("greeting").put("Hello World!".into()).await.unwrap();
-
-    // Subscribe to live updates
-    let mut sub = db.get("greeting").on();
-    if let Value::Text(s) = sub.recv().await.unwrap() {
-        println!("{}", s); // "Hello World!"
-    }
-
-    // Read once
-    let val = db.get("greeting").once(None).await;
-    assert_eq!(val, Some(Value::Text("Hello World!".into())));
-
-    db.stop();
+// Subscribe to live updates
+let mut sub = db.get("greeting").on();
+if let Value::Text(s) = sub.recv().await.unwrap() {
+    println!("{}", s); // "Hello World!"
 }
+
+// Read once
+let val = db.get("greeting").once(None).await;
+assert_eq!(val, Some(Value::Text("Hello World!".into())));
+
+db.stop();
+# }
 ```
 
 ### Connect Two Nodes Over WebSocket
 
-```rust
-use beam::adapters::{OutgoingWebsocketManager, WsServer};
-use beam::{Config, Node, Value};
+```rust,no_run
+# use beam::adapters::{OutgoingWebsocketManager, WsServer};
+# use beam::{Config, Node, Value};
+# #[tokio::main]
+# async fn main() {
+let config = Config::default();
 
-#[tokio::main]
-async fn main() {
-    let config = Config::default();
+// Peer 1: WebSocket server
+let mut peer1 = Node::new_with_config(
+    config.clone(),
+    vec![Box::new(beam::adapters::MemoryStorage::new())],
+    vec![Box::new(WsServer::new(config.clone()))],
+);
 
-    // Peer 1: WebSocket server
-    let mut peer1 = Node::new_with_config(
-        config.clone(),
-        vec![Box::new(beam::adapters::MemoryStorage::new())],
-        vec![Box::new(WsServer::new(config.clone()))],
-    );
+// Peer 2: WebSocket client connecting to peer 1
+let client = OutgoingWebsocketManager::new(
+    config.clone(),
+    vec!["ws://localhost:4944/ws".to_string()],
+);
+let mut peer2 = Node::new_with_config(
+    config,
+    vec![Box::new(beam::adapters::MemoryStorage::new())],
+    vec![Box::new(client)],
+);
 
-    // Peer 2: WebSocket client connecting to peer 1
-    let client = OutgoingWebsocketManager::new(
-        config.clone(),
-        vec!["ws://localhost:4944/ws".to_string()],
-    );
-    let mut peer2 = Node::new_with_config(
-        config,
-        vec![Box::new(beam::adapters::MemoryStorage::new())],
-        vec![Box::new(client)],
-    );
+// Wait for connection
+tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-    // Wait for connection
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+// Peer 2 writes, peer 1 receives via mesh sync
+peer2.get("hello").put("from peer 2".into()).await.unwrap();
 
-    // Peer 2 writes, peer 1 receives via mesh sync
-    peer2.get("hello").put("from peer 2".into()).await.unwrap();
-
-    let mut sub = peer1.get("hello").on();
-    if let Value::Text(s) = sub.recv().await.unwrap() {
-        println!("Peer 1 received: {}", s);
-    }
-
-    peer1.stop();
-    peer2.stop();
+let mut sub = peer1.get("hello").on();
+if let Value::Text(s) = sub.recv().await.unwrap() {
+    println!("Peer 1 received: {}", s);
 }
+
+peer1.stop();
+peer2.stop();
+# }
 ```
 
 ---
@@ -183,7 +181,7 @@ async fn main() {
 
 BEAM is built on an actor model with a central router. Every component — storage, network, graph nodes — is an actor communicating via typed messages over Tokio channels.
 
-```
+```text
                     ┌─────────────────────────────────────────────┐
                     │                  Node (root)                   │
                     │  uid=""  ← the root node owns the router       │
@@ -255,7 +253,7 @@ BEAM is built on an actor model with a central router. Every component — stora
 
 BEAM uses a **key-path graph** — a hierarchical tree of nodes addressed by `/`-separated paths:
 
-```
+```text
 root (uid="")
   └── "users" (uid="users")
       └── "alice" (uid="users/alice")
@@ -288,15 +286,23 @@ BEAM's graph operations differ from Gun.js in important ways. Understanding thes
 Both flat (one-level) and nested paths work in BEAM:
 
 ```rust
+# use beam::{Node, Value};
+# #[tokio::main]
+# async fn main() {
+let mut db = Node::new();
+
 // Flat path — works
 db.get("x").put("Hello World!".into()).await.unwrap();
 let mut sub = db.get("x").on();
-println!("{:?}", sub.recv().await.unwrap()); // Ok(Text("Hello World!"))
+let _ = sub.recv().await; // Ok(Text("Hello World!"))
 
 // Nested path — also works
 db.get("x").get("y").put("Hello World!".into()).await.unwrap();
 let mut sub = db.get("x").get("y").on();
-println!("{:?}", sub.recv().await.unwrap()); // Ok(Text("Hello World!"))
+let _ = sub.recv().await; // Ok(Text("Hello World!"))
+
+db.stop();
+# }
 ```
 
 > **Gun.js difference:** Gun.js prohibits saving primitive values at the root level — `Gun().put("oops")` and `Gun().get("odd").put("oops")` are errors. BEAM does **not** enforce this restriction. Flat-key writes (`db.get("key").put(val)`) are valid and propagate to storage and peers normally.
@@ -313,14 +319,20 @@ println!("{:?}", sub.recv().await.unwrap()); // Ok(Text("Hello World!"))
 
 `map()` returns a stream of `(child_key, value)` pairs. It replays existing children from storage, then streams new ones as they're added. A sentinel `("__beam_replay_complete__", Null)` signals that all existing children have been replayed; subsequent values are **new** children only.
 
-```rust
+```rust,no_run
+# use beam::{Node, Value};
+# #[tokio::main]
+# async fn main() {
+let mut db = Node::new();
 let mut sub = db.get("users").map();
-while let Some((key, value)) = sub.recv().await {
+while let Ok((key, value)) = sub.recv().await {
     if key == "__beam_replay_complete__" {
-        break; // replay finished; subscribe to new children separately
+        break;
     }
     println!("child: {} = {:?}", key, value);
 }
+db.stop();
+# }
 ```
 
 The `__beam_replay_complete__` sentinel signals that all existing children have been replayed from storage. Subsequent values on the receiver are **new** children added after subscription. To read a child's actual value, call `on()` or `once()` on the child node directly.
@@ -350,65 +362,79 @@ The SEA (Security, Encryption, Authorization) module implements Gun.js-compatibl
 ### Key Pair Generation
 
 ```rust
-use beam::sea;
-
-let pair = sea::generate_pair().await?;
-println!("pub: {}", pair.pub_key);   // ECDSA public key (Gun.js x.y format)
-println!("epub: {}", pair.epub_key.as_ref().unwrap()); // ECDH public key
-println!("priv: {}", pair.priv_key); // ECDSA private key
-println!("epriv: {}", pair.epriv_key.as_ref().unwrap()); // ECDH private key
+# use beam::sea;
+# #[tokio::main]
+# async fn main() {
+let pair = sea::generate_pair().await.unwrap();
+println!("pub: {}", pair.pub_key);
+println!("epub: {}", pair.epub_key.as_ref().unwrap());
+println!("priv: {}", pair.priv_key);
+println!("epriv: {}", pair.epriv_key.as_ref().unwrap());
+# }
 ```
 
 ### Signing and Verification
 
 ```rust
-use beam::sea;
-use serde_json::json;
-
-let signed = sea::sign(&json!({"msg": "hello"}), &pair).await?;
-let verified = sea::verify_sync(&signed, &pair.pub_key)?;
+# use beam::sea;
+# use serde_json::json;
+# #[tokio::main]
+# async fn main() {
+let pair = sea::generate_pair().await.unwrap();
+let signed = sea::sign(&json!({"msg": "hello"}), &pair).await.unwrap();
+let verified = sea::verify_sync(&signed, &pair.pub_key).unwrap();
+# }
 ```
 
 ### Encryption and Decryption
 
 ```rust
-use beam::sea;
-use serde_json::json;
+# use beam::sea;
+# use serde_json::json;
+# #[tokio::main]
+# async fn main() {
+let pair = sea::generate_pair().await.unwrap();
 
 // Asymmetric (ECDH key exchange + AES-GCM)
-let their_epub = "x.y"; // recipient's ECDH public key
-let encrypted = sea::encrypt(&json!({"secret": "message"}), &pair, Some(their_epub)).await?;
-let decrypted = sea::decrypt(&encrypted, &pair, Some(their_epub)).await?;
+let their_epub = pair.epub_key.as_ref().unwrap().clone();
+let encrypted = sea::encrypt(&json!({"secret": "message"}), &pair, Some(&their_epub)).await.unwrap();
+let decrypted = sea::decrypt(&encrypted, &pair, Some(&their_epub)).await.unwrap();
 
 // Symmetric: raw 32-byte AES-256 key
-let key_bytes: &[u8] = &[0u8; 32]; // your 32-byte key
-let encrypted = sea::encrypt_symmetric(&json!({"secret": "message"}), key_bytes).await?;
-let decrypted = sea::decrypt_symmetric(&encrypted, key_bytes).await?;
+let key_bytes: &[u8] = &[0u8; 32];
+let encrypted = sea::encrypt_symmetric(&json!({"secret": "message"}), key_bytes).await.unwrap();
+let decrypted = sea::decrypt_symmetric(&encrypted, key_bytes).await.unwrap();
+# }
 ```
 
 ### User Identity
 
-```rust
-use beam::sea::user::User;
-use beam::Node;
-
+```rust,no_run
+# use beam::sea::User;
+# use beam::Node;
+# use serde_json::json;
+# #[tokio::main]
+# async fn main() {
 let mut node = Node::new();
-let user = User::create("alice", "password123", &mut node).await?;
+let user = User::create("alice", "password123", &mut node).await.unwrap();
 
 // Trust another user's public key
-user.trust("bob_pub_key", Some("path/prefix"), &mut node).await?;
+user.trust("bob_pub_key", Some("path/prefix"), &mut node).await.unwrap();
 
 // Grant access to encrypted data
-user.grant("bob_pub_key", "bob_epub_key", "path/secret", &mut node).await?;
+user.grant("bob_pub_key", "bob_epub_key", "path/secret", &mut node).await.unwrap();
 
 // Store an encrypted secret
-user.secret(&serde_json::json!({"api_key": "..."}), "wallet/key", &mut node).await?;
+user.secret(&json!({"api_key": "..."}), "wallet/key", &mut node).await.unwrap();
 
 // Check identity
-let identity = user.is(); // Some(Identity { alias, pub_key, epub_key })
+let _identity = user.is(); // Some(Identity { alias, pub_key, epub_key })
 
 // Zeroize keys and invalidate all clones
 user.leave();
+
+node.stop();
+# }
 ```
 
 ### Three Data Spaces
@@ -593,15 +619,16 @@ BEAM uses Gun.js's JSON wire format. Messages are JSON objects with these fields
 ### Programmatic Config
 
 ```rust
-use beam::Config;
-
+# use beam::Config;
+# fn main() {
 let config = Config {
-    allow_public_space: false,   // Reject unsigned public writes
-    stats: true,                 // Expose stats endpoint
-    my_pub: Some("x.y".into()),  // Prioritize this public key's data
-    broadcast_buffer_size: 4096, // on()/map() channel capacity
+    allow_public_space: false,
+    stats: true,
+    my_pub: Some("x.y".into()),
+    broadcast_buffer_size: 4096,
     ice_servers: vec!["stun:stun.l.google.com:19302".into()],
 };
+# }
 ```
 
 ---
@@ -609,7 +636,7 @@ let config = Config {
 ## Testing
 
 ```bash
-# Run all tests
+# Run all tests (includes doctests — README code examples are compiled and run)
 cargo test
 
 # With WebRTC tests
@@ -618,7 +645,7 @@ cargo test --features webrtc
 # Lint (zero warnings required)
 cargo clippy -- -D warnings
 
-# Doctests only
+# Doctests only (verifies README code examples compile)
 cargo test --doc
 
 # Benchmarks
