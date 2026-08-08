@@ -44,7 +44,7 @@ use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
 
 use async_trait::async_trait;
-use log::{debug, error};
+use log::{debug, error, info};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 /// Table definition for graph node data.
@@ -286,9 +286,15 @@ impl Actor for RedbStorage {
         }
     }
 
-    #[allow(unused_variables)]
     async fn stopping(&mut self, _ctx: &ActorContext) {
-        debug!("RedbStorage stopping at {}", self.path);
+        // redb commits inline within handle(), so all acknowledged writes
+        // are already durable. The flush_storage() call in Node::shutdown()
+        // ensures the mailbox has drained before we reach this point.
+        // Here we log final state for observability.
+        info!(
+            "RedbStorage stopping at {} — all writes committed",
+            self.path
+        );
     }
 
     async fn handle(&mut self, message: Message, ctx: &ActorContext) {

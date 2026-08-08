@@ -28,7 +28,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use futures_util::StreamExt;
-use log::info;
+use log::{debug, info};
 use tokio::net::TcpListener;
 use tokio_native_tls::native_tls::Identity;
 
@@ -296,37 +296,59 @@ impl Actor for WsServer {
             let acceptor = tokio_native_tls::TlsAcceptor::from(acceptor);
             let acceptor = Arc::new(acceptor);
 
+            let mut shutdown_rx = ctx.shutdown_rx.clone();
             ctx.clone().child_task(async move {
                 loop {
-                    if let Ok((stream, _)) = listener.accept().await {
-                        let acceptor = acceptor.clone();
-                        let clients = clients.clone();
-                        let ctx = ctx.clone();
-                        tokio::spawn(async move {
-                            let stream = acceptor.accept(stream).await;
-                            if let Ok(stream) = stream {
+                    tokio::select! {
+                        biased;
+                        _ = shutdown_rx.changed() => {
+                            debug!("WsServer TLS accept loop shutting down");
+                            break;
+                        }
+                        result = listener.accept() => {
+                            if let Ok((stream, _)) = result {
+                                let acceptor = acceptor.clone();
+                                let clients = clients.clone();
+                                let ctx = ctx.clone();
+                                tokio::spawn(async move {
+                                    let stream = acceptor.accept(stream).await;
+                                    if let Ok(stream) = stream {
+                                        Self::handle_stream(
+                                            MaybeTlsStream::NativeTls(stream),
+                                            &ctx,
+                                            clients.clone(),
+                                            allow_public_space,
+                                        )
+                                        .await;
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            });
+        } else {
+            let mut shutdown_rx = ctx.shutdown_rx.clone();
+            ctx.clone().child_task(async move {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = shutdown_rx.changed() => {
+                            debug!("WsServer plain accept loop shutting down");
+                            break;
+                        }
+                        result = listener.accept() => {
+                            if let Ok((stream, _)) = result {
                                 Self::handle_stream(
-                                    MaybeTlsStream::NativeTls(stream),
+                                    MaybeTlsStream::Plain(stream),
                                     &ctx,
                                     clients.clone(),
                                     allow_public_space,
                                 )
                                 .await;
                             }
-                        });
+                        }
                     }
-                }
-            });
-        } else {
-            ctx.clone().child_task(async move {
-                while let Ok((stream, _)) = listener.accept().await {
-                    Self::handle_stream(
-                        MaybeTlsStream::Plain(stream),
-                        &ctx,
-                        clients.clone(),
-                        allow_public_space,
-                    )
-                    .await;
                 }
             });
         }
@@ -340,6 +362,14 @@ impl Actor for WsServer {
     }
 
     async fn stopping(&mut self, _context: &ActorContext) {
-        info!("WsServer stopping");
+        info!(
+            "WsServer stopping — closing {} client connections",
+            self.clients.read().await.len()
+        );
+        // Dropping the client Addr senders closes their channels. The WsConn
+        // actors will receive stop signals via ActorContext::stop() and send
+        // WebSocket Close frames in their own stopping(). Here we just clear
+        // the set so no new fan-out attempts are made.
+        self.clients.write().await.clear();
     }
 }
