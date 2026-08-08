@@ -42,6 +42,7 @@ use crate::router::Router;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use futures_util::StreamExt;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
@@ -51,6 +52,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::watch;
 use tokio::sync::{broadcast, oneshot};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_tungstenite::connect_async;
 
 /// Configuration for a [`Node`] and its associated adapters.
@@ -447,6 +449,7 @@ impl Node {
         Some(val)
     }
 
+#[cfg(not(target_arch = "wasm32"))]
     /// Connects to a remote peer via WebSocket with automatic reconnection.
     ///
     /// Retries with exponential backoff starting at 1 second, maxing at 60
