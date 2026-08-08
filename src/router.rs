@@ -53,7 +53,7 @@ use crate::types::{Children, NodeData, Value};
 use crate::utils::{try_send_or_log, BoundedHashMap};
 use async_trait::async_trait;
 use log::{debug, error, info};
-use rand::{seq::IteratorRandom, thread_rng};
+use rand::{seq::IteratorRandom, rng};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -441,7 +441,7 @@ impl Router {
         // Ask network subscribers
         let mut errored = HashSet::new();
         let mut sent_to = 0;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         if let Some(topic_subscribers) = self.subscribers_by_topic.get(topic) {
             let sample = topic_subscribers.iter().choose_multiple(&mut rng, 4);
             for addr in sample {
@@ -651,7 +651,7 @@ impl Router {
         }
         debug!("sent put to {} subscribers", already_sent_to.len());
         if already_sent_to.len() < 4 {
-            let mut rng = thread_rng();
+            let mut rng = rng();
             let mut errored = HashSet::new();
             while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
                 sent_to += 1;

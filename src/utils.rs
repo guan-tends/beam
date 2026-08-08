@@ -14,8 +14,8 @@
 //! **not** suitable for cryptographic key generation — use the [`crate::sea`]
 //! module's `generate_pair()` for key generation.
 
-use rand::distributions::Alphanumeric;
-use rand::{Rng, thread_rng};
+use rand::distr::Alphanumeric;
+use rand::{Rng, rng};
 use std::collections::{HashMap, VecDeque};
 
 /// Generates a random alphanumeric string of the given length.
@@ -32,7 +32,7 @@ use std::collections::{HashMap, VecDeque};
 /// assert_eq!(id.len(), 32);
 /// ```
 pub fn random_string(len: usize) -> String {
-    thread_rng()
+    rng()
         .sample_iter(&Alphanumeric)
         .take(len)
         .map(char::from)

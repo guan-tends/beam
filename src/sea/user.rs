@@ -26,7 +26,7 @@ impl User {
         let proof_input = format!("{}{}", alias, pass);
         // Generate random 9-byte salt per Gun.js convention
         let mut salt_bytes = [0u8; 9];
-        rand::thread_rng().fill_bytes(&mut salt_bytes);
+        rand::rng().fill_bytes(&mut salt_bytes);
 
         let proof = work(
             proof_input.as_bytes(),
@@ -189,8 +189,8 @@ async fn encrypt_pass(data: &JsonValue, passphrase: &str) -> Result<JsonValue, S
 
         let mut salt = [0u8; 9];
         let mut nonce = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut salt);
-        rand::thread_rng().fill_bytes(&mut nonce);
+        rand::rng().fill_bytes(&mut salt);
+        rand::rng().fill_bytes(&mut nonce);
 
         let aes_key = derive_key_sync(&passphrase, &salt)?;
 
@@ -370,7 +370,7 @@ impl User {
                 }
                 _ => {
                     let mut bytes = [0u8; 16];
-                    rand::thread_rng().fill_bytes(&mut bytes);
+                    rand::rng().fill_bytes(&mut bytes);
                     let new_sec = BASE64_URL_SAFE_NO_PAD.encode(bytes);
                     let enc = encrypt(&json!(new_sec), pair, None).await?;
                     let signed = sign_value(&enc, pair).await?;
