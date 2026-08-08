@@ -1,3 +1,4 @@
+#![allow(clippy::doc_overindented_list_items, clippy::doc_lazy_continuation)]
 //! Criterion benchmarks for BEAM — measuring throughput and latency of core operations.
 //!
 //! ## Benchmark groups

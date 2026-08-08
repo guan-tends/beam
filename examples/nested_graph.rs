@@ -68,16 +68,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Collect all replayed children (until sentinel or timeout).
     let mut children = Vec::new();
     let _ = timeout(Duration::from_secs(5), async {
-        loop {
-            match sub.recv().await {
-                Ok((key, value)) => {
-                    if key == REPLAY_SENTINEL {
-                        break;
-                    }
-                    children.push((key, value));
-                }
-                Err(_) => break,
+        while let Ok((key, value)) = sub.recv().await {
+            if key == REPLAY_SENTINEL {
+                break;
             }
+            children.push((key, value));
         }
     })
     .await;

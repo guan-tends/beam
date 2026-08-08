@@ -77,7 +77,7 @@ fn write_redb_records(path: &std::path::Path, count: usize) -> Result<usize, Str
             children.insert(
                 format!("leaf_{:04}", i),
                 NodeData {
-                    value: Value::Text(format!("test-{}", i).into()),
+                    value: Value::Text(format!("test-{}", i)),
                     updated_at: 1_700_000_000.0 + i as f64,
                 },
             );
@@ -105,7 +105,7 @@ fn count_persy_records(path: &std::path::Path) -> Result<usize, String> {
     // If we naively `for entry in db.scan(&segment_id)`, Rust iterates over
     // BOTH Ok and Err variants — a single Err yields count=1 (the Err itself),
     // not "scan failed". We must unwrap the Result first.
-    let iter = db.scan(&segment_id).map_err(|e| format!("scan: {:?}", e))?;
+    let iter = db.scan(segment_id).map_err(|e| format!("scan: {:?}", e))?;
     Ok(iter.count())
 }
 
@@ -386,7 +386,7 @@ async fn diag_persy_count_basic() {
             children.insert(
                 format!("leaf_{:04}", i),
                 NodeData {
-                    value: Value::Text(format!("test-{}", i).into()),
+                    value: Value::Text(format!("test-{}", i)),
                     updated_at: 1_700_000_000.0 + i as f64,
                 },
             );

@@ -365,9 +365,9 @@ pub(crate) mod io {
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
                 create_tx
                     .prepare()
-                    .map_err(|e| Box::<dyn std::error::Error>::from(e))?
+                    .map_err(Box::<dyn std::error::Error>::from)?
                     .commit()
-                    .map_err(|e| Box::<dyn std::error::Error>::from(e))?;
+                    .map_err(Box::<dyn std::error::Error>::from)?;
                 Ok(())
             },
         )
@@ -451,7 +451,7 @@ pub(crate) mod io {
                 path: opts.target_path.clone(),
                 source: source.into(),
             })?;
-        let mut target_tx = target_db
+        let target_tx = target_db
             .begin_write()
             .map_err(|source| MigrateError::RedbTx {
                 path: opts.target_path.clone(),
@@ -465,7 +465,7 @@ pub(crate) mod io {
                     source,
                 })?;
 
-        let scan = src_db.scan(&src_seg).map_err(|source| {
+        let scan = src_db.scan(src_seg).map_err(|source| {
             MigrateError::Persy(format!(
                 "{}: {}",
                 opts.source_path.clone().display(),
@@ -634,7 +634,7 @@ mod tests {
         children.insert(
             "num".to_string(),
             NodeData {
-                value: Value::Number(-3.14),
+                value: Value::Number(-3.15),
                 updated_at: 3.0,
             },
         );

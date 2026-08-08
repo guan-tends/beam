@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-08 — Enterprise-Grade Release
+
+15 dependency modernization sprints across 3 tiers, eliminating 5 dependencies
+(ring, jsonwebtoken, jsonwebkey, bincode, ctrlc). Full graceful shutdown
+implementation. CI pipeline modernized with full test suite, clippy enforcement,
+and supply chain security auditing. Release profile hardened for production
+binaries.
+
+### Changed
+
+- **Crypto consolidation:** Eliminated ring/jsonwebtoken/jsonwebkey —
+  consolidated on p256 + sha2 (already in dependency tree). Single
+  verification path instead of two. Gun.js double-hashing semantics
+  preserved (SHA256(SHA256(message))).
+- **CLI framework:** clap 2.33 → 4.6. New `cli.rs` module (467 lines)
+  with derive API. `main.rs` reduced from 354 to 167 lines
+  (composition-root pattern). 21 unit tests for CLI argument parsing.
+- **Serialization:** bincode → postcard (RUSTSEC-2025-0141 resolved).
+  Smaller, faster, maintained.
+- **WebSocket transport:** tokio-tungstenite 0.17 → 0.30. Utf8Bytes
+  replaces String for Text messages.
+- **Web server:** warp 0.3 → 0.4. TLS path replaced with tokio_native_tls
+  (same stack as WsServer — DRY). Plain HTTP still uses warp::serve.
+- **Dependency upgrades:** rand 0.8 → 0.9, multicast-socket 0.2 → 0.3,
+  criterion 0.3 → 0.8, base64 0.13 → 0.22, thiserror, env_logger, dirs
+  updated to latest. str0m 0.19 → 0.21 (WebRTC).
+
+### Added
+
+- **Graceful shutdown:** Full graceful shutdown via tokio::sync::watch
+  channel on ActorContext. SIGINT + SIGTERM handling via tokio::signal
+  (replaces ctrlc crate). All adapter `stopping()` implementations filled
+  in. `--shutdown-timeout` CLI flag (default 30s). 5 E2E shutdown tests.
+  Shutdown sequence: flush → signal → drain → force stop.
+- **Release profile:** `[profile.release]` with opt-level=3, strip, LTO,
+  codegen-units=1 for optimized production binaries.
+- **CI pipeline:** Modernized with full test suite (262+ tests), clippy
+  `-D warnings`, fmt check, doc tests, cargo audit, cargo deny. All
+  actions updated to current versions (checkout@v4,
+  dtolnay/rust-toolchain, Swatinem/rust-cache).
+- **SECURITY.md:** Security policy with vulnerability reporting process.
+- **CONTRIBUTING.md:** Contributor guide with build, test, and PR workflow.
+- **Supply chain security:** cargo-audit + cargo-deny with deny.toml
+  configuration for advisories, licenses, bans, and sources.
+
+### Security
+
+- RUSTSEC-2025-0010 (ring unmaintained) — resolved: ring eliminated
+- RUSTSEC-2025-0141 (bincode unmaintained) — resolved: replaced with postcard
+- Supply chain: cargo-audit + cargo-deny integrated into CI
+
+### Removed
+
+- 5 dependencies eliminated (ring, jsonwebtoken, jsonwebkey, bincode, ctrlc)
+- Smaller attack surface, fewer transitive dependencies
+
+### Tests
+
+- 262 total tests (238 lib + 19 doctests + 5 E2E shutdown)
+- 0 failures, 0 clippy warnings, 0 compiler warnings
+- Gun.js wire compatibility: 3-layer proof (golden fixtures, Node.js
+  mirror, live integration)
+
 ### 0.8.0 — 2026-07-25 — The BEAM Rebrand
 
 This release marks BEAM's identity as an independent successor to Rod. The

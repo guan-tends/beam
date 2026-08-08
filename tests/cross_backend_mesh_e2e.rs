@@ -1,3 +1,4 @@
+#![allow(clippy::doc_overindented_list_items, clippy::doc_lazy_continuation)]
 //!
 //! Cross-backend mesh convergence — the killer test for the Persy
 //! storage adapter.

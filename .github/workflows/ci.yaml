@@ -1,93 +1,92 @@
 name: CI
 
 on:
-  pull_request:
-    branches:
-      - master
   push:
-    branches:
-      - "**"
-    tags:
-      - "v*.*.*"
+    branches: [master]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_ENCODED_RUSTFLAGS: "-Dwarnings"
 
 jobs:
-  check_default:
-    name: cargo check (default features)
+  check:
+    name: Check + Clippy + Format + Docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check Cargo.lock
+        run: cargo fetch --locked
+      - name: Check compilation
+        run: cargo check --all-targets --all-features
+      - name: Clippy lints
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Docs
+        run: RUSTDOCFLAGS='-Dwarnings' cargo doc --workspace --all-features --no-deps
 
-  unit-test:
-    name: cargo test
+  test:
+    name: Test Suite
+    needs: check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --package beam --lib -- message::tests --  --verbose
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit + doc tests
+        run: cargo test --workspace --lib && cargo test --workspace --doc
+      - name: Integration tests
+        run: cargo test --workspace --test '*' -- --test-threads=1
 
-  fmt:
-    name: cargo fmt
+  security:
+    name: Security Audit
+    needs: check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+      - name: Run cargo audit
+        run: cargo audit
+      - name: Run cargo deny
+        run: cargo deny check
 
   docker:
-    name: docker-build
+    name: Docker Build
+    needs: check
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
-          # list of Docker images to use as base name for tags
-          images: |
-            ghcr.io/${{ github.repository_owner }}/beam
-          # generate Docker tags based on the following events/attributes
+          images: ghcr.io/${{ github.repository_owner }}/beam
           tags: |
             type=ref,event=branch
-            type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build container and push
-        uses: docker/build-push-action@v3
+      - uses: docker/build-push-action@v5
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
@@ -97,10 +96,11 @@ jobs:
           cache-to: type=gha,mode=max
 
   wire-mirror:
-    name: Gun.js wire mirror tests
+    name: Gun.js Wire Mirror Tests
+    needs: check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -112,19 +112,17 @@ jobs:
         run: node mirror_test.js
 
   wire-live:
-    name: Gun.js live integration tests
+    name: Gun.js Live Integration
+    needs: check
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
       - name: Install Gun.js
         working-directory: tests/wire-live
         run: npm ci

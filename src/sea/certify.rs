@@ -91,7 +91,7 @@ mod tests {
     async fn test_certify_basic() {
         let authority = generate_pair().await.unwrap();
         let alice = generate_pair().await.unwrap();
-        let cert = certify(&authority, &[alice.pub_key.clone()], None)
+        let cert = certify(&authority, std::slice::from_ref(&alice.pub_key), None)
             .await
             .unwrap();
         let payload = verify_certificate(&cert, &authority.pub_key).unwrap();
@@ -103,9 +103,13 @@ mod tests {
         let authority = generate_pair().await.unwrap();
         let alice = generate_pair().await.unwrap();
         let policies = json!({"w": "skills/", "r": ".*"});
-        let cert = certify(&authority, &[alice.pub_key.clone()], Some(&policies))
-            .await
-            .unwrap();
+        let cert = certify(
+            &authority,
+            std::slice::from_ref(&alice.pub_key),
+            Some(&policies),
+        )
+        .await
+        .unwrap();
         let payload = verify_certificate(&cert, &authority.pub_key).unwrap();
         assert_eq!(payload["w"].as_str(), Some("skills/"));
         assert_eq!(payload["r"].as_str(), Some(".*"));

@@ -161,6 +161,52 @@ impl<K: Clone + std::hash::Hash + std::cmp::Eq, V> Default for BoundedHashMap<K,
     }
 }
 
+// === Fire-and-forget observability (Follow-up B) ==========================
+
+use crate::message::Message;
+use crate::metrics::Metrics;
+
+/// Try to send a message to an actor address. On full mailbox, increment
+/// the [`Metrics::dropped_sends`] counter and log at debug level instead
+/// of silently dropping the error.
+///
+/// This is the canonical BEAM pattern for fire-and-forget sends. It
+/// converts the previously invisible `let _ = addr.send(msg)` pattern
+/// into observable behavior without introducing a new abstraction layer.
+///
+/// # When to use
+///
+/// Use `try_send_or_log` when:
+///
+/// - The caller does **not** need ack confirmation
+/// - The caller can tolerate message loss under actor back-pressure
+/// - Observability of dropped messages is desirable (production telemetry)
+///
+/// Use `addr.send(msg).expect(...)` (or pattern-match on `Result`) when:
+///
+/// - The caller requires delivery confirmation
+/// - The caller can handle back-pressure by retrying or propagating the error
+/// - A silent drop would cause data loss (e.g. critical storage writes)
+///
+/// # Performance
+///
+/// On success this is a single `Addr::send` call. On failure it adds one
+/// atomic increment and one `tracing::debug!` event — both lock-free and
+/// negligible cost relative to the message-send attempt itself.
+///
+/// [`Metrics::dropped_sends`]: crate::metrics::Metrics::dropped_sends
+pub(crate) fn try_send_or_log(
+    addr: &crate::actor::Addr,
+    msg: Message,
+    metrics: &Metrics,
+    ctx: &'static str,
+) {
+    if addr.send(msg).is_err() {
+        metrics.record_dropped_send();
+        log::debug!(target: "beam::send", "actor mailbox full or closed, dropped message (context={})", ctx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,52 +306,6 @@ mod tests {
         let mut map = BoundedHashMap::new(0);
         map.insert("a", 1);
         assert_eq!(map.get(&"a"), None); // immediately evicted
-    }
-}
-
-// === Fire-and-forget observability (Follow-up B) ==========================
-
-use crate::message::Message;
-use crate::metrics::Metrics;
-
-/// Try to send a message to an actor address. On full mailbox, increment
-/// the [`Metrics::dropped_sends`] counter and log at debug level instead
-/// of silently dropping the error.
-///
-/// This is the canonical BEAM pattern for fire-and-forget sends. It
-/// converts the previously invisible `let _ = addr.send(msg)` pattern
-/// into observable behavior without introducing a new abstraction layer.
-///
-/// # When to use
-///
-/// Use `try_send_or_log` when:
-///
-/// - The caller does **not** need ack confirmation
-/// - The caller can tolerate message loss under actor back-pressure
-/// - Observability of dropped messages is desirable (production telemetry)
-///
-/// Use `addr.send(msg).expect(...)` (or pattern-match on `Result`) when:
-///
-/// - The caller requires delivery confirmation
-/// - The caller can handle back-pressure by retrying or propagating the error
-/// - A silent drop would cause data loss (e.g. critical storage writes)
-///
-/// # Performance
-///
-/// On success this is a single `Addr::send` call. On failure it adds one
-/// atomic increment and one `tracing::debug!` event — both lock-free and
-/// negligible cost relative to the message-send attempt itself.
-///
-/// [`Metrics::dropped_sends`]: crate::metrics::Metrics::dropped_sends
-pub(crate) fn try_send_or_log(
-    addr: &crate::actor::Addr,
-    msg: Message,
-    metrics: &Metrics,
-    ctx: &'static str,
-) {
-    if addr.send(msg).is_err() {
-        metrics.record_dropped_send();
-        log::debug!(target: "beam::send", "actor mailbox full or closed, dropped message (context={})", ctx);
     }
 }
 
