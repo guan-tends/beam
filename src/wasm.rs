@@ -20,7 +20,7 @@
 //! // Read once
 //! const val = await beam.get("chat.123"); // "Hello!"
 //!
-//! // Subscribe to updates
+//! // Subscribe to child updates (Gun.js .on() semantics)
 //! beam.on("chat", (value) => console.log("new message:", value));
 //! ```
 
@@ -178,26 +178,30 @@ impl Beam {
         })
     }
 
-    /// Subscribes to updates at the given path.
+    /// Subscribes to child updates at the given path.
     ///
-    /// The callback is invoked for each new value received at the path.
+    /// Uses Gun.js `.on()` semantics: the callback fires for each child
+    /// value under the path, not just the path's own value. For example,
+    /// `beam.on("chat", cb)` fires for each message written to
+    /// `chat.<timestamp>`.
+    ///
     /// The subscription lives until `stop()` is called or the `Beam`
     /// instance is dropped.
     ///
     /// ```js
     /// beam.on("chat", (value) => {
-    ///   console.log("new value:", value);
+    ///   console.log("new message:", value);
     /// });
     /// ```
     pub fn on(&mut self, path: &str, callback: js_sys::Function) {
         let _guard = runtime().enter();
-        let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
-        let mut rx = node.on();
+        let node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+        let mut rx = node.map();
 
         spawn_local(async move {
             loop {
                 match rx.recv().await {
-                    Ok(value) => {
+                    Ok((_key, value)) => {
                         let js_val = match value {
                             Value::Text(s) => JsValue::from(s),
                             Value::Number(n) => JsValue::from(n),
@@ -205,6 +209,10 @@ impl Beam {
                             Value::Link(s) => JsValue::from(s),
                             Value::Null => JsValue::NULL,
                         };
+                        // Skip internal control keys
+                        if js_val.is_null() {
+                            continue;
+                        }
                         // Fire callback — errors are silently ignored
                         // (callback may have been GC'd or page unloaded).
                         let _ = callback.call1(&JsValue::UNDEFINED, &js_val);
