@@ -6,7 +6,7 @@
 //! # Schema
 //!
 //! Two tables:
-//! - `beam_nodes_v1`: key = `node_id` (&str), value = `bincode(Children)` (BTreeMap<String, NodeData>)
+//! - `beam_nodes_v1`: key = `node_id` (&str), value = `postcard(Children)` (BTreeMap<String, NodeData>)
 //! - `beam_meta_v1`: key = metadata key (&str), value = `u64` timestamp
 //!
 //! # Semantics
@@ -145,7 +145,7 @@ impl RedbStorage {
         let children_for_node = match table.get(&*get.node_id) {
             Ok(Some(access_guard)) => {
                 let bytes = access_guard.value();
-                unwrap_or_return!(bincode::deserialize::<BTreeMap<String, NodeData>>(bytes))
+                unwrap_or_return!(postcard::from_bytes::<BTreeMap<String, NodeData>>(bytes))
             }
             Ok(None) => {
                 debug!("redb get: no data for node_id={}", get.node_id);
@@ -216,7 +216,7 @@ impl RedbStorage {
                 match node_table.get(&*node_id)? {
                     Some(access_guard) => {
                         let bytes = access_guard.value();
-                        bincode::deserialize(bytes).unwrap_or_default()
+                        postcard::from_bytes(bytes).unwrap_or_default()
                     }
                     None => BTreeMap::new(),
                 };
@@ -235,8 +235,11 @@ impl RedbStorage {
             if children_for_node.is_empty() {
                 node_table.remove(&*node_id)?;
             } else {
-                let bytes = bincode::serialize(&children_for_node).map_err(|e| {
-                    redb::Error::Io(std::io::Error::other(format!("bincode serialize: {:?}", e)))
+                let bytes = postcard::to_allocvec(&children_for_node).map_err(|e| {
+                    redb::Error::Io(std::io::Error::other(format!(
+                        "postcard serialize: {:?}",
+                        e
+                    )))
                 })?;
                 node_table.insert(&*node_id, bytes.as_slice())?;
             }
