@@ -169,7 +169,7 @@ future work item.
 ## Reproducing
 
 ```bash
-cd /home/guan/src/beam
+cd beam
 git checkout feat/persy-benchmarks
 
 # Compile checks
