@@ -220,7 +220,7 @@ async fn main() {
             // signal triggers Node::shutdown() which flushes storage, signals
             // child tasks, drains, and force-stops. A second signal (or
             // timeout expiry) exits immediately with code 1.
-            let shutdown_timeout = std::time::Duration::from_secs(args.shutdown_timeout);
+            let shutdown_timeout = web_time::Duration::from_secs(args.shutdown_timeout);
             let mut node_clone = node.clone();
 
             // Wait for the first shutdown signal.

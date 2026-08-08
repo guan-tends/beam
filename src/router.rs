@@ -57,7 +57,7 @@ use rand::{rng, seq::IteratorRandom};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use web_time::Instant;
 
 /// Maximum number of seen Get messages to track for deduplication.
 static SEEN_MSGS_MAX_SIZE: usize = 10000;
@@ -112,7 +112,7 @@ pub(crate) struct QuorumEntry {
     /// Maximum wall-clock duration this entry may live before the cleanup
     /// reaper considers it expired. Captured from [`AckPolicy::timeout`] at
     /// registration time so the reaper doesn't need access to the policy.
-    max_timeout: std::time::Duration,
+    max_timeout: web_time::Duration,
 }
 
 impl QuorumEntry {
@@ -146,7 +146,7 @@ impl QuorumEntry {
     }
 
     /// Has the policy timeout elapsed since `started_at`?
-    fn is_expired(&self, timeout: std::time::Duration) -> bool {
+    fn is_expired(&self, timeout: web_time::Duration) -> bool {
         self.started_at.elapsed() >= timeout
     }
 }
@@ -262,16 +262,22 @@ impl Actor for Router {
         // Skips the immediate first tick so we don't race the actor's own
         // startup; a freshly registered quorum needs at least one tick cycle
         // before the reaper considers it for eviction.
-        let ctx_addr = ctx.addr.clone();
-        ctx.child_task(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-            interval.tick().await; // skip immediate first tick
-            loop {
-                interval.tick().await;
-                // Best-effort: if Router is stopped, the send fails silently.
-                let _ = ctx_addr.send(Message::CheckQuorumTimeouts);
-            }
-        });
+        //
+        // Native only: the Interval type from tokio_with_wasm is not Send,
+        // and browser nodes are leaf clients that don't manage quorums.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ctx_addr = ctx.addr.clone();
+            ctx.child_task(async move {
+                let mut interval = crate::tokio_time::interval(web_time::Duration::from_secs(1));
+                interval.tick().await; // skip immediate first tick
+                loop {
+                    interval.tick().await;
+                    // Best-effort: if Router is stopped, the send fails silently.
+                    let _ = ctx_addr.send(Message::CheckQuorumTimeouts);
+                }
+            });
+        }
     }
 
     async fn stopping(&mut self, _ctx: &ActorContext) {
@@ -702,7 +708,7 @@ impl Router {
             requester,
             required,
             received: HashSet::new(),
-            started_at: std::time::Instant::now(),
+            started_at: web_time::Instant::now(),
             max_timeout,
         };
         self.quorum_entries.insert(put_id.clone(), entry);
@@ -874,7 +880,7 @@ mod tests {
     use super::*;
     use crate::adapters::MemoryStorage;
     use crate::metrics::Metrics;
-    use std::time::Duration;
+    use web_time::Duration;
 
     #[test]
     fn test_router_new() {
@@ -892,7 +898,7 @@ mod tests {
         let metrics = Arc::new(Metrics::new());
         let router = Router::new(vec![], vec![], metrics);
         assert_eq!(router.dup.max(), 999);
-        assert_eq!(router.dup.age(), std::time::Duration::from_secs(9));
+        assert_eq!(router.dup.age(), web_time::Duration::from_secs(9));
     }
 
     #[test]

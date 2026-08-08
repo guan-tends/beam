@@ -530,7 +530,7 @@ mod tests {
         let _addr = ctx.start_actor(Box::new(actor));
 
         // Give the actor a moment to start
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        crate::tokio_time::sleep(web_time::Duration::from_millis(50)).await;
 
         assert_eq!(ctx.child_actor_count(), 1);
 

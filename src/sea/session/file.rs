@@ -21,7 +21,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize)]
 struct SessionFile {
@@ -429,7 +429,7 @@ mod tests {
         storage.save("expired_user", &pair).await.unwrap();
 
         // Sleep to ensure time passes past expires_at
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        crate::tokio_time::sleep(web_time::Duration::from_secs(2)).await;
 
         let loaded = storage.load("expired_user").await.unwrap();
         assert!(loaded.is_none(), "expired session should be reaped on load");

@@ -1,7 +1,9 @@
 //! JavaScript bindings for BEAM in the browser.
 //!
-//! This module provides a `#[wasm_bindgen]` API that exposes BEAM's core
-//! functionality to JavaScript. It wraps [`Node`] in a JS-friendly interface.
+//! Provides a `#[wasm_bindgen]` API exposing BEAM's core graph operations
+//! to JavaScript. Async operations (put, get) are bridged via
+//! `wasm_bindgen_futures` — `put` is fire-and-forget, `get` returns a
+//! `Promise`, and `on` registers a callback for real-time subscriptions.
 //!
 //! # Usage from JavaScript
 //!
@@ -9,18 +11,43 @@
 //! import init, { Beam } from "./beam.js";
 //! await init();
 //!
-//! const beam = Beam.new();              // in-memory (lost on reload)
-//! // or: const beam = Beam.new_persistent();  // IndexedDB (survives reload)
+//! const beam = new Beam();
 //! beam.connect("wss://relay.example.com/ws");
-//! beam.put("greeting", "Hello from browser!");
-//! const value = beam.get("greeting"); // "Hello from browser!"
+//!
+//! // Write
+//! beam.put("chat.123", "Hello!");
+//!
+//! // Read once
+//! const val = await beam.get("chat.123"); // "Hello!"
+//!
+//! // Subscribe to updates
+//! beam.on("chat", (value) => console.log("new message:", value));
 //! ```
 
 use crate::adapters::WasmIdbStorage;
 use crate::node::Node;
 use crate::Config;
 use crate::types::Value;
+use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::spawn_local;
+
+// ─── Tokio runtime for WASM ───
+// On native, `#[tokio::main]` provides the runtime. In the browser, we create
+// a current-thread runtime once and enter its context for every JS call.
+// The `time` feature is NOT enabled — tokio's timer wheel calls
+// `std::time::Instant::now()` which panics on `wasm32-unknown-unknown`.
+// Timer functions (sleep, timeout, interval) come from `tokio_with_wasm`
+// via the `tokio_time` shim module, backed by JS `setTimeout`/`setInterval`.
+static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn runtime() -> &'static tokio::runtime::Runtime {
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("failed to create tokio runtime")
+    })
+}
 
 /// JavaScript-facing BEAM API.
 ///
@@ -37,10 +64,10 @@ impl Beam {
     ///
     /// Data is lost when the page reloads. For persistence, use
     /// [`new_persistent()`](Self::new_persistent) instead.
-    ///
-    /// Call `connect()` to join a relay mesh, then `put()` / `get()` to read/write.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Beam {
+        console_error_panic_hook::set_once();
+        let _guard = runtime().enter();
         Beam {
             node: Node::new(),
         }
@@ -51,14 +78,9 @@ impl Beam {
     /// Data survives page reloads. The IndexedDB database opens
     /// asynchronously — writes are buffered until the DB is ready,
     /// then flushed automatically.
-    ///
-    /// ```js
-    /// const beam = Beam.new_persistent();
-    /// beam.connect("wss://relay.example.com/ws");
-    /// beam.put("app.theme", "dark");
-    /// // Reload page — "app.theme" is still "dark"
-    /// ```
     pub fn new_persistent() -> Beam {
+        console_error_panic_hook::set_once();
+        let _guard = runtime().enter();
         Beam {
             node: Node::new_with_config(
                 Config::default(),
@@ -78,44 +100,125 @@ impl Beam {
     ///
     /// * `url` - WebSocket URL (e.g. `"wss://relay.example.com/ws"`)
     pub fn connect(&self, url: &str) {
+        let _guard = runtime().enter();
         self.node.connect_peer_wasm(url);
     }
 
-    /// Writes a value to the graph at the given path.
-    ///
-    /// The value is replicated to all connected peers. If no peers are
-    /// connected yet, the value is stored locally and will sync when
-    /// a connection is established.
+    // ─── Write operations (fire-and-forget) ───
+    // `Node::put()` is async (awaits a storage ack). In the browser we
+    // fire-and-forget via `spawn_local` — the value is written to the
+    // local graph immediately, then replicated to peers when connected.
+
+    /// Writes a string value to the graph at the given path.
     ///
     /// # Arguments
     ///
-    /// * `path` - Dot-separated path (e.g. `"users.alice.name"`)
-    /// * `value` - Value to store (string, number, boolean, or null)
+    /// * `path` - Dot-separated path (e.g. `"chat.123"`)
+    /// * `value` - String to store
     pub fn put(&mut self, path: &str, value: &str) {
+        let _guard = runtime().enter();
         let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
-        node.put(Value::Text(value.to_string()));
+        let value = value.to_string();
+        spawn_local(async move {
+            let _ = node.put(Value::Text(value)).await;
+        });
     }
 
     /// Writes a numeric value to the graph at the given path.
     pub fn put_num(&mut self, path: &str, value: f64) {
+        let _guard = runtime().enter();
         let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
-        node.put(Value::Number(value));
+        spawn_local(async move {
+            let _ = node.put(Value::Number(value)).await;
+        });
     }
 
     /// Writes a boolean value to the graph at the given path.
     pub fn put_bool(&mut self, path: &str, value: bool) {
+        let _guard = runtime().enter();
         let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
-        node.put(Value::Bit(value));
+        spawn_local(async move {
+            let _ = node.put(Value::Bit(value)).await;
+        });
     }
 
     /// Writes a null value to the graph at the given path.
     pub fn put_null(&mut self, path: &str) {
+        let _guard = runtime().enter();
         let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
-        node.put(Value::Null);
+        spawn_local(async move {
+            let _ = node.put(Value::Null).await;
+        });
+    }
+
+    // ─── Read operations ───
+
+    /// Reads the value at the given path once.
+    ///
+    /// Returns a `Promise` that resolves to the value (string) or `null`
+    /// if not found within the timeout (default 66ms, matching Gun.js).
+    ///
+    /// ```js
+    /// const val = await beam.get("chat.123");
+    /// if (val) console.log("got:", val);
+    /// ```
+    #[wasm_bindgen(js_name = get)]
+    pub fn get(&mut self, path: &str) -> js_sys::Promise {
+        let _guard = runtime().enter();
+        let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+
+        wasm_bindgen_futures::future_to_promise(async move {
+            match node.once(None).await {
+                Some(Value::Text(s)) => Ok(JsValue::from(s)),
+                Some(Value::Number(n)) => Ok(JsValue::from(n)),
+                Some(Value::Bit(b)) => Ok(JsValue::from(b)),
+                Some(Value::Link(s)) => Ok(JsValue::from(s)),
+                Some(Value::Null) | None => Ok(JsValue::NULL),
+            }
+        })
+    }
+
+    /// Subscribes to updates at the given path.
+    ///
+    /// The callback is invoked for each new value received at the path.
+    /// The subscription lives until `stop()` is called or the `Beam`
+    /// instance is dropped.
+    ///
+    /// ```js
+    /// beam.on("chat", (value) => {
+    ///   console.log("new value:", value);
+    /// });
+    /// ```
+    pub fn on(&mut self, path: &str, callback: js_sys::Function) {
+        let _guard = runtime().enter();
+        let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+        let mut rx = node.on();
+
+        spawn_local(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(value) => {
+                        let js_val = match value {
+                            Value::Text(s) => JsValue::from(s),
+                            Value::Number(n) => JsValue::from(n),
+                            Value::Bit(b) => JsValue::from(b),
+                            Value::Link(s) => JsValue::from(s),
+                            Value::Null => JsValue::NULL,
+                        };
+                        // Fire callback — errors are silently ignored
+                        // (callback may have been GC'd or page unloaded).
+                        let _ = callback.call1(&JsValue::UNDEFINED, &js_val);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
     }
 
     /// Stops the node and closes all connections.
     pub fn stop(&mut self) {
+        let _guard = runtime().enter();
         self.node.stop();
     }
 }

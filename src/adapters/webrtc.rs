@@ -33,7 +33,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -372,7 +372,7 @@ impl Actor for WebRtcPeer {
                 let result = tokio::select! {
                     cmd = rx.recv() => LoopResult::Cmd(cmd),
                     res = socket.recv_from(&mut buf) => LoopResult::Recv(res),
-                    _ = tokio::time::sleep(sleep_dur) => LoopResult::Timeout,
+                    _ = crate::tokio_time::sleep(sleep_dur) => LoopResult::Timeout,
                 };
 
                 match result {
