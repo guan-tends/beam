@@ -118,6 +118,20 @@ pub struct StartArgs {
         default_value = "true"
     )]
     pub allow_public_space: String,
+
+    /// Graceful shutdown timeout in seconds.
+    ///
+    /// When the node receives SIGINT or SIGTERM, it begins a graceful
+    /// shutdown: flush storage, close connections, drain in-flight
+    /// messages. If the graceful shutdown does not complete within this
+    /// duration, the node force-stops and exits.
+    #[arg(
+        long = "shutdown-timeout",
+        env = "SHUTDOWN_TIMEOUT",
+        value_name = "SECONDS",
+        default_value = "30"
+    )]
+    pub shutdown_timeout: u64,
 }
 
 /// Arguments for the `migrate` subcommand.
