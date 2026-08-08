@@ -60,6 +60,9 @@ mod ws_conn;
 #[cfg(not(target_arch = "wasm32"))]
 mod ws_server;
 
+#[cfg(target_arch = "wasm32")]
+mod wasm_ws;
+
 pub use memory_storage::MemoryStorage;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -79,6 +82,9 @@ pub use ws_conn::WsConn;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use ws_server::{WsServer, WsServerConfig};
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm_ws::WasmWsConn;
 
 #[cfg(feature = "webrtc")]
 pub use webrtc::{WebRtcPeer, WebRtcRole};
