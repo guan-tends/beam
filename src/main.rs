@@ -1,8 +1,10 @@
 //! BEAM — a Rust implementation of the Gun.js P2P synchronized graph database.
 //!
 //! This is the command-line entry point for running a BEAM node server. It
-//! configures storage and network adapters, then starts the node until
-//! interrupted with Ctrl-C.
+//! configures storage and network adapters, then starts the node until it
+//! receives SIGINT (Ctrl-C) or SIGTERM, at which point it performs a graceful
+//! shutdown: flushes storage, closes connections, and drains in-flight messages
+//! before exiting.
 //!
 //! # Usage
 //!
@@ -21,6 +23,9 @@
 //!
 //! # Disable public space (require content-hash addressing or user signatures)
 //! cargo run --bin beam -- start --allow-public-space false
+//!
+//! # Set a custom graceful shutdown timeout (default: 30 seconds)
+//! cargo run --bin beam -- start --shutdown-timeout 10
 //! ```
 //!
 //! # Environment Variables
@@ -37,6 +42,20 @@
 //! | `--redb-storage` | `REDB_STORAGE` | true |
 //! | `--redb-path` | `REDB_PATH` | beam.redb |
 //! | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true |
+//! | `--shutdown-timeout` | `SHUTDOWN_TIMEOUT` | 30 |
+//!
+//! # Graceful Shutdown
+//!
+//! When the node receives SIGINT or SIGTERM, [`Node::shutdown`] is called
+//! with the configured timeout. The shutdown sequence:
+//!
+//! 1. **Flush storage** — pending writes in actor mailboxes are committed.
+//! 2. **Signal child tasks** — accept loops and long-running tasks stop.
+//! 3. **Drain** — in-flight messages and connection close handshakes complete.
+//! 4. **Force stop** — any remaining tasks are aborted as a fallback.
+//!
+//! If a second signal is received during shutdown, the process exits
+//! immediately with exit code 1.
 
 mod cli;
 
@@ -47,6 +66,34 @@ use beam::adapters::{
 use beam::{Config, Node};
 use clap::Parser;
 use cli::{Cli, Command};
+
+/// Waits for a shutdown signal (SIGINT or SIGTERM on Unix, Ctrl-C on all platforms).
+///
+/// This is a convenience helper used by the `Start` command to await the first
+/// or second shutdown signal without embedding platform-specific code directly
+/// in `tokio::select!` branches (which don't support `#[cfg]` attributes).
+async fn wait_for_signal() {
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\nSIGINT received — initiating graceful shutdown...");
+            }
+            _ = sigterm.recv() => {
+                eprintln!("SIGTERM received — initiating graceful shutdown...");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for Ctrl-C");
+        eprintln!("\nCtrl-C received — initiating graceful shutdown...");
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -167,19 +214,35 @@ async fn main() {
 
             println!("BEAM node starting...");
 
-            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-
+            // Graceful shutdown via tokio::signal.
+            //
+            // We listen for SIGINT (Ctrl-C) and SIGTERM (Unix). The first
+            // signal triggers Node::shutdown() which flushes storage, signals
+            // child tasks, drains, and force-stops. A second signal (or
+            // timeout expiry) exits immediately with code 1.
+            let shutdown_timeout = std::time::Duration::from_secs(args.shutdown_timeout);
             let mut node_clone = node.clone();
-            let tx_mutex = std::sync::Mutex::new(Some(cancel_tx));
-            ctrlc::set_handler(move || {
-                node_clone.stop();
-                if let Some(tx) = tx_mutex.lock().unwrap().take() {
-                    tx.send(()).unwrap();
-                }
-            })
-            .expect("Error setting Ctrl-C handler");
 
-            let _ = cancel_rx.await;
+            // Wait for the first shutdown signal.
+            wait_for_signal().await;
+
+            // Race graceful shutdown against a second signal.
+            tokio::select! {
+                result = node_clone.shutdown(shutdown_timeout) => {
+                    match result {
+                        Ok(()) => {
+                            eprintln!("Graceful shutdown complete.");
+                        }
+                        Err(e) => {
+                            eprintln!("Graceful shutdown timed out ({}), force-stopped.", e);
+                        }
+                    }
+                }
+                _ = wait_for_signal() => {
+                    eprintln!("Second signal received — forcing exit.");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
