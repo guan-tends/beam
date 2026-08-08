@@ -118,28 +118,97 @@ impl WsServer {
     ///
     /// Serves on `config.port + 1`. Routes:
     /// - `/peer_id` — returns this node's peer ID
+    ///
+    /// When TLS is configured, the server uses `tokio_native_tls` (the same
+    /// TLS stack as the WebSocket server) rather than warp's built-in TLS,
+    /// which was removed in warp 0.4. This keeps one TLS implementation
+    /// across the codebase (DRY).
     async fn start_web_server(config: WsServerConfig, peer_id: String) {
-        use warp::Filter;
-        let peer_id_route = warp::path("peer_id").map(move || peer_id.to_string());
-        let routes = warp::get().and(peer_id_route);
-
         let port = config.port + 1;
+
         if let Some(cert_path) = config.cert_path {
             let key_path = config.key_path.unwrap();
             let addr = format!("https://localhost:{}", port);
             eprintln!("Web UI:             {}", addr);
-            warp::serve(routes)
-                .tls()
-                .cert_path(cert_path)
-                .key_path(key_path)
-                .run(([0, 0, 0, 0], port))
-                .await;
-            return;
+
+            // Load TLS identity (same pattern as WebSocket TLS above)
+            let cert = std::fs::read(cert_path).expect("failed to read cert file");
+            let key = std::fs::read(key_path).expect("failed to read key file");
+            let identity = tokio_native_tls::native_tls::Identity::from_pkcs8(&cert, &key)
+                .expect("failed to create TLS identity");
+            let acceptor = tokio_native_tls::TlsAcceptor::from(
+                tokio_native_tls::native_tls::TlsAcceptor::new(identity).unwrap(),
+            );
+
+            let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
+                .await
+                .expect("failed to bind web UI port");
+
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("web UI accept error: {}", e);
+                        continue;
+                    }
+                };
+                let acceptor = acceptor.clone();
+                let peer_id = peer_id.clone();
+                tokio::spawn(async move {
+                    let stream = match acceptor.accept(stream).await {
+                        Ok(s) => s,
+                        Err(_) => return,
+                    };
+                    Self::handle_peer_id_request(stream, &peer_id).await;
+                });
+            }
         }
 
+        // Plain HTTP — use warp (no TLS needed)
         let addr = format!("http://localhost:{}", port);
         eprintln!("Web UI:             {}", addr);
+        use warp::Filter;
+        let peer_id_route = warp::path("peer_id".to_string()).map(move || peer_id.to_string());
+        let routes = warp::get().and(peer_id_route);
         warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    }
+
+    /// Handle a single HTTP request over a TLS stream for the `/peer_id` endpoint.
+    ///
+    /// Reads one HTTP/1.1 request, responds with the peer ID as plain text,
+    /// and closes the connection. This is a minimal handler — no routing
+    /// framework needed for a single endpoint.
+    async fn handle_peer_id_request(
+        mut stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
+        peer_id: &str,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut buf = [0u8; 1024];
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+
+        // Check if the request targets /peer_id
+        let request = String::from_utf8_lossy(&buf[..n]);
+        let is_peer_id = request.lines().next().map_or(false, |line| {
+            line.contains("GET /peer_id") || line.contains("GET /peer_id/")
+        });
+
+        let response = if is_peer_id {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                peer_id.len(),
+                peer_id
+            )
+        } else {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_string()
+        };
+
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.shutdown().await;
     }
 
     /// Returns the current number of connected WebSocket peers.
