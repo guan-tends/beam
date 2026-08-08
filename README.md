@@ -244,7 +244,7 @@ BEAM is built on an actor model with a central router. Every component — stora
 | `adapters/multicast.rs` | UDP multicast LAN discovery (224.0.0.123:6969) — syncs with peers on local network |
 | `adapters/webrtc.rs` | WebRTC data channel P2P via `str0m` — ICE/DTLS/SCTP, STUN discovery, TURN relay (feature-gated) |
 | `stun.rs` | STUN Binding Request + TURN Allocate Request helpers (feature-gated) |
-| `main.rs` | CLI entry point: clap argument parsing, adapter configuration, Ctrl-C graceful shutdown |
+| `main.rs` | CLI entry point: clap argument parsing, adapter configuration, signal-based graceful shutdown (SIGINT + SIGTERM) |
 | `bin/beam-sea-keygen.rs` | Utility binary: generates 32-byte random session key (base64-encoded) |
 
 ---
@@ -602,6 +602,7 @@ BEAM uses Gun.js's JSON wire format. Messages are JSON objects with these fields
 | `--redb-storage` | `REDB_STORAGE` | true | Use redb persistent storage |
 | `--redb-path` | `REDB_PATH` | `beam.redb` | Path to redb database file |
 | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true | Accept unsigned writes to public space |
+| `--shutdown-timeout` | `SHUTDOWN_TIMEOUT` | 30 | Graceful shutdown timeout (seconds) |
 
 ### Migrate Subcommand Flags
 
@@ -626,6 +627,58 @@ let config = Config {
     broadcast_buffer_size: 4096,
     ice_servers: vec!["stun:stun.l.google.com:19302".into()],
 };
+# }
+```
+
+---
+
+## Graceful Shutdown
+
+BEAM performs a graceful shutdown when it receives SIGINT (Ctrl-C) or SIGTERM,
+ensuring data integrity before exit.
+
+### Shutdown Sequence
+
+1. **Flush storage** — `Node::flush_storage()` sends a `Flush` message through
+   the router. Since the router processes messages in FIFO order, all pending
+   writes ahead of the flush are committed by the storage adapters before the
+   flush ack returns. Both redb and persy commit inline within `handle()`, so
+   data is durable by the time the ack arrives.
+
+2. **Signal child tasks** — A `tokio::sync::watch` channel broadcasts `true` to
+   all child tasks. Long-running loops (WsServer accept loop, WebRtcPeer signal
+   processor) `select!` on the shutdown signal and break cleanly.
+
+3. **Drain** — A brief wait (5 seconds) allows in-flight messages to complete
+   and WebSocket Close handshakes to finish. WsConn sends a WebSocket Close
+   frame with a 2-second timeout.
+
+4. **Force stop** — `Node::stop()` aborts any remaining tasks and sends stop
+   signals to all child actors as a fallback.
+
+### Timeout
+
+The `--shutdown-timeout` flag (default: 30 seconds, env: `SHUTDOWN_TIMEOUT`)
+bounds the total graceful shutdown time. If the flush and drain don't complete
+within this duration, the node force-stops and exits.
+
+### Double Signal
+
+A second SIGINT or SIGTERM during shutdown exits immediately with code 1.
+
+### Programmatic Shutdown
+
+```rust
+# use std::time::Duration;
+# use beam::Node;
+# #[tokio::main]
+# async fn main() {
+let mut node = Node::new();
+// ... use node ...
+match node.shutdown(Duration::from_secs(30)).await {
+    Ok(()) => println!("graceful shutdown complete"),
+    Err(e) => eprintln!("timed out: {}, force-stopped", e),
+}
 # }
 ```
 
