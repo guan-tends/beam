@@ -9,10 +9,10 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
 };
+use base64::prelude::*;
 use rand::RngCore;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use base64::prelude::*;
 
 /// Encrypt data using AES-256-GCM
 ///

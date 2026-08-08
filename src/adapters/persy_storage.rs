@@ -249,9 +249,7 @@ impl PersyStorage {
             // surrounding function returns `Result<(), String>`, so map the
             // Persy error to a string via `Debug` (matches the redb_storage
             // convention for surfacing low-level driver errors).
-            let scan_iter = tx
-                .scan(&segment_id)
-                .map_err(|e| format!("scan: {:?}", e))?;
+            let scan_iter = tx.scan(&segment_id).map_err(|e| format!("scan: {:?}", e))?;
             for (id, bytes) in scan_iter {
                 let record: NodeRecord = match bincode::deserialize(&bytes) {
                     Ok(r) => r,
@@ -313,12 +311,8 @@ impl PersyStorage {
             .solve_segment_id(BEAM_NODES)
             .map_err(|e| format!("solve_segment_id: {:?}", e))?;
         self.apply_put_to_tx(&mut tx, segment_id, put)?;
-        let prepared = tx
-            .prepare()
-            .map_err(|e| format!("prepare: {:?}", e))?;
-        prepared
-            .commit()
-            .map_err(|e| format!("commit: {:?}", e))?;
+        let prepared = tx.prepare().map_err(|e| format!("prepare: {:?}", e))?;
+        prepared.commit().map_err(|e| format!("commit: {:?}", e))?;
         Ok(())
     }
 
@@ -333,12 +327,8 @@ impl PersyStorage {
         for put in batch.puts {
             self.apply_put_to_tx(&mut tx, segment_id, put)?;
         }
-        let prepared = tx
-            .prepare()
-            .map_err(|e| format!("prepare: {:?}", e))?;
-        prepared
-            .commit()
-            .map_err(|e| format!("commit: {:?}", e))?;
+        let prepared = tx.prepare().map_err(|e| format!("prepare: {:?}", e))?;
+        prepared.commit().map_err(|e| format!("commit: {:?}", e))?;
         Ok(())
     }
 }
@@ -631,7 +621,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(record_count, 1, "stale records must be deleted, leaving 1 fresh record");
+        assert_eq!(
+            record_count, 1,
+            "stale records must be deleted, leaving 1 fresh record"
+        );
         assert_eq!(found_value.as_deref(), Some("newest"));
 
         let _ = std::fs::remove_file(&path);

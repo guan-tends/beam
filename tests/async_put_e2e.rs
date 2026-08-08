@@ -89,7 +89,9 @@ async fn e2e_concurrent_puts_serialize_correctly() {
             got,
             Some(Value::Text(val.clone())),
             "put {} → get observed {:?}, expected {:?}",
-            i, got, val
+            i,
+            got,
+            val
         );
     }
 }
@@ -156,7 +158,10 @@ async fn e2e_redb_put_await_durability() {
         .await
         .expect("redb put should ack after fsync");
     // After put returns, the value MUST be in the redb store.
-    let got = node.get("redb_key").once(Some(Duration::from_secs(2))).await;
+    let got = node
+        .get("redb_key")
+        .once(Some(Duration::from_secs(2)))
+        .await;
     assert_eq!(
         got,
         Some(Value::Text("redb_value".to_string())),
@@ -180,7 +185,10 @@ async fn e2e_redb_put_await_durability() {
         vec![Box::new(storage2) as Box<dyn Actor>],
         vec![],
     );
-    let got2 = node2.get("redb_key").once(Some(Duration::from_secs(2))).await;
+    let got2 = node2
+        .get("redb_key")
+        .once(Some(Duration::from_secs(2)))
+        .await;
     assert_eq!(
         got2,
         Some(Value::Text("redb_value".to_string())),

@@ -27,7 +27,7 @@
 
 #![cfg(feature = "persy")]
 
-use beam::migration::{migrate, Backend, MigrateOpts};
+use beam::migration::{Backend, MigrateOpts, migrate};
 use beam::types::{NodeData, Value};
 use std::collections::BTreeMap;
 use std::env;
@@ -64,9 +64,13 @@ fn write_redb_records(path: &std::path::Path, count: usize) -> Result<usize, Str
     const BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 
     let db = Database::create(path).map_err(|e| format!("create: {:?}", e))?;
-    let txn = db.begin_write().map_err(|e| format!("begin_write: {:?}", e))?;
+    let txn = db
+        .begin_write()
+        .map_err(|e| format!("begin_write: {:?}", e))?;
     {
-        let mut table = txn.open_table(BEAM_NODES).map_err(|e| format!("open_table: {:?}", e))?;
+        let mut table = txn
+            .open_table(BEAM_NODES)
+            .map_err(|e| format!("open_table: {:?}", e))?;
 
         for i in 0..count {
             let mut children: BTreeMap<String, NodeData> = BTreeMap::new();
@@ -110,7 +114,9 @@ fn count_redb_records(path: &std::path::Path) -> Result<usize, String> {
     const BEAM_NODES: TableDefinition<&str, &[u8]> = TableDefinition::new("beam_nodes_v1");
 
     let db = Database::open(path).map_err(|e| format!("open: {:?}", e))?;
-    let txn = db.begin_read().map_err(|e| format!("begin_read: {:?}", e))?;
+    let txn = db
+        .begin_read()
+        .map_err(|e| format!("begin_read: {:?}", e))?;
     let table = match txn.open_table(BEAM_NODES) {
         Ok(t) => t,
         Err(_) => return Ok(0), // empty database
@@ -250,7 +256,9 @@ async fn e2e_migration_preserves_children() {
             },
         );
         let bytes = bincode::serialize(&l1_children).expect("bincode l1");
-        table.insert("level1_a", bytes.as_slice()).expect("insert l1");
+        table
+            .insert("level1_a", bytes.as_slice())
+            .expect("insert l1");
 
         // level2_a node with 2 leaf children
         let mut l2_children: BTreeMap<String, NodeData> = BTreeMap::new();
@@ -269,7 +277,9 @@ async fn e2e_migration_preserves_children() {
             },
         );
         let bytes = bincode::serialize(&l2_children).expect("bincode l2");
-        table.insert("level2_a", bytes.as_slice()).expect("insert l2");
+        table
+            .insert("level2_a", bytes.as_slice())
+            .expect("insert l2");
     }
     txn.commit().expect("commit");
     drop(db);
@@ -398,7 +408,10 @@ async fn diag_persy_count_basic() {
         dry_run: false,
     })
     .expect("migrate");
-    eprintln!("DIAG: migration reports records_migrated={}", report.records_migrated);
+    eprintln!(
+        "DIAG: migration reports records_migrated={}",
+        report.records_migrated
+    );
     eprintln!("DIAG: source_count={}", report.source_count);
 
     // Open target as separate Persy instance to verify persistence.

@@ -3,13 +3,13 @@ use crate::ack::AckPolicy;
 use crate::actor::Addr;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
+use base64::prelude::*;
 use java_utils::HashCode;
 use log::{debug, error};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
-use base64::prelude::*;
 
 #[derive(Clone, Debug)]
 pub struct Get {
@@ -231,7 +231,10 @@ pub enum Message {
     Put(Put),
     BatchPut(BatchPut),
     Flush(Flush),
-    Hi { from: Addr, peer_id: String },
+    Hi {
+        from: Addr,
+        peer_id: String,
+    },
     RtcSignal(RtcSignal),
     /// Periodic self-tick fired by the cleanup reaper spawned in
     /// [`crate::router::Router::pre_start`].
@@ -273,8 +276,11 @@ impl Message {
             // RegisterQuorum is router-internal — never serialized to wire.
             // If we ever see this in to_string(), something routed it wrong.
             Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
-                Message::RegisterQuorum { put_id, .. } => {
-                debug!("internal RegisterQuorum({}) should not reach to_string", put_id);
+            Message::RegisterQuorum { put_id, .. } => {
+                debug!(
+                    "internal RegisterQuorum({}) should not reach to_string",
+                    put_id
+                );
                 String::new()
             }
         }
@@ -289,7 +295,7 @@ impl Message {
             Message::Hi { from: _, peer_id } => peer_id.to_string(),
             Message::RtcSignal(rtc) => rtc.id.clone(),
             Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
-                Message::RegisterQuorum { put_id, .. } => put_id.clone(),
+            Message::RegisterQuorum { put_id, .. } => put_id.clone(),
         }
     }
 
@@ -302,7 +308,7 @@ impl Message {
             Message::Hi { from, peer_id: _ } => *from == *addr,
             Message::RtcSignal(rtc) => rtc.from == *addr,
             Message::CheckQuorumTimeouts => false,
-                Message::RegisterQuorum { requester, .. } => *requester == *addr,
+            Message::RegisterQuorum { requester, .. } => *requester == *addr,
         }
     }
 
@@ -318,7 +324,7 @@ impl Message {
             } => Addr::noop(),
             Message::RtcSignal(rtc) => rtc.from.clone(),
             Message::CheckQuorumTimeouts => Addr::noop(),
-                Message::RegisterQuorum { requester, .. } => requester.clone(),
+            Message::RegisterQuorum { requester, .. } => requester.clone(),
         }
     }
 
@@ -449,7 +455,7 @@ impl Message {
             // sign({hash: 'SHA-256'}, key, SHA256(message)) hashes the hash again.
             // We replicate this by pre-hashing, then passing the hash to p256's
             // verify() which hashes it internally — producing SHA256(SHA256(message)).
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let hash = Sha256::digest(signed_obj.to_string().as_bytes());
             match verifying_key.verify(&hash, &signature) {
                 Ok(_) => continue,

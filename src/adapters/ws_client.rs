@@ -116,11 +116,7 @@ impl Actor for OutgoingWebsocketManager {
 
                 if let Ok((socket, _)) = result {
                     let (sender, receiver) = socket.split();
-                    let client = WsConn::new(
-                        sender,
-                        receiver,
-                        self.config.allow_public_space,
-                    );
+                    let client = WsConn::new(sender, receiver, self.config.allow_public_space);
                     let addr = ctx.start_actor(Box::new(client));
                     self.clients.write().await.insert(url.clone(), addr);
                     debug!("connected to {}", url);
@@ -150,7 +146,7 @@ impl Actor for OutgoingWebsocketManager {
         // periodically. This keeps `handle` simple and avoids
         // priority inversion under load.
         let snapshot: Vec<Addr> = self.clients.read().await.values().cloned().collect();
-                for client in snapshot {
+        for client in snapshot {
             let _ = client.send(message.clone());
         }
     }

@@ -91,7 +91,12 @@ mod tests {
                 .await
                 .is_none()
         );
-        db.get("Fin").get("golf").get("fin").put(Value::Null).await.unwrap();
+        db.get("Fin")
+            .get("golf")
+            .get("fin")
+            .put(Value::Null)
+            .await
+            .unwrap();
         assert!(
             !db.get("Fin")
                 .get("golf")
@@ -128,8 +133,18 @@ mod tests {
         common::wait_for_connected_count(&ws_client, 1, 5000).await;
         let mut sub1 = peer1.get("beta").get("name").on();
         let mut sub2 = peer2.get("alpha").get("name").on();
-        peer1.get("alpha").get("name").put("Amandil".into()).await.unwrap();
-        peer2.get("beta").get("name").put("Beregond".into()).await.unwrap();
+        peer1
+            .get("alpha")
+            .get("name")
+            .put("Amandil".into())
+            .await
+            .unwrap();
+        peer2
+            .get("beta")
+            .get("name")
+            .put("Beregond".into())
+            .await
+            .unwrap();
 
         // Timeout: WebSocket handshake may race with actor pre_start.
         // If mesh propagation fails, fail fast with clear message rather than hanging.
@@ -253,8 +268,18 @@ mod tests {
         common::wait_for_connected_count(&ws_client2, 1, 5000).await;
         let mut sub1 = peer1.get("beta").get("name").on();
         let mut sub2 = peer2.get("alpha").get("name").on();
-        peer1.get("alpha").get("name").put("Amandil".into()).await.unwrap();
-        peer2.get("beta").get("name").put("Beregond".into()).await.unwrap();
+        peer1
+            .get("alpha")
+            .get("name")
+            .put("Amandil".into())
+            .await
+            .unwrap();
+        peer2
+            .get("beta")
+            .get("name")
+            .put("Beregond".into())
+            .await
+            .unwrap();
         let val = timeout(Duration::from_secs(30), sub1.recv())
             .await
             .expect("timeout waiting for sub1 — mesh propagation from peer2 failed")
@@ -313,7 +338,10 @@ mod tests {
         let mut relay2 = Node::new_with_config(
             config.clone(),
             vec![Box::new(MemoryStorage::new())],
-            vec![Box::new(ws_server2.clone()), Box::new(relay2_client.clone())],
+            vec![
+                Box::new(ws_server2.clone()),
+                Box::new(relay2_client.clone()),
+            ],
         );
 
         let ws_client = OutgoingWebsocketManager::new(
@@ -353,8 +381,18 @@ mod tests {
         // Subscriptions register synchronously in `on()`; no sleep needed.
         // If a put races past subscription registration, the recv()
         // timeout below will catch it with a clear failure message.
-        peer1.get("alpha").get("name").put("Amandil".into()).await.unwrap();
-        peer2.get("beta").get("name").put("Beregond".into()).await.unwrap();
+        peer1
+            .get("alpha")
+            .get("name")
+            .put("Amandil".into())
+            .await
+            .unwrap();
+        peer2
+            .get("beta")
+            .get("name")
+            .put("Beregond".into())
+            .await
+            .unwrap();
         let val = timeout(Duration::from_secs(30), sub1.recv())
             .await
             .expect("timeout waiting for sub1 — mesh propagation from peer2 via relay failed")
@@ -378,7 +416,12 @@ mod tests {
 
         assert!(peer2.get("gamma").get("name").once(None).await.is_none());
         assert!(peer1.get("gamma").get("name").once(None).await.is_none());
-        peer1.get("gamma").get("name").put("once".into()).await.unwrap();
+        peer1
+            .get("gamma")
+            .get("name")
+            .put("once".into())
+            .await
+            .unwrap();
         let Some(Value::Text(str)) = peer2.get("gamma").get("name").once(None).await else {
             panic!("once: Expected Value::Text");
         };
@@ -603,7 +646,10 @@ mod tests {
                 vec![],
             );
 
-            db.get("BarrierKey").put("barrier_value".into()).await.unwrap();
+            db.get("BarrierKey")
+                .put("barrier_value".into())
+                .await
+                .unwrap();
 
             // Flush must block until the Put is committed.
             let result = db.flush_storage(Some(Duration::from_secs(5))).await;
