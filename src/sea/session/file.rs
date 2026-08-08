@@ -148,7 +148,7 @@ impl EncryptedFileSessionStorage {
 
         // 3. Generate new key, save, alert devops
         let mut key = vec![0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
+        rand::rng().fill_bytes(&mut key);
         let b64 = BASE64_STANDARD.encode(&key);
 
         // Ensure parent dir exists
@@ -227,8 +227,8 @@ impl SessionStorage for EncryptedFileSessionStorage {
         let session_file = tokio::task::spawn_blocking(move || {
             let mut nonce = [0u8; 12];
             let mut salt = [0u8; 9];
-            rand::thread_rng().fill_bytes(&mut nonce);
-            rand::thread_rng().fill_bytes(&mut salt);
+            rand::rng().fill_bytes(&mut nonce);
+            rand::rng().fill_bytes(&mut salt);
 
             let cipher = Aes256Gcm::new_from_slice(&key)
                 .map_err(|_| SeaError::SessionStorage("bad cipher key".to_string()))?;

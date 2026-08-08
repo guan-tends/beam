@@ -88,7 +88,7 @@ pub async fn work(data: &[u8], salt: Option<&[u8]>, opts: WorkOptions) -> Result
     } else {
         // Generate random 9-byte salt (matching Gun.js)
         let mut salt_bytes = vec![0u8; 9];
-        rand::thread_rng().fill_bytes(&mut salt_bytes);
+        rand::rng().fill_bytes(&mut salt_bytes);
         salt_bytes
     };
 

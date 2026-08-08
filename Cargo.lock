@@ -260,7 +260,7 @@ dependencies = [
  "parking_lot",
  "pbkdf2",
  "persy",
- "rand 0.8.7",
+ "rand 0.9.5",
  "redb",
  "serde",
  "serde_json",
