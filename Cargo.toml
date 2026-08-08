@@ -59,7 +59,7 @@ webrtc = ["dep:str0m", "dep:stun"]
 persy = ["dep:persy"]
 
 [dev-dependencies]
-criterion = { version = "0.3", features=["async_futures", "async_tokio", "html_reports"] }
+criterion = { version = "0.8", features=["async_futures", "async_tokio", "html_reports"] }
 
 [[bench]]
 name = "my_benchmark"
