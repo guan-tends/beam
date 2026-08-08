@@ -164,4 +164,11 @@ impl Actor for Multicast {
             }
         });
     }
+
+    async fn stopping(&mut self, _ctx: &ActorContext) {
+        // The blocking child task checks is_stopped and will break on the
+        // next iteration. The multicast socket is dropped when the task
+        // completes. No additional cleanup needed.
+        info!("Multicast stopping");
+    }
 }

@@ -45,7 +45,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use log::{debug, error};
+use log::{debug, error, info};
 use persy::{Persy, PersyId};
 use serde::{Deserialize, Serialize};
 
@@ -399,9 +399,15 @@ impl Actor for PersyStorage {
         // subsequent runs open the existing DB. No additional warmup needed.
     }
 
-    #[allow(unused_variables)]
     async fn stopping(&mut self, _ctx: &ActorContext) {
-        debug!("PersyStorage stopping at {}", self.path);
+        // persy commits on prepare (fsync), so all acknowledged writes
+        // are already durable. The flush_storage() call in Node::shutdown()
+        // ensures the mailbox has drained before we reach this point.
+        // Here we log final state for observability.
+        info!(
+            "PersyStorage stopping at {} — all writes committed",
+            self.path
+        );
     }
 
     async fn handle(&mut self, message: Message, ctx: &ActorContext) {
