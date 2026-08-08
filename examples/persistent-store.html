@@ -35,7 +35,7 @@
     import init, { Beam } from "./pkg/beam.js";
     await init();
 
-    const beam = new Beam();
+    const beam = Beam.new_persistent();
     beam.connect("ws://localhost:4944");
 
     document.getElementById("set").onclick = () => {
