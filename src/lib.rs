@@ -5,7 +5,10 @@ mod dup;
 #[doc(hidden)]
 pub mod message; // pub for benchmarking
 pub mod metrics;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod migration;
+
 mod node;
 mod router;
 #[cfg(feature = "webrtc")]
@@ -21,6 +24,7 @@ pub use types::Value;
 // compiled and run when `cargo test --doc` (or `cargo test`) is executed.
 // The struct only exists during doctest collection, so it's invisible in
 // the public API and has zero runtime cost.
+#[cfg(not(target_arch = "wasm32"))]
 #[doc = include_str!("../README.md")]
 #[cfg(doctest)]
 pub struct ReadmeDoctests;
