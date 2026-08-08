@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [Unreleased — WASM Support]
+
+### Added
+- WASM target support (`wasm32-unknown-unknown`) — BEAM compiles to WebAssembly
+- Browser WebSocket adapter (`wasm_ws.rs`) using `web-sys::WebSocket`
+- IndexedDB persistent storage adapter (`wasm_idb.rs`) with write-through cache
+- JavaScript bindings (`wasm.rs`) via `wasm-bindgen`:
+  - `Beam` struct with `new()`, `connect()`, `put()`, `put_num()`, `put_bool()`, `put_null()`, `stop()`
+  - TypeScript definitions auto-generated
+- `wasm-pack build --target web --release` produces a 419KB deployable package
+- Cargo.toml target-gated: native-only deps (redb, Persy, tokio-tungstenite, multicast) excluded on WASM
+- `connect_peer_wasm()` method on `Node` (cfg-gated to `wasm32`)
+- Full SEA crypto stack (P-256, AES-256-GCM, SHA-256, PBKDF2) compiles to WASM with zero source changes
+
+### Changed
+- `Cargo.toml`: split into `[dependencies]`, `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`, and `[target.wasm32-unknown-unknown.dependencies]`
+- 12 source files cfg-gated to separate native-only from WASM-compatible code
+- `web-sys` features: WebSocket, MessageEvent, ErrorEvent, CloseEvent, Window, IdbFactory, IdbDatabase, IdbObjectStore, IdbTransaction, IdbTransactionMode, IdbRequest, IdbOpenDbRequest, IdbVersionChangeEvent, Event, EventTarget
+
+### Key Findings
+- Core graph engine, router, and crypto stack are WASM-pure (zero changes needed)
+- `tokio::spawn` works on WASM via `rt` feature — no `spawn_task()` abstraction needed
+- JS `Closure` types are `!Send` — solved by leaking closures to the JS heap (same pattern as `WasmWsConn`)
+- `wasm-opt` disabled due to bulk memory validation bug in old binary
+
+
 ## [0.9.1] — 2026-08-08 — Multicast Message Chunking
 
 Application-layer chunking for the UDP multicast adapter. Messages exceeding
