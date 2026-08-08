@@ -227,3 +227,80 @@ async fn two_clients_cross_talk() {
         received
     );
 }
+
+// ─── T6b: Bidirectional cross-talk ───
+//
+// Both clients send AND receive. This is what the browser chat example needs.
+
+#[wasm_bindgen_test(async)]
+async fn bidirectional_cross_talk() {
+    use crate::wasm::Beam;
+
+    let _relay = Relay::start(4980).await;
+
+    let mut client1 = Beam::new();
+    client1.connect("ws://127.0.0.1:4980");
+
+    let mut client2 = Beam::new();
+    client2.connect("ws://127.0.0.1:4980");
+
+    sleep(1000).await;
+
+    // Separate receive buffers per client.
+    js_sys::eval(
+        r#"
+        globalThis.__c1_received = [];
+        globalThis.__c2_received = [];
+        globalThis.__c1_cb = v => globalThis.__c1_received.push(v);
+        globalThis.__c2_cb = v => globalThis.__c2_received.push(v);
+        "#,
+    )
+    .unwrap();
+
+    let c1_cb = js_sys::eval("globalThis.__c1_cb")
+        .unwrap()
+        .dyn_into::<js_sys::Function>()
+        .unwrap();
+    let c2_cb = js_sys::eval("globalThis.__c2_cb")
+        .unwrap()
+        .dyn_into::<js_sys::Function>()
+        .unwrap();
+
+    client1.on("chat", c1_cb);
+    client2.on("chat", c2_cb);
+    sleep(200).await;
+
+    // Direction 1: client1 → client2
+    client1.put("chat.001", "from_client_1");
+    sleep(500).await;
+
+    // Direction 2: client2 → client1
+    client2.put("chat.002", "from_client_2");
+    sleep(500).await;
+
+    client1.stop();
+    client2.stop();
+
+    let c1 = js_sys::eval("JSON.stringify(globalThis.__c1_received)")
+        .unwrap()
+        .as_string()
+        .unwrap_or_default();
+    let c2 = js_sys::eval("JSON.stringify(globalThis.__c2_received)")
+        .unwrap()
+        .as_string()
+        .unwrap_or_default();
+
+    // client2 should have received "from_client_1"
+    assert!(
+        c2.contains("from_client_1"),
+        "client2 should have received 'from_client_1' but got: {}",
+        c2
+    );
+
+    // client1 should have received "from_client_2"
+    assert!(
+        c1.contains("from_client_2"),
+        "client1 should have received 'from_client_2' but got: {}",
+        c1
+    );
+}
