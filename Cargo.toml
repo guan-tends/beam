@@ -96,6 +96,19 @@ features = [
     "MessageEvent",
     "ErrorEvent",
     "CloseEvent",
+    "Window",
+    "IdbFactory",
+    "Event",
+    "EventTarget",
+    "IdbDatabase",
+    "IdbObjectStore",
+    "IdbTransaction",
+    "IdbRequest",
+    "IdbObjectStoreParameters",
+    "IdbTransactionMode",
+    "IdbVersionChangeEvent",
+    "IdbOpenDbRequest",
+    "DomStringList",
 ]
 
 [target.wasm32-unknown-unknown.dependencies.wasm-bindgen]
