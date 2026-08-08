@@ -9,7 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [Unreleased — WASM Support]
+## [Unreleased]
+
+## [0.9.2] — 2026-08-08 — WASM Browser Support + Automated Test Suite
+
+BEAM compiles to WebAssembly and runs in the browser. Browser nodes connect
+to relay servers via WebSocket and participate in the P2P graph as full
+clients — put, get, and real-time subscriptions all work cross-window.
+
+### Added
+
+- WASM target support (wasm32-unknown-unknown) — BEAM compiles to WebAssembly
+- Browser WebSocket adapter using web-sys::WebSocket with outbox buffering
+- IndexedDB persistent storage adapter with write-through cache
+- JavaScript bindings via wasm-bindgen:
+  - Beam struct: new(), new_persistent(), connect(), put(), put_num(), put_bool(), put_null(), get(), on(), stop()
+  - put() — fire-and-forget write via spawn_local
+  - get() — returns a JS Promise via future_to_promise
+  - on(path, callback) — real-time subscription with Gun.js .on() semantics
+  - TypeScript definitions auto-generated
+- Automated WASM test suite (6 tests via wasm-bindgen-test-runner in Node.js):
+  - smoke_test, local_put_get_roundtrip, relay_connect, relay_put_echo
+  - two_clients_cross_talk (unidirectional)
+  - bidirectional_cross_talk (both directions verified)
+- Browser chat example (examples/browser-chat.html)
+- wasm-pack build --target web --release produces a deployable package
+- Cargo.toml target-gated: native-only deps excluded on WASM
+- tokio_time shim module (tokio::time on native, tokio_with_wasm on WASM)
+- Full SEA crypto stack compiles to WASM with zero source changes
+
+### Changed
+
+- Cargo.toml split into platform-specific dependency sections
+- 12 source files cfg-gated to separate native-only from WASM-compatible code
+- std::time replaced with web-time across all shared source files
+- Tokio time feature excluded on WASM (provided by tokio_with_wasm)
+- Quorum reaper task cfg-gated to native only (browser nodes are leaf clients)
+
+### WASM Runtime Gotchas Resolved
+
+1. Panic hook — console_error_panic_hook for readable WASM panics
+2. Tokio runtime context — OnceLock<Runtime> + enter() guard
+3. std::time and tokio time — web-time crate + tokio_with_wasm
+4. Tokio spawn — tokio_with_wasm shim for browser event loop integration
+5. JS Closure types are !Send — solved by leaking to JS heap
+6. on() vs map() semantics — use map() for Gun.js-compatible child subscriptions
+7. Dead spawn scheduler — tokio_spawn shim
+8. Noop addr in known_peers — pre_start lifecycle hook
+9. WebSocket CONNECTING state — initial Arc<Mutex> coordination
+10. WebSocket CONNECTING for user Puts — outbox buffer with Addr::noop()
 
 ### Added
 - WASM target support (`wasm32-unknown-unknown`) — BEAM compiles to WebAssembly
