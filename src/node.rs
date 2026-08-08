@@ -51,7 +51,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, oneshot};
 use tokio_tungstenite::connect_async;
-use url::Url;
 
 /// Configuration for a [`Node`] and its associated adapters.
 ///
@@ -462,7 +461,7 @@ impl Node {
             let mut backoff = Duration::from_secs(1);
             let max_backoff = Duration::from_secs(60);
             loop {
-                match connect_async(Url::parse(&url).expect("valid URL")).await {
+                match connect_async(&url).await {
                     Ok((socket, _)) => {
                         let (sender, receiver) = socket.split();
                         let conn =

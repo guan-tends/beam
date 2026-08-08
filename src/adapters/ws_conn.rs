@@ -71,7 +71,7 @@ impl WsConn {
 #[async_trait]
 impl Actor for WsConn {
     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
-        let _ = self.sender.send(WsMessage::Text(msg.to_string())).await;
+        let _ = self.sender.send(WsMessage::Text(msg.to_string().into())).await;
     }
 
     async fn pre_start(&mut self, ctx: &ActorContext) {
@@ -80,7 +80,7 @@ impl Actor for WsConn {
             from: ctx.addr.clone(),
             peer_id: ctx.peer_id.read().clone(),
         };
-        let _ = self.sender.send(WsMessage::Text(hi.to_string())).await;
+        let _ = self.sender.send(WsMessage::Text(hi.to_string().into())).await;
         let receiver = self.receiver.take().unwrap();
         let mut ctx2 = ctx.clone();
         let allow_public_space = self.allow_public_space;

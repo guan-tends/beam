@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_tungstenite::connect_async;
-use url::Url;
 
 use crate::Config;
 use crate::actor::{Actor, ActorContext, Addr};
@@ -113,10 +112,7 @@ impl Actor for OutgoingWebsocketManager {
                 }
 
                 debug!("attempting WebSocket connect to {}", url);
-                let result = connect_async(
-                    Url::parse(url).expect("invalid WebSocket URL"),
-                )
-                .await;
+                let result = connect_async(url).await;
 
                 if let Ok((socket, _)) = result {
                     let (sender, receiver) = socket.split();
