@@ -111,6 +111,12 @@ impl Default for Config {
 /// in its `handle()` method. Reads are served via `broadcast` channels —
 /// `on()` returns a `Receiver<Value>` and `map()` returns a
 /// `Receiver<(String, Value)>`.
+/// Type alias for the pending put acknowledgment sender.
+///
+/// Each entry is a oneshot sender that resolves when storage adapters
+/// acknowledge a put operation. The key is the put's `id`.
+type PendingPuts = Arc<RwLock<HashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>>;
+
 #[derive(Clone)]
 pub struct Node {
     uid: Arc<RwLock<String>>,
@@ -134,7 +140,7 @@ pub struct Node {
     ///
     /// The sender's payload carries `Result<(), String>` so commit failures
     /// propagate to the caller instead of being silently swallowed.
-    pending_puts: Arc<RwLock<HashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>>,
+    pending_puts: PendingPuts,
     allow_public_space: bool,
     ice_servers: Vec<String>,
     /// Shared lock-free observability counters.
@@ -623,6 +629,7 @@ impl Node {
     /// # Arguments
     ///
     /// * `value` - The value to set (see [`Value`] for supported types)
+    ///
     /// Writes a value and waits for it to be replicated to N peers per
     /// the given [`AckPolicy`].
     ///
@@ -731,7 +738,6 @@ impl Node {
     }
 
     pub async fn put(&mut self, value: Value) -> Result<(), String> {
-        let timeout = None; // Public API stays simple; can add timeout arg later.
         let updated_at: f64 = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -778,7 +784,7 @@ impl Node {
             return Err("failed to send put to router".to_string());
         }
 
-        let dur = timeout.unwrap_or(Duration::from_secs(30));
+        let dur = Duration::from_secs(30); // TODO: accept timeout as parameter when API stabilizes
         match tokio::time::timeout(dur, rx).await {
             Ok(Ok(_status)) => Ok(()), // discard ReplicationStatus for local put
             Ok(Err(_)) => Err("put ack channel closed".to_string()),
@@ -816,7 +822,6 @@ impl Node {
     ///
     /// * `ops` - Vector of `(path, value)` pairs
     pub async fn batch_put(&mut self, ops: Vec<(Vec<String>, Value)>) -> Result<(), String> {
-        let timeout = None;
         let updated_at: f64 = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -861,7 +866,7 @@ impl Node {
             return Err("failed to send batch_put to router".to_string());
         }
 
-        let dur = timeout.unwrap_or(Duration::from_secs(30));
+        let dur = Duration::from_secs(30); // TODO: accept timeout as parameter when API stabilizes
         match tokio::time::timeout(dur, rx).await {
             Ok(Ok(_status)) => Ok(()), // discard ReplicationStatus for batch_put
             Ok(Err(_)) => Err("batch_put ack channel closed".to_string()),

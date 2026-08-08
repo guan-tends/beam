@@ -12,7 +12,7 @@
 //! One segment, `beam_nodes_v1`. Each record encodes a `NodeRecord`:
 //!
 //! ```text
-//! bincode(NodeRecord { node_id: String, children: Children })
+//! postcard(NodeRecord { node_id: String, children: Children })
 //! ```
 //!
 //! where `Children = BTreeMap<String, NodeData>`.
@@ -181,7 +181,7 @@ impl PersyStorage {
 
         let mut reply_children = BTreeMap::new();
         for (_id, bytes) in scan_iter {
-            let record: NodeRecord = match bincode::deserialize(&bytes) {
+            let record: NodeRecord = match postcard::from_bytes(&bytes) {
                 Ok(r) => r,
                 Err(e) => {
                     error!("persy get: deserialize failed: {:?}", e);
@@ -251,7 +251,7 @@ impl PersyStorage {
             // convention for surfacing low-level driver errors).
             let scan_iter = tx.scan(&segment_id).map_err(|e| format!("scan: {:?}", e))?;
             for (id, bytes) in scan_iter {
-                let record: NodeRecord = match bincode::deserialize(&bytes) {
+                let record: NodeRecord = match postcard::from_bytes(&bytes) {
                     Ok(r) => r,
                     Err(e) => {
                         error!("persy put: deserialize failed: {:?}", e);
@@ -294,8 +294,8 @@ impl PersyStorage {
                     node_id: node_id.clone(),
                     children: existing_children,
                 };
-                let bytes = bincode::serialize(&record)
-                    .map_err(|e| format!("bincode serialize: {:?}", e))?;
+                let bytes = postcard::to_allocvec(&record)
+                    .map_err(|e| format!("postcard serialize: {:?}", e))?;
                 tx.insert(&segment_id, &bytes)
                     .map_err(|e| format!("insert: {:?}", e))?;
             }
@@ -556,7 +556,7 @@ mod tests {
         let scan_iter = storage.db.scan(&segment_id).unwrap();
         let mut found = false;
         for (_id, bytes) in scan_iter {
-            let record: NodeRecord = bincode::deserialize(&bytes).unwrap();
+            let record: NodeRecord = postcard::from_bytes(&bytes).unwrap();
             if record.node_id == "a" {
                 found = true;
                 assert_eq!(record.children.len(), 1);
@@ -612,7 +612,7 @@ mod tests {
         let mut record_count = 0;
         let mut found_value = None;
         for (_id, bytes) in scan_iter {
-            let record: NodeRecord = bincode::deserialize(&bytes).unwrap();
+            let record: NodeRecord = postcard::from_bytes(&bytes).unwrap();
             if record.node_id == "n1" {
                 record_count += 1;
                 let child = record.children.get("x").unwrap();
