@@ -80,11 +80,7 @@ async fn wait_for_port(port: u16, timeout_ms: u64) {
 /// finishes the WS upgrade and calls `clients.write().await.insert(addr)`.
 /// That happens AFTER the TCP listener accepts AND the WS handshake
 /// completes — the same condition the broadcast needs to succeed.
-async fn wait_for_peer_count(
-    ws_server: &WsServer,
-    expected_peers: usize,
-    timeout_ms: u64,
-) {
+async fn wait_for_peer_count(ws_server: &WsServer, expected_peers: usize, timeout_ms: u64) {
     let start = Instant::now();
     let limit = Duration::from_millis(timeout_ms);
     while start.elapsed() < limit {
@@ -159,7 +155,10 @@ async fn e2e_cross_backend_three_node_mesh_convergence() {
     let storage1 = RedbStorage::new_with_config(Config::default(), &redb_path_a, None);
     let ws_server1 = WsServer::new_with_config(
         config1.clone(),
-        WsServerConfig { port, ..WsServerConfig::default() },
+        WsServerConfig {
+            port,
+            ..WsServerConfig::default()
+        },
     );
     let mut peer1 = Node::new_with_config(
         config1.clone(),
@@ -243,7 +242,10 @@ async fn e2e_cross_backend_persy_initiator_convergence() {
     // peer1 = redb, host
     let ws_server1 = WsServer::new_with_config(
         Config::default(),
-        WsServerConfig { port, ..WsServerConfig::default() },
+        WsServerConfig {
+            port,
+            ..WsServerConfig::default()
+        },
     );
     let storage1 = RedbStorage::new_with_config(Config::default(), &redb_path_a, None);
     let mut peer1 = Node::new_with_config(

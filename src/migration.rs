@@ -159,10 +159,7 @@ pub enum MigrateError {
     TargetExists(PathBuf),
 
     #[error("unsupported migration: {from} -> {to} (use --from and --to with different backends)")]
-    Unsupported {
-        from: Backend,
-        to: Backend,
-    },
+    Unsupported { from: Backend, to: Backend },
 
     #[error("invalid backend string: {0} (expected 'redb' or 'persy')")]
     InvalidBackend(String),
@@ -247,10 +244,7 @@ pub(crate) mod io {
             });
         }
 
-        if !opts.dry_run
-            && opts.target_path.exists()
-            && !opts.force
-        {
+        if !opts.dry_run && opts.target_path.exists() && !opts.force {
             return Err(MigrateError::TargetExists(opts.target_path.clone()));
         }
 
@@ -276,9 +270,7 @@ pub(crate) mod io {
         })
     }
 
-    fn migrate_redb_to_persy(
-        opts: &MigrateOpts,
-    ) -> Result<(usize, usize), MigrateError> {
+    fn migrate_redb_to_persy(opts: &MigrateOpts) -> Result<(usize, usize), MigrateError> {
         // ─── Read source records into memory ──────────────────────────────
         //
         // Source is redb, opened read-only. We materialize all records as
@@ -286,17 +278,13 @@ pub(crate) mod io {
         // before opening the target. This keeps the migration flow linear
         // and avoids holding a redb read transaction open across a long
         // Persy write transaction.
-        let src_db = Database::open(&opts.source_path).map_err(|source| {
-            MigrateError::Redb {
-                path: opts.source_path.clone(),
-                source: source.into(),
-            }
+        let src_db = Database::open(&opts.source_path).map_err(|source| MigrateError::Redb {
+            path: opts.source_path.clone(),
+            source: source.into(),
         })?;
-        let src_tx = src_db.begin_read().map_err(|source| {
-            MigrateError::RedbTx {
-                path: opts.source_path.clone(),
-                source,
-            }
+        let src_tx = src_db.begin_read().map_err(|source| MigrateError::RedbTx {
+            path: opts.source_path.clone(),
+            source,
         })?;
         // An empty source DB (or one without the beam_nodes_v1 table) is a
         // valid input — treat it as zero records rather than an error.
@@ -383,31 +371,53 @@ pub(crate) mod io {
                 Ok(())
             },
         )
-        .map_err(|source| MigrateError::Persy(format!("{}: {}\nhelp: ensure the target directory is writable", opts.target_path.display(), source)))?;
+        .map_err(|source| {
+            MigrateError::Persy(format!(
+                "{}: {}\nhelp: ensure the target directory is writable",
+                opts.target_path.display(),
+                source
+            ))
+        })?;
 
-        let target_seg = target_db
-            .solve_segment_id(PERSY_BEAM_NODES)
-            .map_err(|e| MigrateError::Persy(format!("{}: solve_segment_id: {}", opts.target_path.display(), e)))?;
+        let target_seg = target_db.solve_segment_id(PERSY_BEAM_NODES).map_err(|e| {
+            MigrateError::Persy(format!(
+                "{}: solve_segment_id: {}",
+                opts.target_path.display(),
+                e
+            ))
+        })?;
 
         let mut tx = target_db.begin().map_err(|source| {
             MigrateError::Persy(format!("{}: begin: {}", opts.target_path.display(), source))
         })?;
 
         for payload in &payloads {
-            tx.insert(target_seg, payload.as_slice()).map_err(|source| {
+            tx.insert(target_seg, payload.as_slice())
+                .map_err(|source| {
+                    MigrateError::Persy(format!(
+                        "{}: insert: {}",
+                        opts.target_path.display(),
+                        source
+                    ))
+                })?;
+        }
+
+        tx.prepare()
+            .map_err(|source| {
                 MigrateError::Persy(format!(
-                    "{}: insert: {}",
+                    "{}: prepare: {}",
+                    opts.target_path.display(),
+                    source
+                ))
+            })?
+            .commit()
+            .map_err(|source| {
+                MigrateError::Persy(format!(
+                    "{}: commit: {}",
                     opts.target_path.display(),
                     source
                 ))
             })?;
-        }
-        
-
-        tx.prepare()
-            .map_err(|source| MigrateError::Persy(format!("{}: prepare: {}", opts.target_path.display(), source)))?
-            .commit()
-            .map_err(|source| MigrateError::Persy(format!("{}: commit: {}", opts.target_path.display(), source)))?;
 
         // Explicit drop ensures all work completes before the caller
         // (e.g., an e2e test) opens the file for verification.
@@ -416,36 +426,52 @@ pub(crate) mod io {
         Ok((source_count, payloads.len()))
     }
 
-    fn migrate_persy_to_redb(
-        opts: &MigrateOpts,
-    ) -> Result<(usize, usize), MigrateError> {
-        let src_db = persy::Persy::open(opts.source_path.to_string_lossy().as_ref(), persy::Config::new()).map_err(
-            |source| MigrateError::Persy(format!("{}: {}", opts.source_path.clone().display(), source)),
-        )?;
+    fn migrate_persy_to_redb(opts: &MigrateOpts) -> Result<(usize, usize), MigrateError> {
+        let src_db = persy::Persy::open(
+            opts.source_path.to_string_lossy().as_ref(),
+            persy::Config::new(),
+        )
+        .map_err(|source| {
+            MigrateError::Persy(format!(
+                "{}: {}",
+                opts.source_path.clone().display(),
+                source
+            ))
+        })?;
         let src_seg = src_db.solve_segment_id(PERSY_BEAM_NODES).map_err(|e| {
-            MigrateError::Persy(format!("{}: solve_segment_id failed: {}", opts.source_path.display(), e))
+            MigrateError::Persy(format!(
+                "{}: solve_segment_id failed: {}",
+                opts.source_path.display(),
+                e
+            ))
         })?;
 
-        let target_db = Database::create(&opts.target_path).map_err(|source| {
-            MigrateError::Redb {
+        let target_db =
+            Database::create(&opts.target_path).map_err(|source| MigrateError::Redb {
                 path: opts.target_path.clone(),
                 source: source.into(),
-            }
-        })?;
-        let mut target_tx = target_db.begin_write().map_err(|source| {
-            MigrateError::RedbTx {
+            })?;
+        let mut target_tx = target_db
+            .begin_write()
+            .map_err(|source| MigrateError::RedbTx {
                 path: opts.target_path.clone(),
                 source,
-            }
-        })?;
-        let mut target_table = target_tx.open_table(REDB_BEAM_NODES).map_err(|source| {
-            MigrateError::RedbTable {
-                path: opts.target_path.clone(),
-                source,
-            }
-        })?;
+            })?;
+        let mut target_table =
+            target_tx
+                .open_table(REDB_BEAM_NODES)
+                .map_err(|source| MigrateError::RedbTable {
+                    path: opts.target_path.clone(),
+                    source,
+                })?;
 
-        let scan = src_db.scan(&src_seg).map_err(|source| MigrateError::Persy(format!("{}: {}", opts.source_path.clone().display(), source)))?;
+        let scan = src_db.scan(&src_seg).map_err(|source| {
+            MigrateError::Persy(format!(
+                "{}: {}",
+                opts.source_path.clone().display(),
+                source
+            ))
+        })?;
 
         let mut source_count = 0;
         let mut migrated = 0;
@@ -485,10 +511,12 @@ pub(crate) mod io {
         }
 
         drop(target_table);
-        target_tx.commit().map_err(|source| MigrateError::RedbCommit {
-            path: opts.target_path.clone(),
-            source,
-        })?;
+        target_tx
+            .commit()
+            .map_err(|source| MigrateError::RedbCommit {
+                path: opts.target_path.clone(),
+                source,
+            })?;
 
         // When dry_run, migrated stays 0; source_count still reflects records read.
         Ok((source_count, migrated))
@@ -504,8 +532,8 @@ pub use io::migrate;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::types::{NodeData, Value};
+    use std::collections::BTreeMap;
 
     /// Helper: build a representative `Children` map using the real BEAM value types.
     fn make_test_children() -> Children {
@@ -589,11 +617,41 @@ mod tests {
     fn all_value_variants_preserved() {
         // Build children using every Value variant to confirm roundtrip fidelity.
         let mut children = BTreeMap::new();
-        children.insert("null".to_string(), NodeData { value: Value::Null, updated_at: 1.0 });
-        children.insert("bit".to_string(), NodeData { value: Value::Bit(false), updated_at: 2.0 });
-        children.insert("num".to_string(), NodeData { value: Value::Number(-3.14), updated_at: 3.0 });
-        children.insert("text".to_string(), NodeData { value: Value::Text("unicode: ☃ snowman".to_string()), updated_at: 4.0 });
-        children.insert("link".to_string(), NodeData { value: Value::Link("node/abc".to_string()), updated_at: 5.0 });
+        children.insert(
+            "null".to_string(),
+            NodeData {
+                value: Value::Null,
+                updated_at: 1.0,
+            },
+        );
+        children.insert(
+            "bit".to_string(),
+            NodeData {
+                value: Value::Bit(false),
+                updated_at: 2.0,
+            },
+        );
+        children.insert(
+            "num".to_string(),
+            NodeData {
+                value: Value::Number(-3.14),
+                updated_at: 3.0,
+            },
+        );
+        children.insert(
+            "text".to_string(),
+            NodeData {
+                value: Value::Text("unicode: ☃ snowman".to_string()),
+                updated_at: 4.0,
+            },
+        );
+        children.insert(
+            "link".to_string(),
+            NodeData {
+                value: Value::Link("node/abc".to_string()),
+                updated_at: 5.0,
+            },
+        );
 
         let bytes = bincode::serialize(&children).unwrap();
         let translated = redb_to_persy_payload("root", &bytes).unwrap();
@@ -611,13 +669,19 @@ mod tests {
     #[test]
     fn backend_parse_accepts_lowercase() {
         assert_eq!(MigrateError::parse_backend("redb").unwrap(), Backend::Redb);
-        assert_eq!(MigrateError::parse_backend("persy").unwrap(), Backend::Persy);
+        assert_eq!(
+            MigrateError::parse_backend("persy").unwrap(),
+            Backend::Persy
+        );
     }
 
     #[test]
     fn backend_parse_accepts_mixed_case() {
         assert_eq!(MigrateError::parse_backend("Redb").unwrap(), Backend::Redb);
-        assert_eq!(MigrateError::parse_backend("PERSY").unwrap(), Backend::Persy);
+        assert_eq!(
+            MigrateError::parse_backend("PERSY").unwrap(),
+            Backend::Persy
+        );
     }
 
     #[test]
@@ -639,9 +703,27 @@ mod tests {
         // BTreeMap sorts by key, so insertion order doesn't matter —
         // but verify the roundtrip doesn't somehow scramble the key set.
         let mut children = BTreeMap::new();
-        children.insert("z".to_string(), NodeData { value: Value::Text("last".to_string()), updated_at: 1.0 });
-        children.insert("a".to_string(), NodeData { value: Value::Text("first".to_string()), updated_at: 2.0 });
-        children.insert("m".to_string(), NodeData { value: Value::Text("middle".to_string()), updated_at: 3.0 });
+        children.insert(
+            "z".to_string(),
+            NodeData {
+                value: Value::Text("last".to_string()),
+                updated_at: 1.0,
+            },
+        );
+        children.insert(
+            "a".to_string(),
+            NodeData {
+                value: Value::Text("first".to_string()),
+                updated_at: 2.0,
+            },
+        );
+        children.insert(
+            "m".to_string(),
+            NodeData {
+                value: Value::Text("middle".to_string()),
+                updated_at: 3.0,
+            },
+        );
 
         let bytes = bincode::serialize(&children).unwrap();
         let translated = redb_to_persy_payload("k", &bytes).unwrap();
@@ -650,5 +732,4 @@ mod tests {
         let keys: Vec<&String> = record.children.keys().collect();
         assert_eq!(keys, vec!["a", "m", "z"]); // BTreeMap ordering
     }
-
 }

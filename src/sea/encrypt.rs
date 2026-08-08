@@ -9,10 +9,10 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
 };
+use base64::prelude::*;
 use rand::RngCore;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use base64::prelude::*;
 
 /// Encrypt data using AES-256-GCM
 ///
@@ -35,8 +35,8 @@ pub async fn encrypt(
     // Generate random salt (9 bytes matching Gun.js) and nonce (12 bytes for AES-GCM)
     let mut salt_bytes = [0u8; 9];
     let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut salt_bytes);
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut salt_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
 
     // Clone data needed inside blocking closure
     let pair = pair.clone();
@@ -127,7 +127,7 @@ pub async fn encrypt_symmetric(data: &Value, key: &[u8]) -> Result<Value, SeaErr
 
     // Generate random nonce (12 bytes for AES-GCM)
     let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
 
     let key_owned = key.to_vec();
     let nonce_owned = nonce_bytes.to_vec();

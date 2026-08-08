@@ -94,11 +94,7 @@ pub async fn wait_for_port(port: u16, timeout_ms: u64) {
 ///
 /// # Panics
 /// If the expected peer count is not reached within `timeout_ms` ms.
-pub async fn wait_for_peer_count(
-    ws_server: &WsServer,
-    expected_peers: usize,
-    timeout_ms: u64,
-) {
+pub async fn wait_for_peer_count(ws_server: &WsServer, expected_peers: usize, timeout_ms: u64) {
     let start = Instant::now();
     let limit = Duration::from_millis(timeout_ms);
     while start.elapsed() < limit {

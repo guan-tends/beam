@@ -1,11 +1,11 @@
 pub mod ack;
 pub mod actor;
 pub mod adapters;
-pub mod migration;
 mod dup;
 #[doc(hidden)]
 pub mod message; // pub for benchmarking
 pub mod metrics;
+pub mod migration;
 mod node;
 mod router;
 #[cfg(feature = "webrtc")]

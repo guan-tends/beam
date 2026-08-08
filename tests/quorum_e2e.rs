@@ -67,8 +67,7 @@ use std::time::Duration;
 /// wraps the result in the quorum-shaped `ReplicationStatus`.
 #[tokio::test]
 async fn e2e_put_quorum_succeeds_with_local_ack() {
-    let storage: Vec<Box<dyn Actor>> =
-        vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
+    let storage: Vec<Box<dyn Actor>> = vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
     let mut node = Node::new_with_config(Default::default(), storage, vec![]);
 
     let result: Result<ReplicationStatus, String> = node
@@ -76,8 +75,7 @@ async fn e2e_put_quorum_succeeds_with_local_ack() {
         .put_quorum("e2e_quorum_local_value".into(), AckPolicy::any())
         .await;
 
-    let status =
-        result.expect("single-node local put_quorum with Any should succeed");
+    let status = result.expect("single-node local put_quorum with Any should succeed");
     assert_eq!(status.acked_by, 1, "local ack counts as 1 peer");
     assert!(
         status.quorum_met,
@@ -118,8 +116,7 @@ async fn e2e_put_quorum_succeeds_with_local_ack() {
 /// ack needed and the drain completes instantly.
 #[tokio::test]
 async fn e2e_put_quorum_majority_policy_completes_single_node() {
-    let storage: Vec<Box<dyn Actor>> =
-        vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
+    let storage: Vec<Box<dyn Actor>> = vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
     let mut node = Node::new_with_config(Default::default(), storage, vec![]);
 
     // Majority of 5 = 3; single node can only provide 1 ack.
@@ -134,9 +131,8 @@ async fn e2e_put_quorum_majority_policy_completes_single_node() {
         .await;
     let elapsed = start.elapsed();
 
-    let status = result.expect(
-        "single-node put_quorum with Majority policy completes via local ack",
-    );
+    let status =
+        result.expect("single-node put_quorum with Majority policy completes via local ack");
     assert_eq!(status.acked_by, 1, "local ack counts as 1 peer");
     assert!(
         status.quorum_met,
@@ -172,8 +168,7 @@ async fn e2e_put_quorum_majority_policy_completes_single_node() {
 /// resolve.
 #[tokio::test]
 async fn e2e_put_quorum_all_policy_completes_single_node() {
-    let storage: Vec<Box<dyn Actor>> =
-        vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
+    let storage: Vec<Box<dyn Actor>> = vec![Box::new(MemoryStorage::new()) as Box<dyn Actor>];
     let mut node = Node::new_with_config(Default::default(), storage, vec![]);
 
     let policy = AckPolicy::all();
@@ -185,9 +180,7 @@ async fn e2e_put_quorum_all_policy_completes_single_node() {
         .await;
     let elapsed = start.elapsed();
 
-    let status = result.expect(
-        "single-node put_quorum with All policy completes via local ack",
-    );
+    let status = result.expect("single-node put_quorum with All policy completes via local ack");
     assert_eq!(status.acked_by, 1, "local ack counts as 1 peer");
     assert!(
         status.quorum_met,

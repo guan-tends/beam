@@ -25,11 +25,11 @@
 //! ```
 
 use super::{SeaError, WorkOptions};
+use base64::prelude::*;
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use base64::prelude::*;
 
 /// Compute proof-of-work or content hash.
 ///
@@ -88,7 +88,7 @@ pub async fn work(data: &[u8], salt: Option<&[u8]>, opts: WorkOptions) -> Result
     } else {
         // Generate random 9-byte salt (matching Gun.js)
         let mut salt_bytes = vec![0u8; 9];
-        rand::thread_rng().fill_bytes(&mut salt_bytes);
+        rand::rng().fill_bytes(&mut salt_bytes);
         salt_bytes
     };
 

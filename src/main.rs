@@ -39,12 +39,12 @@
 //! | `--allow-public-space` | `ALLOW_PUBLIC_SPACE` | true |
 
 extern crate clap;
-use clap::{App, Arg, SubCommand};
 use beam::actor::Actor;
 use beam::adapters::{
     MemoryStorage, Multicast, OutgoingWebsocketManager, RedbStorage, WsServer, WsServerConfig,
 };
 use beam::{Config, Node};
+use clap::{App, Arg, SubCommand};
 
 #[tokio::main]
 async fn main() {
@@ -151,7 +151,7 @@ async fn main() {
                         .help("Allow writes that are not content hash addressed or user-signed")
                         .default_value("true")
                         .takes_value(true),
-                )
+                ),
         )
         .subcommand(
             SubCommand::with_name("migrate")
@@ -211,7 +211,7 @@ async fn main() {
     #[cfg(feature = "persy")]
     {
         if let Some(migrate_matches) = matches.subcommand_matches("migrate") {
-            use beam::migration::{migrate, Backend, MigrateOpts};
+            use beam::migration::{Backend, MigrateOpts, migrate};
             use std::path::PathBuf;
 
             // Parse backend selector
@@ -219,7 +219,10 @@ async fn main() {
                 match s {
                     "redb" => Ok(Backend::Redb),
                     "persy" => Ok(Backend::Persy),
-                    _ => Err(format!("Unknown backend '{}': expected 'redb' or 'persy'", s)),
+                    _ => Err(format!(
+                        "Unknown backend '{}': expected 'redb' or 'persy'",
+                        s
+                    )),
                 }
             };
 
@@ -228,10 +231,9 @@ async fn main() {
             let source_path = PathBuf::from(migrate_matches.value_of("source").unwrap());
             let target_path = PathBuf::from(migrate_matches.value_of("target").unwrap());
 
-            let from = parse_backend(from_str)
-                .unwrap_or_else(|e| panic!("Invalid --from value: {}", e));
-            let to = parse_backend(to_str)
-                .unwrap_or_else(|e| panic!("Invalid --to value: {}", e));
+            let from =
+                parse_backend(from_str).unwrap_or_else(|e| panic!("Invalid --from value: {}", e));
+            let to = parse_backend(to_str).unwrap_or_else(|e| panic!("Invalid --to value: {}", e));
 
             let batch_size: usize = migrate_matches
                 .value_of("batch-size")
@@ -261,7 +263,10 @@ async fn main() {
 
             match migrate(&opts) {
                 Ok(report) => {
-                    println!("Migration complete: {} records migrated", report.records_migrated);
+                    println!(
+                        "Migration complete: {} records migrated",
+                        report.records_migrated
+                    );
                     return;
                 }
                 Err(e) => {

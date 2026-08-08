@@ -35,8 +35,8 @@ use beam::adapters::*;
 use beam::{Config, Node, Value};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
-use tokio::time::{sleep, timeout};
 use tokio::net::TcpStream;
+use tokio::time::{sleep, timeout};
 
 // ---------------------------------------------------------------------------
 // Relay lifecycle helpers
@@ -64,7 +64,11 @@ impl GunRelay {
             .spawn()
             .expect("failed to spawn gun_relay.js — is Node.js installed?");
 
-        Self { child, ws_port, api_port }
+        Self {
+            child,
+            ws_port,
+            api_port,
+        }
     }
 
     /// Wait for the HTTP API to become ready.
@@ -120,7 +124,10 @@ async fn reqwest_text(url: &str) -> String {
         .expect("failed to connect to API");
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let request = format!("GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", path, host);
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, host
+    );
     stream.write_all(request.as_bytes()).await.unwrap();
 
     let mut buf = Vec::new();
@@ -149,7 +156,10 @@ async fn reqwest_post(url: &str, body: &str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let request = format!(
         "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        path, host, body.len(), body
+        path,
+        host,
+        body.len(),
+        body
     );
     stream.write_all(request.as_bytes()).await.unwrap();
 
@@ -401,11 +411,7 @@ async fn reconnection_sync() {
 // Internal helper — adapted from tests/common/mod.rs
 // ---------------------------------------------------------------------------
 
-async fn wait_for_connected(
-    client: &OutgoingWebsocketManager,
-    expected: usize,
-    timeout_ms: u64,
-) {
+async fn wait_for_connected(client: &OutgoingWebsocketManager, expected: usize, timeout_ms: u64) {
     let start = std::time::Instant::now();
     let limit = Duration::from_millis(timeout_ms);
     while start.elapsed() < limit {

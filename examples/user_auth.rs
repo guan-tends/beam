@@ -34,10 +34,10 @@
 //! After leave, authenticated: false
 //! ```
 
+use beam::Node;
 use beam::sea::session::InMemorySessionStorage;
 #[allow(unused_imports)]
 use beam::sea::{SessionStorage, User};
-use beam::Node;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,7 +77,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     alice.leave();
     assert!(!alice_clone.is_authenticated());
     assert!(alice_clone.pair().priv_key.is_empty());
-    println!("After leave, authenticated: {}", alice_clone.is_authenticated());
+    println!(
+        "After leave, authenticated: {}",
+        alice_clone.is_authenticated()
+    );
 
     db.stop();
     Ok(())

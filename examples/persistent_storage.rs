@@ -49,9 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut db = Node::new_with_config(
             config.clone(),
             vec![Box::new(RedbStorage::new_with_config(
-                config,
-                &path_str,
-                None,
+                config, &path_str, None,
             ))],
             vec![],
         );
@@ -79,18 +77,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut db = Node::new_with_config(
             config.clone(),
             vec![Box::new(RedbStorage::new_with_config(
-                config,
-                &path_str,
-                None,
+                config, &path_str, None,
             ))],
             vec![],
         );
 
         // once() reads the current value without subscribing.
-        let value = db
-            .get("name")
-            .once(Some(Duration::from_secs(3)))
-            .await;
+        let value = db.get("name").once(Some(Duration::from_secs(3))).await;
 
         match value {
             Some(Value::Text(s)) => {

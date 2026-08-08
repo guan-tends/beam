@@ -32,9 +32,15 @@ async fn e2e_metrics_starts_at_zero() {
 
     let snap = metrics.snapshot();
     assert_eq!(snap.dropped_sends, 0, "fresh node must have zero drops");
-    assert_eq!(snap.reaped_quorums, 0, "fresh node must have zero reaped quorums");
+    assert_eq!(
+        snap.reaped_quorums, 0,
+        "fresh node must have zero reaped quorums"
+    );
     assert_eq!(snap.put_acks_seen, 0, "fresh node must have zero put acks");
-    assert_eq!(snap.put_acks_quorum, 0, "fresh node must have zero quorum acks");
+    assert_eq!(
+        snap.put_acks_quorum, 0,
+        "fresh node must have zero quorum acks"
+    );
 }
 
 /// Node and Router share the same atomic counters via the Arc clone.

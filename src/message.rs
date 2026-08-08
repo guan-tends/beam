@@ -3,16 +3,13 @@ use crate::ack::AckPolicy;
 use crate::actor::Addr;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
+use base64::prelude::*;
 use java_utils::HashCode;
-use jsonwebkey as jwk;
-use jsonwebtoken::Algorithm;
-use jsonwebtoken::crypto::verify;
 use log::{debug, error};
-use ring::digest::{SHA256, digest};
+use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
-use base64::prelude::*;
 
 #[derive(Clone, Debug)]
 pub struct Get {
@@ -234,7 +231,10 @@ pub enum Message {
     Put(Put),
     BatchPut(BatchPut),
     Flush(Flush),
-    Hi { from: Addr, peer_id: String },
+    Hi {
+        from: Addr,
+        peer_id: String,
+    },
     RtcSignal(RtcSignal),
     /// Periodic self-tick fired by the cleanup reaper spawned in
     /// [`crate::router::Router::pre_start`].
@@ -276,8 +276,11 @@ impl Message {
             // RegisterQuorum is router-internal — never serialized to wire.
             // If we ever see this in to_string(), something routed it wrong.
             Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
-                Message::RegisterQuorum { put_id, .. } => {
-                debug!("internal RegisterQuorum({}) should not reach to_string", put_id);
+            Message::RegisterQuorum { put_id, .. } => {
+                debug!(
+                    "internal RegisterQuorum({}) should not reach to_string",
+                    put_id
+                );
                 String::new()
             }
         }
@@ -292,7 +295,7 @@ impl Message {
             Message::Hi { from: _, peer_id } => peer_id.to_string(),
             Message::RtcSignal(rtc) => rtc.id.clone(),
             Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
-                Message::RegisterQuorum { put_id, .. } => put_id.clone(),
+            Message::RegisterQuorum { put_id, .. } => put_id.clone(),
         }
     }
 
@@ -305,7 +308,7 @@ impl Message {
             Message::Hi { from, peer_id: _ } => *from == *addr,
             Message::RtcSignal(rtc) => rtc.from == *addr,
             Message::CheckQuorumTimeouts => false,
-                Message::RegisterQuorum { requester, .. } => *requester == *addr,
+            Message::RegisterQuorum { requester, .. } => *requester == *addr,
         }
     }
 
@@ -321,7 +324,7 @@ impl Message {
             } => Addr::noop(),
             Message::RtcSignal(rtc) => rtc.from.clone(),
             Message::CheckQuorumTimeouts => Addr::noop(),
-                Message::RegisterQuorum { requester, .. } => requester.clone(),
+            Message::RegisterQuorum { requester, .. } => requester.clone(),
         }
     }
 
@@ -410,36 +413,54 @@ impl Message {
             let signature = signature
                 .as_str()
                 .ok_or("signature (~) in signature json was not a string")?;
-            let signature64 = BASE64_STANDARD.decode(signature)
-                .or(Err("signature (~) in signature json was not base64"))?;
-            let signature = BASE64_URL_SAFE_NO_PAD.encode(signature64);
+            // Signature is base64 STANDARD encoded (decoded in verification block below)
 
+            // Parse public key from x.y base64url coordinates
             let mut split = key.split(".");
-            let x = split.next().unwrap().to_string();
-            let y = split
+            let x_b64 = split
                 .next()
                 .ok_or("invalid key string: must be in format x.y")?;
-            let y = y.to_string();
+            let y_b64 = split
+                .next()
+                .ok_or("invalid key string: must be in format x.y")?;
 
-            let jwk_str = format!("{{\"kty\": \"EC\", \"crv\": \"P-256\", \"x\": \"{}\", \"y\": \"{}\", \"ext\": \"true\"}}", x, y).to_string();
-            let my_jwk: jwk::JsonWebKey = jwk_str
-                .parse()
-                .or(Err("failed to parse JsonWebKey from string"))?;
+            let x = BASE64_URL_SAFE_NO_PAD
+                .decode(x_b64)
+                .or(Err("invalid public key: x coordinate not valid base64"))?;
+            let y = BASE64_URL_SAFE_NO_PAD
+                .decode(y_b64)
+                .or(Err("invalid public key: y coordinate not valid base64"))?;
 
-            let hash = digest(&SHA256, signed_obj.to_string().as_bytes());
+            // Reconstruct uncompressed public key (0x04 || x || y) for p256
+            let mut pub_bytes: Vec<u8> = Vec::with_capacity(65);
+            pub_bytes.push(0x04);
+            pub_bytes.extend_from_slice(&x);
+            pub_bytes.extend_from_slice(&y);
 
-            match verify(
-                &signature,
-                hash.as_ref(),
-                &my_jwk.key.to_decoding_key(),
-                Algorithm::ES256,
-            ) {
-                Ok(is_good) => match is_good {
-                    true => continue,
-                    _ => return Err("bad signature"),
-                },
+            let verifying_key = VerifyingKey::from_sec1_bytes(&pub_bytes)
+                .map_err(|_| "invalid public key: failed to parse P-256 key")?;
+
+            // Decode signature (raw bytes, 64 bytes for P-256 = r || s)
+            let sig_bytes = BASE64_STANDARD
+                .decode(signature)
+                .or(Err("signature was not valid base64"))?;
+            if sig_bytes.len() != 64 {
+                return Err("invalid signature length for P-256");
+            }
+            let signature = Signature::from_slice(&sig_bytes)
+                .map_err(|_| "invalid signature: failed to parse")?;
+
+            // Verify — p256 Verifier does internal SHA-256 hashing (ES256 semantics)
+            // Gun.js double-hashes: SHA256(SHA256(message)) via WebCrypto ECDSA
+            // sign({hash: 'SHA-256'}, key, SHA256(message)) hashes the hash again.
+            // We replicate this by pre-hashing, then passing the hash to p256's
+            // verify() which hashes it internally — producing SHA256(SHA256(message)).
+            use sha2::{Digest, Sha256};
+            let hash = Sha256::digest(signed_obj.to_string().as_bytes());
+            match verifying_key.verify(&hash, &signature) {
+                Ok(_) => continue,
                 Err(_) => {
-                    error!("could not verify signature {} of {}", signature, signed_obj);
+                    error!("could not verify signature of {}", signed_obj);
                     return Err("could not verify signature");
                 }
             }
