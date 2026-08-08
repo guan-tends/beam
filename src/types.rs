@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn test_value_to_string_number() {
         assert_eq!(Value::Number(42.0).to_string(), "42");
-        assert_eq!(Value::Number(3.14).to_string(), "3.14");
+        assert_eq!(Value::Number(3.15).to_string(), "3.15");
     }
 
     #[test]
@@ -561,8 +561,8 @@ mod tests {
 
     #[test]
     fn test_from_f32() {
-        let v: Value = 3.14f32.into();
-        assert!((v.as_number().unwrap() - 3.14).abs() < 0.001);
+        let v: Value = 3.15f32.into();
+        assert!((v.as_number().unwrap() - 3.15).abs() < 0.001);
     }
 
     // ── Children type alias ──

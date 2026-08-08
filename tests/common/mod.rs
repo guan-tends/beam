@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared async readiness helpers for beam e2e tests.
 //!
 //! # The Flakiness Pattern

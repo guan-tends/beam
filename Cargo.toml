@@ -1,6 +1,6 @@
 [package]
 name = "beamdb"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2024"
 repository = "https://github.com/guan-tends/beam"
 homepage = "https://github.com/guan-tends/beam"
@@ -23,7 +23,7 @@ redb = "4.1"
 persy = { version = "1.8", features = ["background_ops"], optional = true }
 serde = { version =  "1.0", features = ["derive"] }
 serde_json = "1.0.64"
-postcard = { version = "1", features = ["alloc"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 rand = "0.9"
 clap = { version = "4.6", features = ["derive", "env"] }
 futures-util = "0.3.21"
@@ -35,7 +35,7 @@ log = "0.4.14"
 tokio-tungstenite = { version = "0.30", features=["native-tls"] }
 warp = { version = "0.4.3", features = ["server"] }
 url = "2.2.2"
-multicast-socket = "0.3.3"
+oko-multicast-socket = { version = "0.5", features = ["tokio"] }
 thiserror = "2.0"
 bytes = "1.1.0"
 tokio-native-tls = "0.3.0"
@@ -71,3 +71,9 @@ path = "src/main.rs"
 [[bin]]
 name = "beam-sea-keygen"
 path = "src/bin/beam-sea-keygen.rs"
+
+[profile.release]
+opt-level = 3
+strip = true
+lto = true
+codegen-units = 1

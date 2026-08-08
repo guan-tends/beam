@@ -106,6 +106,12 @@ impl Clone for PersyStorage {
     }
 }
 
+impl Default for PersyStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PersyStorage {
     /// Creates a new Persy storage at the default path `beam.persy`.
     ///
@@ -171,7 +177,7 @@ impl PersyStorage {
                 return;
             }
         };
-        let scan_iter = match self.db.scan(&segment_id) {
+        let scan_iter = match self.db.scan(segment_id) {
             Ok(it) => it,
             Err(e) => {
                 error!("persy scan failed: {:?}", e);
@@ -249,7 +255,7 @@ impl PersyStorage {
             // surrounding function returns `Result<(), String>`, so map the
             // Persy error to a string via `Debug` (matches the redb_storage
             // convention for surfacing low-level driver errors).
-            let scan_iter = tx.scan(&segment_id).map_err(|e| format!("scan: {:?}", e))?;
+            let scan_iter = tx.scan(segment_id).map_err(|e| format!("scan: {:?}", e))?;
             for (id, bytes) in scan_iter {
                 let record: NodeRecord = match postcard::from_bytes(&bytes) {
                     Ok(r) => r,
@@ -284,7 +290,7 @@ impl PersyStorage {
 
             // Delete stale records (so the segment doesn't grow unbounded).
             for id in &stale_ids {
-                tx.delete(&segment_id, id)
+                tx.delete(segment_id, id)
                     .map_err(|e| format!("delete stale {:?}: {:?}", id, e))?;
             }
 
@@ -296,7 +302,7 @@ impl PersyStorage {
                 };
                 let bytes = postcard::to_allocvec(&record)
                     .map_err(|e| format!("postcard serialize: {:?}", e))?;
-                tx.insert(&segment_id, &bytes)
+                tx.insert(segment_id, &bytes)
                     .map_err(|e| format!("insert: {:?}", e))?;
             }
         }
@@ -559,7 +565,7 @@ mod tests {
 
         // Now scan and verify the record is there
         let segment_id = storage.db.solve_segment_id(BEAM_NODES).unwrap();
-        let scan_iter = storage.db.scan(&segment_id).unwrap();
+        let scan_iter = storage.db.scan(segment_id).unwrap();
         let mut found = false;
         for (_id, bytes) in scan_iter {
             let record: NodeRecord = postcard::from_bytes(&bytes).unwrap();
@@ -614,7 +620,7 @@ mod tests {
         // Verify: only the "newest" value should be in the segment,
         // and the stale records must have been deleted.
         let segment_id = storage.db.solve_segment_id(BEAM_NODES).unwrap();
-        let scan_iter = storage.db.scan(&segment_id).unwrap();
+        let scan_iter = storage.db.scan(segment_id).unwrap();
         let mut record_count = 0;
         let mut found_value = None;
         for (_id, bytes) in scan_iter {
@@ -646,7 +652,7 @@ mod tests {
         // actor, but we can verify the scan finds nothing and the flow
         // doesn't error.
         let segment_id = storage.db.solve_segment_id(BEAM_NODES).unwrap();
-        let scan_iter = storage.db.scan(&segment_id).unwrap();
+        let scan_iter = storage.db.scan(segment_id).unwrap();
         let mut count = 0;
         for _ in scan_iter {
             count += 1;

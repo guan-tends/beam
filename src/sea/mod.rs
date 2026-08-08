@@ -546,9 +546,13 @@ mod tests {
 
         // Expiry in the past (1970)
         let policies = Some(json!({"e": 1000.0_f64}));
-        let signed = certify(&[alice.pub_key.clone()], policies.as_ref(), &authority)
-            .await
-            .unwrap();
+        let signed = certify(
+            std::slice::from_ref(&alice.pub_key),
+            policies.as_ref(),
+            &authority,
+        )
+        .await
+        .unwrap();
 
         assert!(verify_certificate(&signed, &authority.pub_key).is_err());
     }
@@ -683,7 +687,7 @@ mod tests {
         let mut secret_node = node
             .get(&format!("~{}", pair.pub_key))
             .get("secret")
-            .get(&path_key);
+            .get(path_key);
 
         let stored = secret_node
             .once(None)

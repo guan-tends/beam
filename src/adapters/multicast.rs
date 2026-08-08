@@ -24,7 +24,7 @@
 //! call is synchronous and blocks. This is not optimal for async contexts
 //! but is required by the `multicast_socket` crate's API.
 
-use multicast_socket::{MulticastOptions, MulticastSocket, all_ipv4_interfaces};
+use oko_multicast_socket::{MulticastOptions, MulticastSocket, all_ipv4_interfaces};
 use std::net::SocketAddrV4;
 
 use crate::Config;
