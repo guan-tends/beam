@@ -68,12 +68,9 @@ impl Beam {
     pub fn new() -> Beam {
         console_error_panic_hook::set_once();
         let _guard = runtime().enter();
-        web_sys::console::log_1(&"Beam::new() — creating node".into());
-        let beam = Beam {
+        Beam {
             node: Node::new(),
-        };
-        web_sys::console::log_1(&"Beam::new() — node created".into());
-        beam
+        }
     }
 
     /// Creates a new BEAM node with IndexedDB persistent storage.
@@ -104,7 +101,6 @@ impl Beam {
     /// * `url` - WebSocket URL (e.g. `"wss://relay.example.com/ws"`)
     pub fn connect(&self, url: &str) {
         let _guard = runtime().enter();
-        web_sys::console::log_1(&format!("connect: {}", url).into());
         self.node.connect_peer_wasm(url);
     }
 
@@ -121,16 +117,10 @@ impl Beam {
     /// * `value` - String to store
     pub fn put(&mut self, path: &str, value: &str) {
         let _guard = runtime().enter();
-        web_sys::console::log_1(&format!("put: path={} value={}", path, value).into());
         let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
         let value = value.to_string();
-        let path_log = path.to_string();
         spawn_local(async move {
-            web_sys::console::log_1(&format!("put.spawn: path={} starting", path_log).into());
-            match node.put(Value::Text(value)).await {
-                Ok(()) => web_sys::console::log_1(&format!("put.spawn: path={} OK", path_log).into()),
-                Err(e) => web_sys::console::log_1(&format!("put.spawn: path={} ERR: {}", path_log, e).into()),
-            }
+            let _ = node.put(Value::Text(value)).await;
         });
     }
 
@@ -205,17 +195,13 @@ impl Beam {
     /// ```
     pub fn on(&mut self, path: &str, callback: js_sys::Function) {
         let _guard = runtime().enter();
-        web_sys::console::log_1(&format!("on: path={}", path).into());
         let node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
         let mut rx = node.map();
-        let path_log = path.to_string();
 
         spawn_local(async move {
-            web_sys::console::log_1(&format!("on.spawn: path={} started, waiting for map() events", path_log).into());
             loop {
                 match rx.recv().await {
                     Ok((_key, value)) => {
-                        web_sys::console::log_1(&format!("on.spawn: path={} received key={} value={:?}", path_log, _key, value).into());
                         let js_val = match value {
                             Value::Text(s) => JsValue::from(s),
                             Value::Number(n) => JsValue::from(n),
@@ -223,12 +209,9 @@ impl Beam {
                             Value::Link(s) => JsValue::from(s),
                             Value::Null => JsValue::NULL,
                         };
-                        // Skip internal control keys
                         if js_val.is_null() {
                             continue;
                         }
-                        // Fire callback — errors are silently ignored
-                        // (callback may have been GC'd or page unloaded).
                         let _ = callback.call1(&JsValue::UNDEFINED, &js_val);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

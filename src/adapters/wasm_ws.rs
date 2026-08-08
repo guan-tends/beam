@@ -55,9 +55,7 @@ impl WasmWsConn {
         let peer_id_for_open = peer_id.clone();
         let ws_for_open = ws.clone();
         let onopen: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {
-            web_sys::console::log_1(&"WasmWsConn: onopen fired".into());
-
-            // Register with the relay. The wire Hi format is {"#":"...","dam":"hi"}
+            // Register with the relay. The wire Hi format is {{"#":"...","dam":"hi"}}
             // — the actor addr is not serialized, so noop is fine here.
             let hi = Message::Hi {
                 from: Addr::noop(),
@@ -67,7 +65,6 @@ impl WasmWsConn {
 
             // Flush buffered messages.
             let mut queue = outbox_for_open.lock().unwrap();
-            web_sys::console::log_1(&format!("WasmWsConn: flushing {} buffered messages", queue.len()).into());
             for text in queue.drain(..) {
                 let _ = ws_for_open.send_with_str(&text);
             }
@@ -81,28 +78,23 @@ impl WasmWsConn {
                 match Message::try_from(&text, addr_for_msg.clone(), allow_public_space) {
                     Ok(msgs) => {
                         for msg in msgs {
-                            if router_for_msg.send(msg).is_err() {
-                                web_sys::console::log_1(&"WasmWsConn: failed to forward to router".into());
-                            }
+                            let _ = router_for_msg.send(msg);
                         }
                     }
                     Err(e) => {
-                        web_sys::console::log_1(&format!("WasmWsConn: parse error: {}", e).into());
+                        web_sys::console::error_1(&format!("WasmWsConn: parse error: {}", e).into());
                     }
                 }
             }
         });
 
         // --- onerror ---
-        let onerror: Closure<dyn FnMut(JsValue)> = Closure::new(move |event: JsValue| {
-            web_sys::console::log_1(&format!("WasmWsConn: error: {:?}", event).into());
+        let onerror: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {
             stop_ctx.stop();
         });
 
         // --- onclose ---
-        let onclose: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {
-            web_sys::console::log_1(&"WasmWsConn: disconnected".into());
-        });
+        let onclose: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {});
 
         ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
         ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
@@ -126,16 +118,13 @@ impl Actor for WasmWsConn {
             from: ctx.addr.clone(),
             peer_id: ctx.peer_id.read().clone(),
         });
-        web_sys::console::log_1(&format!("WasmWsConn: pre_start done, addr={}", ctx.addr).into());
     }
 
     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
         let text = msg.to_string();
         // Check readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
         if self.ws.ready_state() == 1 {
-            if let Err(e) = self.ws.send_with_str(&text) {
-                web_sys::console::log_1(&format!("WasmWsConn: send failed: {:?}", e).into());
-            }
+            let _ = self.ws.send_with_str(&text);
         } else {
             // Buffer until onopen flushes.
             self.outbox.lock().unwrap().push(text);
@@ -143,7 +132,6 @@ impl Actor for WasmWsConn {
     }
 
     async fn stopping(&mut self, _ctx: &ActorContext) {
-        web_sys::console::log_1(&"WasmWsConn: stopping".into());
         let _ = self.ws.close();
     }
 }
