@@ -50,7 +50,7 @@ p256 = { version = "0.14", features = ["ecdh", "getrandom"] }
 aes-gcm = "0.10"
 pbkdf2 = "0.13"
 sha2 = "0.11"
-str0m = { version = "0.19", optional = true }
+str0m = { version = "0.21", optional = true }
 stun = { version = "0.17", optional = true }
 
 [features]
