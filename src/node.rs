@@ -42,15 +42,17 @@ use crate::router::Router;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use futures_util::StreamExt;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use web_time::{Duration, SystemTime};
 use tokio::sync::watch;
 use tokio::sync::{broadcast, oneshot};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_tungstenite::connect_async;
 
 /// Configuration for a [`Node`] and its associated adapters.
@@ -359,7 +361,7 @@ impl Node {
         }
 
         let dur = timeout.unwrap_or(Duration::from_secs(30));
-        match tokio::time::timeout(dur, rx).await {
+        match crate::tokio_time::timeout(dur, rx).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(_)) => Err("flush ack channel closed".to_string()),
             Err(_) => {
@@ -440,13 +442,14 @@ impl Node {
     ///
     /// * `wait` - Optional timeout. Defaults to 66ms.
     pub async fn once(&mut self, wait: Option<Duration>) -> Option<Value> {
-        let val = tokio::time::timeout(wait.unwrap_or(Duration::from_millis(66)), self.on().recv())
+        let val = crate::tokio_time::timeout(wait.unwrap_or(Duration::from_millis(66)), self.on().recv())
             .await
             .ok()?
             .expect("recv error??");
         Some(val)
     }
 
+#[cfg(not(target_arch = "wasm32"))]
     /// Connects to a remote peer via WebSocket with automatic reconnection.
     ///
     /// Retries with exponential backoff starting at 1 second, maxing at 60
@@ -480,14 +483,14 @@ impl Node {
                         backoff = Duration::from_secs(1);
                         // Stay alive; WsConn runs until disconnect.
                         // TODO: detect disconnect for faster reconnect loop.
-                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                        crate::tokio_time::sleep(Duration::from_secs(3600)).await;
                     }
                     Err(e) => {
                         warn!(
                             "BEAM connect to {} failed: {}. retry in {:?}",
                             url, e, backoff
                         );
-                        tokio::time::sleep(backoff).await;
+                        crate::tokio_time::sleep(backoff).await;
                         backoff = (backoff * 2).min(max_backoff);
                     }
                 }
@@ -731,7 +734,7 @@ impl Node {
             return Err("failed to send put to router".to_string());
         }
 
-        match tokio::time::timeout(policy.timeout, rx).await {
+        match crate::tokio_time::timeout(policy.timeout, rx).await {
             Ok(Ok(status)) => status,
             Ok(Err(_)) => Err("put_quorum ack channel closed".to_string()),
             Err(_) => {
@@ -792,7 +795,7 @@ impl Node {
         }
 
         let dur = Duration::from_secs(30); // TODO: accept timeout as parameter when API stabilizes
-        match tokio::time::timeout(dur, rx).await {
+        match crate::tokio_time::timeout(dur, rx).await {
             Ok(Ok(_status)) => Ok(()), // discard ReplicationStatus for local put
             Ok(Err(_)) => Err("put ack channel closed".to_string()),
             Err(_) => {
@@ -874,7 +877,7 @@ impl Node {
         }
 
         let dur = Duration::from_secs(30); // TODO: accept timeout as parameter when API stabilizes
-        match tokio::time::timeout(dur, rx).await {
+        match crate::tokio_time::timeout(dur, rx).await {
             Ok(Ok(_status)) => Ok(()), // discard ReplicationStatus for batch_put
             Ok(Err(_)) => Err("batch_put ack channel closed".to_string()),
             Err(_) => {
@@ -932,7 +935,7 @@ impl Node {
     /// # Example
     ///
     /// ```no_run
-    /// use std::time::Duration;
+    /// use web_time::Duration;
     /// use beam::Node;
     ///
     /// # #[tokio::main]
@@ -951,7 +954,7 @@ impl Node {
         // The flush message goes through the router, which processes
         // messages in FIFO order. Any puts ahead of the flush in the
         // mailbox are committed before the flush ack returns.
-        let flush_result = tokio::time::timeout(timeout, self.flush_storage(Some(timeout))).await;
+        let flush_result = crate::tokio_time::timeout(timeout, self.flush_storage(Some(timeout))).await;
 
         match flush_result {
             Ok(Ok(())) => info!("Storage flush completed during shutdown"),
@@ -978,7 +981,7 @@ impl Node {
         // timeout budget (or a default if flush consumed little).
         let drain_timeout = Duration::from_secs(5);
         debug!("Draining for {:?} before force stop", drain_timeout);
-        tokio::time::sleep(drain_timeout).await;
+        crate::tokio_time::sleep(drain_timeout).await;
 
         // Phase 4: Force stop — abort remaining tasks, send stop signals.
         // By this point all critical work (flush, signal) is done. This
@@ -1015,7 +1018,7 @@ impl Node {
     /// is positive evidence.
     ///
     /// Failure to produce an ack at all (timeout, channel drop) is handled
-    /// by the awaiting caller via `tokio::time::timeout`.
+    /// by the awaiting caller via `crate::tokio_time::timeout`.
     fn decode_put_ack_payload(put: &Put) -> Result<(), String> {
         for (_node_id, children) in put.updated_nodes.iter().rev() {
             if let Some(node_data) = children.get("_err") {
@@ -1070,7 +1073,7 @@ impl Node {
     /// called. For accurate elapsed measurement, callers should wrap the
     /// entire drain with an `Instant`.
     fn decode_quorum_payload(put: &Put) -> Option<Result<ReplicationStatus, String>> {
-        let started_at = std::time::Instant::now();
+        let started_at = web_time::Instant::now();
         let children = put.updated_nodes.get(QUORUM_MET_SENTINEL)?;
         let node_data = children.get("_")?;
         match &node_data.value {
@@ -1087,6 +1090,23 @@ impl Node {
             // Bit(false), String, Null, etc. — malformed. Fall through.
             _ => None,
         }
+    }
+
+    /// Connects to a relay server via WebSocket (WASM/browser only).
+    ///
+    /// Browser counterpart to connect_peer. Uses web_sys WebSocket
+    /// instead of tokio-tungstenite. The connection is async.
+    ///
+    /// # Arguments
+    ///
+    /// * url - WebSocket URL (e.g. wss://relay.example.com/ws)
+    #[cfg(target_arch = "wasm32")]
+    pub fn connect_peer_wasm(&self, url: &str) {
+        use crate::adapters::WasmWsConn;
+        let ctx = self.actor_context.clone();
+        let conn = WasmWsConn::new(url, &ctx, self.allow_public_space);
+        ctx.start_actor(Box::new(conn));
+        info!("BEAM browser node connecting to relay: {}", url);
     }
 }
 
@@ -1176,7 +1196,7 @@ mod tests {
         let mut node = Node::new();
         let mut sub = node.get("greeting").on();
         node.get("greeting").put("hello".into()).await.expect("put");
-        let val = tokio::time::timeout(Duration::from_secs(2), sub.recv())
+        let val = crate::tokio_time::timeout(Duration::from_secs(2), sub.recv())
             .await
             .expect("timeout")
             .expect("recv error");
@@ -1198,7 +1218,7 @@ mod tests {
         node.batch_put(vec![(vec!["a".to_string()], Value::Text("x".into()))])
             .await
             .expect("batch_put");
-        let val = tokio::time::timeout(Duration::from_secs(2), sub.recv())
+        let val = crate::tokio_time::timeout(Duration::from_secs(2), sub.recv())
             .await
             .expect("timeout")
             .expect("recv error");
@@ -1344,7 +1364,7 @@ mod tests {
         node.handle(Message::Put(ack), &ctx).await;
 
         // The future should resolve with Ok(())
-        let result = tokio::time::timeout(Duration::from_secs(1), rx)
+        let result = crate::tokio_time::timeout(Duration::from_secs(1), rx)
             .await
             .expect("ack did not arrive within 1s")
             .expect("ack channel closed unexpectedly");
@@ -1369,7 +1389,7 @@ mod tests {
         let ctx = ActorContext::new("test-peer".to_string());
         node.handle(Message::Put(ack), &ctx).await;
 
-        let result = tokio::time::timeout(Duration::from_secs(1), rx)
+        let result = crate::tokio_time::timeout(Duration::from_secs(1), rx)
             .await
             .expect("error ack did not arrive within 1s")
             .expect("ack channel closed unexpectedly");

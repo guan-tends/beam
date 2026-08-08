@@ -7,3 +7,5 @@ benches/_data/
 
 .serena/
 README.md.bak
+pkg/
+beam.redb

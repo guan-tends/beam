@@ -1,0 +1,33 @@
+{
+  "name": "beamdb",
+  "type": "module",
+  "collaborators": [
+    "Martti Malmi <martti@mmalmi.org>",
+    "David Newman <david.r.newman@proton.me>"
+  ],
+  "description": "BEAM — distributed graph database syncing over WebSocket, WebRTC, and multicast. Successor to rod.",
+  "version": "0.9.1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/guan-tends/beam"
+  },
+  "files": [
+    "beam_bg.wasm",
+    "beam.js",
+    "beam.d.ts"
+  ],
+  "main": "beam.js",
+  "homepage": "https://github.com/guan-tends/beam",
+  "types": "beam.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ],
+  "keywords": [
+    "p2p",
+    "graph-database",
+    "distributed",
+    "sync",
+    "websocket"
+  ]
+}

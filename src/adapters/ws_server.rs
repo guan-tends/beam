@@ -154,7 +154,7 @@ impl WsServer {
                 };
                 let acceptor = acceptor.clone();
                 let peer_id = peer_id.clone();
-                tokio::spawn(async move {
+                crate::tokio_spawn::spawn(async move {
                     let stream = match acceptor.accept(stream).await {
                         Ok(s) => s,
                         Err(_) => return,
@@ -310,7 +310,7 @@ impl Actor for WsServer {
                                 let acceptor = acceptor.clone();
                                 let clients = clients.clone();
                                 let ctx = ctx.clone();
-                                tokio::spawn(async move {
+                                crate::tokio_spawn::spawn(async move {
                                     let stream = acceptor.accept(stream).await;
                                     if let Ok(stream) = stream {
                                         Self::handle_stream(

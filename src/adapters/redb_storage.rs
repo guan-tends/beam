@@ -36,7 +36,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::Config;
 use crate::actor::{Actor, ActorContext, Addr};
@@ -614,7 +614,7 @@ mod tests {
 
         // Bug: with the old code, no reply arrives (timeout would be required).
         // Fix: redb_storage MUST always reply when in_response_to is Some.
-        let received = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
+        let received = crate::tokio_time::timeout(web_time::Duration::from_millis(500), rx.recv()).await;
 
         let _ = std::fs::remove_file(&storage.path);
 

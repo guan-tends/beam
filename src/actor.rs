@@ -63,7 +63,7 @@ use tokio::sync::mpsc::{
     Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
 };
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use crate::tokio_spawn::JoinHandle;
 
 /// Internal enum holding either an unbounded or bounded channel sender.
 ///
@@ -297,13 +297,14 @@ impl ActorContext {
     where
         T: Future<Output = ()> + Send + 'static,
     {
-        let handle = tokio::spawn(task);
+        let handle = crate::tokio_spawn::spawn(task);
         self.task_handles.write().push(handle);
     }
 
     /// Spawns a blocking child task via `spawn_blocking`.
     ///
     /// Use for CPU-intensive work that should not block the async runtime.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn blocking_child_task<F>(&self, task: F)
     where
         F: FnOnce() + Send + 'static,
@@ -336,7 +337,7 @@ impl ActorContext {
         self.stop_signals.write().insert(addr.clone(), stop_sender);
         let stop_signals = self.stop_signals.clone();
         let addr_clone = addr.clone();
-        tokio::spawn(async move {
+        crate::tokio_spawn::spawn(async move {
             actor.run(receiver, stop_receiver, new_context).await;
             stop_signals.write().remove(&addr_clone);
         });
@@ -530,7 +531,7 @@ mod tests {
         let _addr = ctx.start_actor(Box::new(actor));
 
         // Give the actor a moment to start
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        crate::tokio_time::sleep(web_time::Duration::from_millis(50)).await;
 
         assert_eq!(ctx.child_actor_count(), 1);
 

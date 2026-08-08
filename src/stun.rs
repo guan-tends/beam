@@ -7,7 +7,7 @@
 #[cfg(feature = "webrtc")]
 pub mod webrtc_stun {
     use std::net::{SocketAddr, UdpSocket};
-    use std::time::Duration;
+    use web_time::Duration;
 
     /// Parse an ICE server URI into a `(scheme, SocketAddr)` tuple.
     ///
@@ -202,7 +202,7 @@ pub mod webrtc_stun {
     pub fn stun_binding_request(
         _local_socket: &std::net::UdpSocket,
         _stun_server: SocketAddr,
-        _timeout: std::time::Duration,
+        _timeout: web_time::Duration,
     ) -> Option<SocketAddr> {
         None
     }
@@ -210,7 +210,7 @@ pub mod webrtc_stun {
     pub fn turn_allocate_request(
         _local_socket: &std::net::UdpSocket,
         _turn_server: SocketAddr,
-        _timeout: std::time::Duration,
+        _timeout: web_time::Duration,
     ) -> Option<SocketAddr> {
         None
     }
