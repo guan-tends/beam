@@ -20,6 +20,9 @@ pub mod sea;
 pub use node::{Config, Node};
 pub use types::Value;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
 // Include README.md as doctests — all ```rust code blocks in README are
 // compiled and run when `cargo test --doc` (or `cargo test`) is executed.
 // The struct only exists during doctest collection, so it's invisible in

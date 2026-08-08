@@ -1091,6 +1091,23 @@ impl Node {
             _ => None,
         }
     }
+
+    /// Connects to a relay server via WebSocket (WASM/browser only).
+    ///
+    /// Browser counterpart to connect_peer. Uses web_sys WebSocket
+    /// instead of tokio-tungstenite. The connection is async.
+    ///
+    /// # Arguments
+    ///
+    /// * url - WebSocket URL (e.g. wss://relay.example.com/ws)
+    #[cfg(target_arch = "wasm32")]
+    pub fn connect_peer_wasm(&self, url: &str) {
+        use crate::adapters::WasmWsConn;
+        let ctx = self.actor_context.clone();
+        let conn = WasmWsConn::new(url, &ctx, self.allow_public_space);
+        ctx.start_actor(Box::new(conn));
+        info!("BEAM browser node connecting to relay: {}", url);
+    }
 }
 
 /// Options for put operations (SEA certificate support).
