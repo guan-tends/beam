@@ -49,9 +49,12 @@
       row.insertCell().textContent = value;
     };
 
-    // Note: beam.get() with callback is planned for a future version.
-    // Currently data is stored and synced; read callbacks via JS
-    // closures are the next API addition.
+    // Read a value (returns a Promise)
+    document.getElementById("get").onclick = async () => {
+      const key = document.getElementById("getkey").value;
+      const result = await beam.get(key);
+      document.getElementById("result").textContent = result ?? "(not found)";
+    };
   </script>
 </body>
 </html>

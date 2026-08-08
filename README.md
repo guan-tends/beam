@@ -111,7 +111,7 @@ await init();
 
 // Create a BEAM node
 const beam = new Beam();                        // in-memory (lost on reload)
-// or: const beam = new Beam.new_persistent();   // IndexedDB (survives reload)
+// or: const beam = Beam.new_persistent();   // IndexedDB (survives reload)
 
 // Connect to a relay server
 beam.connect("wss://relay.example.com/ws");
@@ -125,7 +125,7 @@ beam.put_null("users.alice.deleted");    // explicit null
 // Read once (returns a Promise)
 const name = await beam.get("users.alice.name");  // "Alice"
 
-// Subscribe to updates at a path
+// Subscribe to child updates (Gun.js .on() semantics)
 beam.on("users.alice.name", (value) => {
   console.log("name changed:", value);
 });
@@ -180,7 +180,7 @@ beam.stop();
 import init, { Beam } from "./beam.js";
 await init();
 
-const beam = new Beam.new_persistent();
+const beam = Beam.new_persistent();
 beam.connect("wss://relay.example.com/ws");
 
 // Writes survive page reload via IndexedDB
