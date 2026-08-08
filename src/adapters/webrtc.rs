@@ -476,7 +476,10 @@ impl Actor for WebRtcPeer {
 
     async fn stopping(&mut self, _ctx: &ActorContext) {
         info!("WebRtcPeer stopping for {}", self.peer_id);
-        // Signal the child task to shut down gracefully.
+        // Dual shutdown path: (1) WrtcCommand::Stop signals the child task
+        // to end the ICE session gracefully, and (2) ActorContext::stop()
+        // aborts the child task handle as a fallback. Either path triggers
+        // clean shutdown — Stop is preferred, abort is the safety net.
         if let Some(tx) = self.tx.take() {
             let _ = tx.send(WrtcCommand::Stop);
         }

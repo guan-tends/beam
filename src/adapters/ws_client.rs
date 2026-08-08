@@ -150,4 +150,16 @@ impl Actor for OutgoingWebsocketManager {
             let _ = client.send(message.clone());
         }
     }
+
+    async fn stopping(&mut self, _ctx: &ActorContext) {
+        let count = self.clients.read().await.len();
+        info!(
+            "OutgoingWebsocketManager stopping — {} outgoing connections",
+            count
+        );
+        // The WsConn child actors receive stop signals via ActorContext::stop()
+        // and send WebSocket Close frames in their own stopping(). Here we
+        // clear the map so no further fan-out attempts are made.
+        self.clients.write().await.clear();
+    }
 }
