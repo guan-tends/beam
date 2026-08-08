@@ -9,13 +9,16 @@
 //! import init, { Beam } from "./beam.js";
 //! await init();
 //!
-//! const beam = Beam.new();
+//! const beam = Beam.new();              // in-memory (lost on reload)
+//! // or: const beam = Beam.new_persistent();  // IndexedDB (survives reload)
 //! beam.connect("wss://relay.example.com/ws");
 //! beam.put("greeting", "Hello from browser!");
 //! const value = beam.get("greeting"); // "Hello from browser!"
 //! ```
 
+use crate::adapters::WasmIdbStorage;
 use crate::node::Node;
+use crate::Config;
 use crate::types::Value;
 use wasm_bindgen::prelude::*;
 
@@ -32,11 +35,36 @@ pub struct Beam {
 impl Beam {
     /// Creates a new BEAM node with in-memory storage.
     ///
+    /// Data is lost when the page reloads. For persistence, use
+    /// [`new_persistent()`](Self::new_persistent) instead.
+    ///
     /// Call `connect()` to join a relay mesh, then `put()` / `get()` to read/write.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Beam {
         Beam {
             node: Node::new(),
+        }
+    }
+
+    /// Creates a new BEAM node with IndexedDB persistent storage.
+    ///
+    /// Data survives page reloads. The IndexedDB database opens
+    /// asynchronously — writes are buffered until the DB is ready,
+    /// then flushed automatically.
+    ///
+    /// ```js
+    /// const beam = Beam.new_persistent();
+    /// beam.connect("wss://relay.example.com/ws");
+    /// beam.put("app.theme", "dark");
+    /// // Reload page — "app.theme" is still "dark"
+    /// ```
+    pub fn new_persistent() -> Beam {
+        Beam {
+            node: Node::new_with_config(
+                Config::default(),
+                vec![Box::new(WasmIdbStorage::new())],
+                Vec::new(),
+            ),
         }
     }
 

@@ -110,7 +110,8 @@ import init, { Beam } from "./beam.js";
 await init();
 
 // Create a BEAM node
-const beam = new Beam();
+const beam = new Beam();                  // in-memory (lost on reload)
+// or: const beam = Beam.new_persistent();       // IndexedDB (survives reload)
 
 // Connect to a relay server
 beam.connect("wss://relay.example.com/ws");
@@ -166,7 +167,7 @@ beam.stop();
 import init, { Beam } from "./beam.js";
 await init();
 
-const beam = new Beam();
+const beam = Beam.new_persistent();
 beam.connect("wss://relay.example.com/ws");
 
 // Writes survive page reload via IndexedDB
