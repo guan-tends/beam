@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! BEAM — a Rust implementation of the Gun.js P2P synchronized graph database.
 //!
 //! This is the command-line entry point for running a BEAM node server. It

@@ -53,6 +53,8 @@ persy = { version = "1.8", features = ["background_ops"], optional = true }
 clap = { version = "4.6", features = ["derive", "env"] }
 env_logger = "0.11"
 dirs = "6.0"
+# dev-dep: criterion is native-only (tokio runtime + threads don't work on WASM)
+criterion = { version = "0.8", features=["async_futures", "async_tokio", "html_reports"] }
 str0m = { version = "0.21", optional = true }
 stun = { version = "0.17", optional = true }
 
@@ -70,9 +72,8 @@ webrtc = ["dep:str0m", "dep:stun"]
 persy = ["dep:persy"]
 
 [dev-dependencies]
-criterion = { version = "0.8", features=["async_futures", "async_tokio", "html_reports"] }
 
-[[bench]]
+[target.'cfg(not(target_arch = "wasm32"))'.bench]
 name = "my_benchmark"
 harness = false
 
@@ -129,3 +130,6 @@ version = "0.1"
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
+
+[target.wasm32-unknown-unknown.dev-dependencies]
+wasm-bindgen-test = "0.3"
