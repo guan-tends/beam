@@ -32,9 +32,11 @@ binaries.
   replaces String for Text messages.
 - **Web server:** warp 0.3 → 0.4. TLS path replaced with tokio_native_tls
   (same stack as WsServer — DRY). Plain HTTP still uses warp::serve.
-- **Dependency upgrades:** rand 0.8 → 0.9, multicast-socket 0.2 → 0.3,
+- **Dependency upgrades:** rand 0.8 → 0.9, multicast-socket 0.2 →
+  oko-multicast-socket 0.5 (fork with maintained nix dependency),
   criterion 0.3 → 0.8, base64 0.13 → 0.22, thiserror, env_logger, dirs
-  updated to latest. str0m 0.19 → 0.21 (WebRTC).
+  updated to latest. str0m 0.19 → 0.21 (WebRTC). postcard
+  default-features=false (eliminates heapless/atomic-polyfill).
 
 ### Added
 
@@ -58,17 +60,25 @@ binaries.
 
 - RUSTSEC-2025-0010 (ring unmaintained) — resolved: ring eliminated
 - RUSTSEC-2025-0141 (bincode unmaintained) — resolved: replaced with postcard
+- RUSTSEC-2021-0119 (nix 0.19 OOB write) — resolved: switched to
+  oko-multicast-socket 0.5 (uses nix 0.24)
+- RUSTSEC-2023-0089 (atomic-polyfill unmaintained) — resolved:
+  postcard default-features=false eliminates heapless transitive dep
+- RUSTSEC-2026-0009 (time 0.3.45 stack exhaustion DoS) — resolved:
+  pinned time >=0.3.47
 - Supply chain: cargo-audit + cargo-deny integrated into CI
+  (advisories, licenses, bans, sources — all passing)
 
 ### Removed
 
-- 5 dependencies eliminated (ring, jsonwebtoken, jsonwebkey, bincode, ctrlc)
+- 5 direct dependencies eliminated (ring, jsonwebtoken, jsonwebkey, bincode, ctrlc)
+- 3 transitive dependencies eliminated (heapless, atomic-polyfill, rustc_version)
 - Smaller attack surface, fewer transitive dependencies
 
 ### Tests
 
-- 262 total tests (238 lib + 19 doctests + 5 E2E shutdown)
-- 0 failures, 0 clippy warnings, 0 compiler warnings
+- 257 tests pass (238 lib + 19 doctests), 0 failures, 0 clippy warnings
+- 0 compiler warnings
 - Gun.js wire compatibility: 3-layer proof (golden fixtures, Node.js
   mirror, live integration)
 
