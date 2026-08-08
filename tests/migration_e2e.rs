@@ -81,7 +81,8 @@ fn write_redb_records(path: &std::path::Path, count: usize) -> Result<usize, Str
                     updated_at: 1_700_000_000.0 + i as f64,
                 },
             );
-            let bytes = bincode::serialize(&children).map_err(|e| format!("bincode: {:?}", e))?;
+            let bytes =
+                postcard::to_allocvec(&children).map_err(|e| format!("postcard: {:?}", e))?;
             let key = format!("node_{:04}", i);
             table
                 .insert(key.as_str(), bytes.as_slice())
@@ -243,7 +244,7 @@ async fn e2e_migration_preserves_children() {
                 updated_at: 1_700_000_000.0,
             },
         );
-        let bytes = bincode::serialize(&root_children).expect("bincode root");
+        let bytes = postcard::to_allocvec(&root_children).expect("postcard root");
         table.insert("root", bytes.as_slice()).expect("insert root");
 
         // level1_a node with child "level2_a"
@@ -255,7 +256,7 @@ async fn e2e_migration_preserves_children() {
                 updated_at: 1_700_000_001.0,
             },
         );
-        let bytes = bincode::serialize(&l1_children).expect("bincode l1");
+        let bytes = postcard::to_allocvec(&l1_children).expect("postcard l1");
         table
             .insert("level1_a", bytes.as_slice())
             .expect("insert l1");
@@ -276,7 +277,7 @@ async fn e2e_migration_preserves_children() {
                 updated_at: 1_700_000_003.0,
             },
         );
-        let bytes = bincode::serialize(&l2_children).expect("bincode l2");
+        let bytes = postcard::to_allocvec(&l2_children).expect("postcard l2");
         table
             .insert("level2_a", bytes.as_slice())
             .expect("insert l2");
@@ -389,7 +390,7 @@ async fn diag_persy_count_basic() {
                     updated_at: 1_700_000_000.0 + i as f64,
                 },
             );
-            let bytes = bincode::serialize(&children).unwrap();
+            let bytes = postcard::to_allocvec(&children).unwrap();
             let key = format!("node_{:04}", i);
             table.insert(key.as_str(), bytes.as_slice()).unwrap();
         }

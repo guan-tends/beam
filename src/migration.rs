@@ -7,10 +7,10 @@
 //! # On-disk formats
 //!
 //! **redb**: `TableDefinition<&str, &[u8]>` in the `beam_nodes_v1` table.
-//! Key is the node_id directly; value is `bincode(Children)` (no wrapper).
+//! Key is the node_id directly; value is `postcard(Children)` (no wrapper).
 //!
 //! **Persy**: A segment named `beam_nodes_v1` containing opaque records.
-//! Each record is `bincode(NodeRecord { node_id, children })`.
+//! Each record is `postcard(NodeRecord { node_id, children })`.
 //!
 //! # CLI
 //!
@@ -38,7 +38,7 @@ use crate::types::Children;
 ///
 /// At runtime, the I/O module (gated on `persy`) uses the canonical definition
 /// from `persy_storage`. The two are structurally identical and serialize to
-/// the same bincode bytes, but live in separate compilation units so the
+/// the same postcard bytes, but live in separate compilation units so the
 /// migration library compiles without the Persy dependency.
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq)]
 pub(crate) struct NodeRecord {
@@ -146,8 +146,8 @@ pub enum MigrateError {
     #[error("persy error: {0}")]
     Persy(String),
 
-    #[error("bincode error: {0}")]
-    Bincode(#[from] bincode::Error),
+    #[error("postcard error: {0}")]
+    Postcard(#[from] postcard::Error),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -184,20 +184,20 @@ impl MigrateError {
 /// Translates a redb record (node_id + raw value bytes) into a Persy record payload.
 ///
 /// The inner `Children` data is deserialized from the redb format and re-serialized
-/// inside a [`NodeRecord`] wrapper for Persy. Both formats use bincode on `Children`,
+/// inside a [`NodeRecord`] wrapper for Persy. Both formats use postcard on `Children`,
 /// so the inner bytes are preserved exactly.
 ///
 /// # Errors
 ///
-/// Returns [`MigrateError::Bincode`] if the input bytes are not a valid bincode-encoded
+/// Returns [`MigrateError::Postcard`] if the input bytes are not a valid postcard-encoded
 /// `Children` map.
 pub fn redb_to_persy_payload(key: &str, value: &[u8]) -> Result<Vec<u8>, MigrateError> {
-    let children: Children = bincode::deserialize(value)?;
+    let children: Children = postcard::from_bytes(value)?;
     let record = NodeRecord {
         node_id: key.to_string(),
         children,
     };
-    Ok(bincode::serialize(&record)?)
+    Ok(postcard::to_allocvec(&record)?)
 }
 
 /// Translates a Persy record payload into a redb (node_id, value_bytes) pair.
@@ -207,11 +207,11 @@ pub fn redb_to_persy_payload(key: &str, value: &[u8]) -> Result<Vec<u8>, Migrate
 ///
 /// # Errors
 ///
-/// Returns [`MigrateError::Bincode`] if the input bytes are not a valid bincode-encoded
+/// Returns [`MigrateError::Postcard`] if the input bytes are not a valid postcard-encoded
 /// `NodeRecord`.
 pub fn persy_to_redb_record(payload: &[u8]) -> Result<(String, Vec<u8>), MigrateError> {
-    let record: NodeRecord = bincode::deserialize(payload)?;
-    let children_bytes = bincode::serialize(&record.children)?;
+    let record: NodeRecord = postcard::from_bytes(payload)?;
+    let children_bytes = postcard::to_allocvec(&record.children)?;
     Ok((record.node_id, children_bytes))
 }
 
@@ -274,7 +274,7 @@ pub(crate) mod io {
         // ─── Read source records into memory ──────────────────────────────
         //
         // Source is redb, opened read-only. We materialize all records as
-        // bincode-serialized NodeRecord payloads (the Persy on-disk format)
+        // postcard-serialized NodeRecord payloads (the Persy on-disk format)
         // before opening the target. This keeps the migration flow linear
         // and avoids holding a redb read transaction open across a long
         // Persy write transaction.
@@ -565,10 +565,10 @@ mod tests {
     #[test]
     fn redb_to_persy_roundtrips_children() {
         let children = make_test_children();
-        let original_bytes = bincode::serialize(&children).unwrap();
+        let original_bytes = postcard::to_allocvec(&children).unwrap();
 
         let translated = redb_to_persy_payload("test-node", &original_bytes).unwrap();
-        let record: NodeRecord = bincode::deserialize(&translated).unwrap();
+        let record: NodeRecord = postcard::from_bytes(&translated).unwrap();
 
         assert_eq!(record.node_id, "test-node");
         assert_eq!(record.children, children);
@@ -581,19 +581,19 @@ mod tests {
             node_id: "test-node".to_string(),
             children: children.clone(),
         };
-        let payload = bincode::serialize(&record).unwrap();
+        let payload = postcard::to_allocvec(&record).unwrap();
 
         let (key, value_bytes) = persy_to_redb_record(&payload).unwrap();
 
         assert_eq!(key, "test-node");
-        let recovered: Children = bincode::deserialize(&value_bytes).unwrap();
+        let recovered: Children = postcard::from_bytes(&value_bytes).unwrap();
         assert_eq!(recovered, children);
     }
 
     #[test]
     fn translation_is_pure_and_deterministic() {
         let children = make_test_children();
-        let bytes = bincode::serialize(&children).unwrap();
+        let bytes = postcard::to_allocvec(&children).unwrap();
 
         let result1 = redb_to_persy_payload("k", &bytes).unwrap();
         let result2 = redb_to_persy_payload("k", &bytes).unwrap();
@@ -604,10 +604,10 @@ mod tests {
     #[test]
     fn empty_children_translates_cleanly() {
         let empty: Children = BTreeMap::new();
-        let bytes = bincode::serialize(&empty).unwrap();
+        let bytes = postcard::to_allocvec(&empty).unwrap();
 
         let translated = redb_to_persy_payload("empty-node", &bytes).unwrap();
-        let record: NodeRecord = bincode::deserialize(&translated).unwrap();
+        let record: NodeRecord = postcard::from_bytes(&translated).unwrap();
 
         assert_eq!(record.node_id, "empty-node");
         assert!(record.children.is_empty());
@@ -653,9 +653,9 @@ mod tests {
             },
         );
 
-        let bytes = bincode::serialize(&children).unwrap();
+        let bytes = postcard::to_allocvec(&children).unwrap();
         let translated = redb_to_persy_payload("root", &bytes).unwrap();
-        let record: NodeRecord = bincode::deserialize(&translated).unwrap();
+        let record: NodeRecord = postcard::from_bytes(&translated).unwrap();
 
         assert_eq!(record.children, children);
         // Spot-check the Link variant — it's the one most likely to silently corrupt.
@@ -725,9 +725,9 @@ mod tests {
             },
         );
 
-        let bytes = bincode::serialize(&children).unwrap();
+        let bytes = postcard::to_allocvec(&children).unwrap();
         let translated = redb_to_persy_payload("k", &bytes).unwrap();
-        let record: NodeRecord = bincode::deserialize(&translated).unwrap();
+        let record: NodeRecord = postcard::from_bytes(&translated).unwrap();
 
         let keys: Vec<&String> = record.children.keys().collect();
         assert_eq!(keys, vec!["a", "m", "z"]); // BTreeMap ordering
