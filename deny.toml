@@ -1,39 +1,30 @@
 # cargo-deny configuration
 # https://embarkstudios.github.io/cargo-deny/
 
+[graph]
+targets = []
+
 [advisories]
-# Deny any RUSTSEC advisory
-vulnerability = "deny"
-unmaintained = "deny"
-yanked = "deny"
-notice = "warn"
-# Ignore advisory IDs here if needed (empty for now)
 ignore = []
 
 [licenses]
-# Allow standard permissive licenses
 allow = [
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
-    "Zlib",
+    "MPL-2.0",
 ]
 confidence-threshold = 0.8
 
 [bans]
-# Allow multiple versions (common in Rust, flag for awareness)
 multiple-versions = "warn"
 wildcards = "deny"
-# Highlight duplicate deps
 highlight = "all"
 
 [sources]
-# Only allow crates.io
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
