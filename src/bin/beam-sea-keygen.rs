@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! BEAM SEA Session Key Generator
 //!
 //! Generates a cryptographically random 32-byte master key for session encryption.
