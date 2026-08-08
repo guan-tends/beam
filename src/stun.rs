@@ -93,6 +93,7 @@ pub mod webrtc_stun {
     /// - Authentication (long-term credential mechanism)
     /// - Create-Permission for peer addresses
     /// - Allocation refresh / lifetime management
+    ///
     /// These are deferred to future work or managed by the caller.
     pub fn turn_allocate_request(
         local_socket: &UdpSocket,

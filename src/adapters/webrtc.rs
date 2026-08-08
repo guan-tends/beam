@@ -233,7 +233,6 @@ impl Actor for WebRtcPeer {
         ctx.child_task(async move {
             let mut buf = vec![0u8; 2000];
             let mut channel_id: Option<ChannelId> = None;
-            let mut connected = false;
             let mut pending: Option<str0m::change::SdpPendingOffer> = pending_offer;
 
             loop {
@@ -311,14 +310,14 @@ impl Actor for WebRtcPeer {
                         Ok(Output::Event(Event::IceConnectionStateChange(
                             IceConnectionState::Connected,
                         ))) => {
-                            connected = true;
+                            debug!("webrtc: ICE connected for peer {}", peer_id);
                         }
                         Ok(Output::Event(Event::IceConnectionStateChange(
                             IceConnectionState::Disconnected,
                         ))) => {
                             break;
                         }
-                        Ok(Output::Event(Event::ChannelOpen(cid, label))) => {
+                        Ok(Output::Event(Event::ChannelOpen(cid, _label))) => {
                             channel_id = Some(cid);
                             let hi = Message::Hi {
                                 from: own_addr.clone(),
@@ -465,14 +464,13 @@ impl Actor for WebRtcPeer {
                     if signal.to.as_ref() != Some(&self.peer_id) {
                         return;
                     }
-                    let r = tx.send(WrtcCommand::Signal(signal));
+                    let _ = tx.send(WrtcCommand::Signal(signal));
                 }
                 other => {
                     let text = other.to_string();
                     let _ = tx.send(WrtcCommand::Write(text.into_bytes()));
                 }
             }
-        } else {
         }
     }
 
