@@ -23,12 +23,22 @@ export class Beam {
      */
     connect(url: string): void;
     /**
+     * Reads the value at the given path once.
+     *
+     * Returns a `Promise` that resolves to the value (string) or `null`
+     * if not found within the timeout (default 66ms, matching Gun.js).
+     *
+     * ```js
+     * const val = await beam.get("chat.123");
+     * if (val) console.log("got:", val);
+     * ```
+     */
+    get(path: string): Promise<any>;
+    /**
      * Creates a new BEAM node with in-memory storage.
      *
      * Data is lost when the page reloads. For persistence, use
      * [`new_persistent()`](Self::new_persistent) instead.
-     *
-     * Call `connect()` to join a relay mesh, then `put()` / `get()` to read/write.
      */
     constructor();
     /**
@@ -37,26 +47,33 @@ export class Beam {
      * Data survives page reloads. The IndexedDB database opens
      * asynchronously — writes are buffered until the DB is ready,
      * then flushed automatically.
-     *
-     * ```js
-     * const beam = Beam.new_persistent();
-     * beam.connect("wss://relay.example.com/ws");
-     * beam.put("app.theme", "dark");
-     * // Reload page — "app.theme" is still "dark"
-     * ```
      */
     static new_persistent(): Beam;
     /**
-     * Writes a value to the graph at the given path.
+     * Subscribes to child updates at the given path.
      *
-     * The value is replicated to all connected peers. If no peers are
-     * connected yet, the value is stored locally and will sync when
-     * a connection is established.
+     * Uses Gun.js `.on()` semantics: the callback fires for each child
+     * value under the path, not just the path's own value. For example,
+     * `beam.on("chat", cb)` fires for each message written to
+     * `chat.<timestamp>`.
+     *
+     * The subscription lives until `stop()` is called or the `Beam`
+     * instance is dropped.
+     *
+     * ```js
+     * beam.on("chat", (value) => {
+     *   console.log("new message:", value);
+     * });
+     * ```
+     */
+    on(path: string, callback: Function): void;
+    /**
+     * Writes a string value to the graph at the given path.
      *
      * # Arguments
      *
-     * * `path` - Dot-separated path (e.g. `"users.alice.name"`)
-     * * `value` - Value to store (string, number, boolean, or null)
+     * * `path` - Dot-separated path (e.g. `"chat.123"`)
+     * * `value` - String to store
      */
     put(path: string, value: string): void;
     /**
@@ -77,27 +94,38 @@ export class Beam {
     stop(): void;
 }
 
+/**
+ * Entry point invoked by JavaScript in a worker.
+ */
+export function task_worker_entry_point(ptr: number): void;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_beam_free: (a: number, b: number) => void;
     readonly beam_connect: (a: number, b: number, c: number) => void;
+    readonly beam_get: (a: number, b: number, c: number) => number;
     readonly beam_new: () => number;
     readonly beam_new_persistent: () => number;
+    readonly beam_on: (a: number, b: number, c: number, d: number) => void;
     readonly beam_put: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly beam_put_bool: (a: number, b: number, c: number, d: number) => void;
     readonly beam_put_null: (a: number, b: number, c: number) => void;
     readonly beam_put_num: (a: number, b: number, c: number, d: number) => void;
     readonly beam_stop: (a: number) => void;
-    readonly __wasm_bindgen_func_elem_209: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_209_1: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_209_2: (a: number, b: number, c: number) => void;
+    readonly task_worker_entry_point: (a: number, b: number) => void;
+    readonly __wasm_bindgen_func_elem_1099: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_1113: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_233: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_233_2: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_233_3: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;
     readonly __wbindgen_export4: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export5: (a: number, b: number) => void;
+    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;
