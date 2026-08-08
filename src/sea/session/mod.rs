@@ -5,7 +5,7 @@
 //! trait defines the interface; two backends are provided:
 //!
 //! - [`InMemorySessionStorage`] — ephemeral, for testing and short-lived processes
-//! - [`EncryptedFileSessionStorage`] — production-grade, AES-256-GCM encrypted files
+//! - [`EncryptedFileSessionStorage`] — production-grade, AES-256-GCM encrypted files (native only)
 //!
 //! # Security
 //!
@@ -14,8 +14,10 @@
 //! file, or (3) auto-generated with an `ERROR`-level log. Files are stored
 //! with `0700` permissions on Unix.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod file;
 pub mod memory;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use file::EncryptedFileSessionStorage;
 pub use memory::InMemorySessionStorage;

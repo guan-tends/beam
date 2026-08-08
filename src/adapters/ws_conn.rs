@@ -27,7 +27,7 @@ use async_trait::async_trait;
 
 use futures_util::{TryStreamExt, future};
 use log::{debug, error, info};
-use std::time::Duration;
+use web_time::Duration;
 
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -95,17 +95,9 @@ impl Actor for WsConn {
             let _ = receiver
                 .try_for_each(|msg| {
                     if let Ok(s) = msg.to_text() {
-                        eprintln!("[WSCONN-DIAG] received {} bytes from wire", s.len());
-                        if s.len() < 5000 {
-                            eprintln!("[WSCONN-DIAG] content: {}", s);
-                        }
                         debug!("WsConn received: {}", s);
                         match Message::try_from(s, ctx2.addr.clone(), allow_public_space) {
                             Ok(msgs) => {
-                                eprintln!(
-                                    "[WSCONN-DIAG] parsed {} messages, forwarding to router",
-                                    msgs.len()
-                                );
                                 for msg in msgs.into_iter() {
                                     if ctx2.router.send(msg).is_err() {
                                         error!("failed to forward incoming message to router");
@@ -113,11 +105,7 @@ impl Actor for WsConn {
                                 }
                             }
                             Err(e) => {
-                                eprintln!(
-                                    "[WSCONN-DIAG] try_from FAILED — err: '{}' (len={})",
-                                    e,
-                                    s.len()
-                                );
+                                debug!("WsConn parse error: {} (len={})", e, s.len());
                             }
                         }
                     }
@@ -134,7 +122,7 @@ impl Actor for WsConn {
         // The remote peer should respond with its own Close frame, after
         // which the connection is fully closed. We use a timeout so a
         // non-responsive peer doesn't block shutdown.
-        let close_result = tokio::time::timeout(Duration::from_secs(2), self.sender.close()).await;
+        let close_result = crate::tokio_time::timeout(Duration::from_secs(2), self.sender.close()).await;
 
         match close_result {
             Ok(Ok(())) => debug!("WsConn Close frame acknowledged"),

@@ -31,7 +31,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// A bounded, TTL-based deduplication tracker matching Gun.js `dup.js`.
 ///

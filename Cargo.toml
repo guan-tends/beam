@@ -12,45 +12,59 @@ rust-version = "1.85"
 authors = ["Martti Malmi <martti@mmalmi.org>", "David Newman <david.r.newman@proton.me>"]
 keywords = ["p2p", "graph-database", "distributed", "sync", "websocket"]
 categories = ["database", "network-programming", "asynchronous"]
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
 name = "beam"
 crate-type = ["cdylib", "rlib"]
 
+# ─── Cross-platform deps (compile on both native + WASM) ───
 [dependencies]
-redb = "4.1"
-persy = { version = "1.8", features = ["background_ops"], optional = true }
+web-time = "0.2"
 serde = { version =  "1.0", features = ["derive"] }
 serde_json = "1.0.64"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 rand = "0.9"
-clap = { version = "4.6", features = ["derive", "env"] }
 futures-util = "0.3.21"
-tokio = { version = "1.17.0", features = ["full"] }
-tokio-stream = "0.1.8"
 async-trait = "0.1.51"
-env_logger = "0.11"
 log = "0.4.14"
-tokio-tungstenite = { version = "0.30", features=["native-tls"] }
-warp = { version = "0.4.3", features = ["server"] }
 url = "2.2.2"
-oko-multicast-socket = { version = "0.5", features = ["tokio"] }
 thiserror = "2.0"
 bytes = "1.1.0"
-tokio-native-tls = "0.3.0"
 size_format = "1.0.2"
 zeroize = "1.7"
-dirs = "6.0"
-parking_lot = "0.12"
-java-utils = "0.1.0"
 base64 = "0.22"
+java-utils = "0.1.0"
 p256 = { version = "0.14", features = ["ecdh", "getrandom"] }
 aes-gcm = "0.10"
 pbkdf2 = "0.13"
 sha2 = "0.11"
+parking_lot = "0.12"
+
+# ─── Native-only deps (gated out on WASM) ───
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.17.0", features = ["full"] }
+tokio-stream = "0.1.8"
+tokio-tungstenite = { version = "0.30", features=["native-tls"] }
+tokio-native-tls = "0.3.0"
+warp = { version = "0.4.3", features = ["server"] }
+oko-multicast-socket = { version = "0.5", features = ["tokio"] }
+redb = "4.1"
+persy = { version = "1.8", features = ["background_ops"], optional = true }
+clap = { version = "4.6", features = ["derive", "env"] }
+env_logger = "0.11"
+dirs = "6.0"
+# dev-dep: criterion is native-only (tokio runtime + threads don't work on WASM)
+criterion = { version = "0.8", features=["async_futures", "async_tokio", "html_reports"] }
 str0m = { version = "0.21", optional = true }
 stun = { version = "0.17", optional = true }
+
+# ─── WASM-only deps ───
+[target.wasm32-unknown-unknown.dependencies]
+tokio = { version = "1.17.0", default-features = false, features = ["rt", "sync", "macros"] }
+tokio_with_wasm = { version = "0.8", features = ["time", "rt", "sync", "macros"] }
+getrandom = { version = "0.2", features = ["js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [features]
 default = []
@@ -58,9 +72,8 @@ webrtc = ["dep:str0m", "dep:stun"]
 persy = ["dep:persy"]
 
 [dev-dependencies]
-criterion = { version = "0.8", features=["async_futures", "async_tokio", "html_reports"] }
 
-[[bench]]
+[target.'cfg(not(target_arch = "wasm32"))'.bench]
 name = "my_benchmark"
 harness = false
 
@@ -77,3 +90,46 @@ opt-level = 3
 strip = true
 lto = true
 codegen-units = 1
+
+# WASM-only extras for browser adapters
+[target.wasm32-unknown-unknown.dependencies.web-sys]
+version = "0.3"
+features = [
+    "WebSocket",
+    "console",
+    "MessageEvent",
+    "ErrorEvent",
+    "CloseEvent",
+    "Window",
+    "IdbFactory",
+    "Event",
+    "EventTarget",
+    "IdbDatabase",
+    "IdbObjectStore",
+    "IdbTransaction",
+    "IdbRequest",
+    "IdbObjectStoreParameters",
+    "IdbTransactionMode",
+    "IdbVersionChangeEvent",
+    "IdbOpenDbRequest",
+    "DomStringList",
+]
+
+[target.wasm32-unknown-unknown.dependencies.wasm-bindgen]
+version = "0.2"
+
+[target.wasm32-unknown-unknown.dependencies.js-sys]
+version = "0.3"
+
+[target.wasm32-unknown-unknown.dependencies.wasm-bindgen-futures]
+version = "0.4"
+
+[target.wasm32-unknown-unknown.dependencies.console_error_panic_hook]
+version = "0.1"
+
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[target.wasm32-unknown-unknown.dev-dependencies]
+wasm-bindgen-test = "0.3"

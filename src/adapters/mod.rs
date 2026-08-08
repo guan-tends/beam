@@ -6,7 +6,7 @@
 //! # Storage Adapters
 //!
 //! - [`MemoryStorage`] — in-memory `HashMap`-backed storage (default)
-//! - [`RedbStorage`] — persistent embedded storage via [`redb`]
+//! - [`RedbStorage`] — persistent embedded storage via [`redb`] (native only)
 //!
 //! # Storage Read/Write Split
 //!
@@ -23,10 +23,10 @@
 //!
 //! # Network Adapters
 //!
-//! - [`OutgoingWebsocketManager`] — outgoing WebSocket client manager
-//! - [`WsServer`] — incoming WebSocket server with optional TLS
-//! - [`WsConn`] — per-connection WebSocket actor (used by both client and server)
-//! - [`Multicast`] — UDP multicast LAN discovery
+//! - [`OutgoingWebsocketManager`] — outgoing WebSocket client manager (native only)
+//! - [`WsServer`] — incoming WebSocket server with optional TLS (native only)
+//! - [`WsConn`] — per-connection WebSocket actor (native only)
+//! - [`Multicast`] — UDP multicast LAN discovery (native only)
 //! - [`WebRtcPeer`] — WebRTC data channel P2P connection (feature-gated)
 //!
 //! # Adapter Protocol
@@ -38,24 +38,59 @@
 //! forwarding to remote peers.
 
 mod memory_storage;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod multicast;
+
 #[cfg(feature = "persy")]
 pub mod persy_storage;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod redb_storage;
+
 #[cfg(feature = "webrtc")]
 mod webrtc;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod ws_client;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod ws_conn;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod ws_server;
 
+#[cfg(target_arch = "wasm32")]
+mod wasm_ws;
+
+#[cfg(target_arch = "wasm32")]
+mod wasm_idb;
+
 pub use memory_storage::MemoryStorage;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use multicast::Multicast;
+
 #[cfg(feature = "persy")]
 pub use persy_storage::PersyStorage;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use redb_storage::RedbStorage;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use ws_client::OutgoingWebsocketManager;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use ws_conn::WsConn;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use ws_server::{WsServer, WsServerConfig};
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm_ws::WasmWsConn;
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm_idb::WasmIdbStorage;
 
 #[cfg(feature = "webrtc")]
 pub use webrtc::{WebRtcPeer, WebRtcRole};

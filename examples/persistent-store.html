@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BEAM Persistent KV Store</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+    input { padding: 0.5rem; margin: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>BEAM Persistent Key-Value Store</h1>
+  <p>Write values, reload the page — they persist via IndexedDB.</p>
+
+  <div>
+    <input id="key" placeholder="key (e.g. app.theme)" />
+    <input id="value" placeholder="value" />
+    <button id="set">Set</button>
+  </div>
+
+  <div style="margin-top: 1rem">
+    <input id="getkey" placeholder="key to read" />
+    <button id="get">Get</button>
+    <span id="result"></span>
+  </div>
+
+  <h3>Live Updates</h3>
+  <table id="data">
+    <tr><th>Key</th><th>Value</th></tr>
+  </table>
+
+  <script type="module">
+    import init, { Beam } from "./pkg/beam.js";
+    await init();
+
+    const beam = new Beam.new_persistent();
+    beam.connect("ws://localhost:4944");
+
+    // Subscribe to all updates at the root level
+    beam.on("", (value) => {
+      const row = document.getElementById("data").insertRow();
+      row.insertCell().textContent = "update";
+      row.insertCell().textContent = value;
+    });
+
+    document.getElementById("set").onclick = () => {
+      const key = document.getElementById("key").value;
+      const value = document.getElementById("value").value;
+      beam.put(key, value);
+
+      const row = document.getElementById("data").insertRow();
+      row.insertCell().textContent = key;
+      row.insertCell().textContent = value;
+    };
+
+    document.getElementById("get").onclick = async () => {
+      const key = document.getElementById("getkey").value;
+      const result = await beam.get(key);
+      document.getElementById("result").textContent = result ?? "(not found)";
+    };
+  </script>
+</body>
+</html>
