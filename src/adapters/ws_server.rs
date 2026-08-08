@@ -203,8 +203,7 @@ impl WsServer {
                 peer_id
             )
         } else {
-            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                .to_string()
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
         };
 
         let _ = stream.write_all(response.as_bytes()).await;
@@ -236,14 +235,21 @@ impl WsServer {
             0
         }
     }
-
 }
 
 #[async_trait]
 impl Actor for WsServer {
     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
         let client_count = self.clients.read().await.len();
-        eprintln!("[WSSERVER-DIAG] handle called with {} clients, msg type: {}", client_count, match &msg { Message::Put(_) => "Put", Message::Get(_) => "Get", _ => "Other" });
+        eprintln!(
+            "[WSSERVER-DIAG] handle called with {} clients, msg type: {}",
+            client_count,
+            match &msg {
+                Message::Put(_) => "Put",
+                Message::Get(_) => "Get",
+                _ => "Other",
+            }
+        );
         for conn in self.clients.read().await.iter() {
             if msg.is_from(conn) {
                 eprintln!("[WSSERVER-DIAG] skipping msg.from == conn");
@@ -266,7 +272,6 @@ impl Actor for WsServer {
         ctx.child_task(async move {
             Self::start_web_server(config_clone, peer_id).await;
         });
-
 
         // Create the TCP listener
         let try_socket = TcpListener::bind(&addr).await;

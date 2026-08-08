@@ -44,7 +44,7 @@
 use beam::adapters::{OutgoingWebsocketManager, WsServer, WsServerConfig};
 use beam::{Config, Node, Value};
 use tokio::net::TcpStream;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{Duration, sleep, timeout};
 
 /// Poll a TCP port until it accepts connections or the timeout elapses.
 ///
@@ -78,23 +78,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_a = Config::default();
     let ws_server = WsServer::new_with_config(
         config_a.clone(),
-        WsServerConfig { port, ..WsServerConfig::default() },
+        WsServerConfig {
+            port,
+            ..WsServerConfig::default()
+        },
     );
-    let mut node_a = Node::new_with_config(
-        config_a,
-        vec![],
-        vec![Box::new(ws_server.clone())],
-    );
+    let mut node_a = Node::new_with_config(config_a, vec![], vec![Box::new(ws_server.clone())]);
 
     // --- Node B: client ---
     // Connects to Node A's WsServer. The OutgoingWebsocketManager handles
     // reconnection automatically with exponential backoff.
     let ws_client = OutgoingWebsocketManager::new(Config::default(), vec![url]);
-    let mut node_b = Node::new_with_config(
-        Config::default(),
-        vec![],
-        vec![Box::new(ws_client)],
-    );
+    let mut node_b = Node::new_with_config(Config::default(), vec![], vec![Box::new(ws_client)]);
 
     // Wait for the server's TCP listener to be ready, then wait for
     // the client to complete the WebSocket handshake.

@@ -41,7 +41,10 @@ async fn quickstart_put_subscribe() {
     let mut db = Node::new();
     let mut sub = db.get("greeting").on();
 
-    db.get("greeting").put(Value::Text("hello".into())).await.unwrap();
+    db.get("greeting")
+        .put(Value::Text("hello".into()))
+        .await
+        .unwrap();
 
     let value = timeout(Duration::from_secs(3), sub.recv())
         .await
@@ -59,8 +62,14 @@ async fn nested_graph_map() {
     let mut db = Node::new();
 
     db.batch_put(vec![
-        (vec!["users".into(), "alice".into()], Value::Text("admin".into())),
-        (vec!["users".into(), "bob".into()], Value::Text("user".into())),
+        (
+            vec!["users".into(), "alice".into()],
+            Value::Text("admin".into()),
+        ),
+        (
+            vec!["users".into(), "bob".into()],
+            Value::Text("user".into()),
+        ),
     ])
     .await
     .unwrap();
@@ -129,7 +138,9 @@ async fn encrypt_decrypt_roundtrip() {
     // Sign + verify
     let payload = serde_json::json!({ "message": "Hello from Alice!" });
     let signed = sea::sign(&payload, &alice).await.expect("sign failed");
-    let verified = sea::verify(&signed, &alice.pub_key).await.expect("verify failed");
+    let verified = sea::verify(&signed, &alice.pub_key)
+        .await
+        .expect("verify failed");
     assert_eq!(verified, payload);
 
     // Verify with wrong key — must fail
@@ -148,8 +159,12 @@ async fn encrypt_decrypt_roundtrip() {
 
     // Symmetric encrypt + decrypt
     let sym_key = [0u8; 32];
-    let sym_enc = sea::encrypt_symmetric(&payload, &sym_key).await.expect("sym encrypt failed");
-    let sym_dec = sea::decrypt_symmetric(&sym_enc, &sym_key).await.expect("sym decrypt failed");
+    let sym_enc = sea::encrypt_symmetric(&payload, &sym_key)
+        .await
+        .expect("sym encrypt failed");
+    let sym_dec = sea::decrypt_symmetric(&sym_enc, &sym_key)
+        .await
+        .expect("sym decrypt failed");
     assert_eq!(sym_dec, payload);
 }
 

@@ -25,11 +25,11 @@
 //! ```
 
 use super::{SeaError, WorkOptions};
+use base64::prelude::*;
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use base64::prelude::*;
 
 /// Compute proof-of-work or content hash.
 ///

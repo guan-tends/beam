@@ -23,11 +23,11 @@
 //! assert!(pair.epriv_key.is_some());
 
 use super::{KeyPair, SeaError};
+use base64::prelude::*;
 use p256::ecdsa::{SigningKey, VerifyingKey};
+use p256::elliptic_curve::Generate;
 use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey as EcdhPublicKey, SecretKey};
-use p256::elliptic_curve::Generate;
-use base64::prelude::*;
 
 /// Generate a new ECDSA + ECDH key pair.
 ///
@@ -124,7 +124,10 @@ mod tests {
         for part in &parts {
             assert!(!part.is_empty(), "pub_key components should not be empty");
             assert!(!part.contains('='), "pub_key should use base64 no-pad");
-            assert!(!part.contains('+') && !part.contains('/'), "pub_key should use URL-safe base64");
+            assert!(
+                !part.contains('+') && !part.contains('/'),
+                "pub_key should use URL-safe base64"
+            );
         }
     }
 

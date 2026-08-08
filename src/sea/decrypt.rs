@@ -8,8 +8,8 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
 };
-use serde_json::Value;
 use base64::prelude::*;
+use serde_json::Value;
 
 /// Decrypt data using AES-256-GCM
 ///
@@ -38,13 +38,16 @@ pub async fn decrypt(
         .ok_or_else(|| SeaError::Decryption("missing s".to_string()))?;
 
     // Decode from base64
-    let ciphertext = BASE64_URL_SAFE_NO_PAD.decode(ct)
+    let ciphertext = BASE64_URL_SAFE_NO_PAD
+        .decode(ct)
         .map_err(|_| SeaError::Decryption("invalid ct base64".to_string()))?;
 
-    let nonce_bytes = BASE64_URL_SAFE_NO_PAD.decode(iv)
+    let nonce_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(iv)
         .map_err(|_| SeaError::Decryption("invalid iv base64".to_string()))?;
 
-    let salt_bytes = BASE64_URL_SAFE_NO_PAD.decode(s)
+    let salt_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(s)
         .map_err(|_| SeaError::Decryption("invalid s base64".to_string()))?;
 
     // Clone data for spawn_blocking closure
@@ -164,10 +167,12 @@ pub async fn decrypt_symmetric(encrypted: &Value, key: &[u8]) -> Result<Value, S
         .and_then(|v| v.as_str())
         .ok_or_else(|| SeaError::Decryption("missing iv".to_string()))?;
 
-    let ciphertext = BASE64_URL_SAFE_NO_PAD.decode(ct)
+    let ciphertext = BASE64_URL_SAFE_NO_PAD
+        .decode(ct)
         .map_err(|_| SeaError::Decryption("invalid ct base64".to_string()))?;
 
-    let nonce_bytes = BASE64_URL_SAFE_NO_PAD.decode(iv)
+    let nonce_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(iv)
         .map_err(|_| SeaError::Decryption("invalid iv base64".to_string()))?;
 
     let key_owned = key.to_vec();

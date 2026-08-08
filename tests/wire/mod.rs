@@ -165,7 +165,10 @@ pub fn run_fixture(fixture: &WireFixture, from: Addr, allow_public_space: bool) 
     }
 
     let messages = result.unwrap_or_else(|e| {
-        panic!("[{}] expected parse success but got error: {e}", fixture.name)
+        panic!(
+            "[{}] expected parse success but got error: {e}",
+            fixture.name
+        )
     });
 
     // An empty array yields an empty vec — valid if the fixture has no
@@ -216,7 +219,12 @@ pub fn run_fixture(fixture: &WireFixture, from: Addr, allow_public_space: bool) 
         if !fixture.expected.souls.is_empty() {
             assert_eq!(
                 actual_souls.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                fixture.expected.souls.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                fixture
+                    .expected
+                    .souls
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>(),
                 "[{}] souls mismatch",
                 fixture.name
             );
@@ -230,7 +238,10 @@ pub fn run_fixture(fixture: &WireFixture, from: Addr, allow_public_space: bool) 
             let actual_fields: Vec<&String> = children.keys().collect();
             assert_eq!(
                 actual_fields.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                expected_fields.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                expected_fields
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>(),
                 "[{}] fields mismatch for soul {soul}",
                 fixture.name
             );

@@ -16,12 +16,12 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
 };
 use async_trait::async_trait;
+use base64::prelude::*;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use base64::prelude::*;
 
 #[derive(Serialize, Deserialize)]
 struct SessionFile {
@@ -286,9 +286,11 @@ impl SessionStorage for EncryptedFileSessionStorage {
             return Ok(None);
         }
 
-        let ciphertext = BASE64_URL_SAFE_NO_PAD.decode(&session_file.ct)
+        let ciphertext = BASE64_URL_SAFE_NO_PAD
+            .decode(&session_file.ct)
             .map_err(|_| SeaError::SessionStorage("bad ct".to_string()))?;
-        let nonce = BASE64_URL_SAFE_NO_PAD.decode(&session_file.iv)
+        let nonce = BASE64_URL_SAFE_NO_PAD
+            .decode(&session_file.iv)
             .map_err(|_| SeaError::SessionStorage("bad iv".to_string()))?;
 
         // Decrypt in spawn_blocking
