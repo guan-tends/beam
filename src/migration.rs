@@ -24,7 +24,7 @@
 //! full design rationale.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use web_time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -222,7 +222,7 @@ pub fn persy_to_redb_record(payload: &[u8]) -> Result<(String, Vec<u8>), Migrate
 #[cfg(feature = "persy")]
 pub(crate) mod io {
     use super::*;
-    use std::time::Instant;
+    use web_time::Instant;
 
     use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 

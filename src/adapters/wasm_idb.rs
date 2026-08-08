@@ -408,8 +408,8 @@ impl WasmIdbStorage {
             "_ack".to_string(),
             NodeData {
                 value: Value::Text("ok".to_string()),
-                updated_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                updated_at: web_time::SystemTime::now()
+                    .duration_since(web_time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as f64,
             },
@@ -475,8 +475,8 @@ impl WasmIdbStorage {
             "_ack".to_string(),
             NodeData {
                 value: Value::Text("ok".to_string()),
-                updated_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                updated_at: web_time::SystemTime::now()
+                    .duration_since(web_time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as f64,
             },
@@ -529,8 +529,8 @@ impl Actor for WasmIdbStorage {
                     "_flushed".to_string(),
                     NodeData {
                         value: Value::Text("true".to_string()),
-                        updated_at: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
+                        updated_at: web_time::SystemTime::now()
+                            .duration_since(web_time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis() as f64,
                     },

@@ -16,16 +16,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Browser WebSocket adapter (`wasm_ws.rs`) using `web-sys::WebSocket`
 - IndexedDB persistent storage adapter (`wasm_idb.rs`) with write-through cache
 - JavaScript bindings (`wasm.rs`) via `wasm-bindgen`:
-  - `Beam` struct with `new()`, `connect()`, `put()`, `put_num()`, `put_bool()`, `put_null()`, `stop()`
+  - `Beam` struct with `new()`, `new_persistent()`, `connect()`, `put()`, `put_num()`, `put_bool()`, `put_null()`, `get()`, `on()`, `stop()`
+  - `put()` — fire-and-forget write via `wasm_bindgen_futures::spawn_local`
+  - `get()` — returns a JS `Promise` via `future_to_promise` (reads value once with timeout)
+  - `on(path, callback)` — real-time subscription, invokes JS callback on each received value
   - TypeScript definitions auto-generated
-- `wasm-pack build --target web --release` produces a 419KB deployable package
+- `wasm-pack build --target web --release` produces a deployable package
 - Cargo.toml target-gated: native-only deps (redb, Persy, tokio-tungstenite, multicast) excluded on WASM
 - `connect_peer_wasm()` method on `Node` (cfg-gated to `wasm32`)
+- `tokio_time` shim module — re-exports `tokio::time` on native, `tokio_with_wasm::time` on WASM
 - Full SEA crypto stack (P-256, AES-256-GCM, SHA-256, PBKDF2) compiles to WASM with zero source changes
 
 ### Changed
 - `Cargo.toml`: split into `[dependencies]`, `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`, and `[target.wasm32-unknown-unknown.dependencies]`
 - 12 source files cfg-gated to separate native-only from WASM-compatible code
+- `std::time` → `web_time` across all shared source files (uses `performance.now()` / `Date.now()` on WASM)
+- Tokio `time` feature excluded on WASM — timer functions provided by `tokio_with_wasm` via `tokio_time` shim
+- Quorum reaper task cfg-gated to native only (browser nodes are leaf clients, don't manage quorums)
 - `web-sys` features: WebSocket, MessageEvent, ErrorEvent, CloseEvent, Window, IdbFactory, IdbDatabase, IdbObjectStore, IdbTransaction, IdbTransactionMode, IdbRequest, IdbOpenDbRequest, IdbVersionChangeEvent, Event, EventTarget
 
 ### Key Findings
@@ -33,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tokio::spawn` works on WASM via `rt` feature — no `spawn_task()` abstraction needed
 - JS `Closure` types are `!Send` — solved by leaking closures to the JS heap (same pattern as `WasmWsConn`)
 - `wasm-opt` disabled due to bulk memory validation bug in old binary
+- Three WASM runtime gotchas discovered and fixed:
+  1. **Panic hook** — Rust panics show cryptic offsets without `console_error_panic_hook` (add first)
+  2. **Tokio runtime context** — `tokio::spawn()` compiles but panics without runtime context (fix: `OnceLock<Runtime>` + `enter()` guard)
+  3. **`std::time` and tokio `time` feature** — both panic on `wasm32-unknown-unknown` (fix: `web-time` crate + `tokio_with_wasm` for timer functions)
+- Pattern: `cargo check --target wasm32` passing ≠ runtime working. Std/tokio stubs compile but panic at runtime
 
 
 ## [0.9.1] — 2026-08-08 — Multicast Message Chunking

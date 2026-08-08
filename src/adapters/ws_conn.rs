@@ -27,7 +27,7 @@ use async_trait::async_trait;
 
 use futures_util::{TryStreamExt, future};
 use log::{debug, error, info};
-use std::time::Duration;
+use web_time::Duration;
 
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -134,7 +134,7 @@ impl Actor for WsConn {
         // The remote peer should respond with its own Close frame, after
         // which the connection is fully closed. We use a timeout so a
         // non-responsive peer doesn't block shutdown.
-        let close_result = tokio::time::timeout(Duration::from_secs(2), self.sender.close()).await;
+        let close_result = crate::tokio_time::timeout(Duration::from_secs(2), self.sender.close()).await;
 
         match close_result {
             Ok(Ok(())) => debug!("WsConn Close frame acknowledged"),

@@ -58,7 +58,7 @@
 //!
 //! Adding `__quorum_met__` keeps the drain plumbing DRY — the same
 //! `pending_puts: Arc<RwLock<HashMap<String, oneshot::Sender<...>>>>` map
-//! and `tokio::time::timeout` envelope that [`Node::put`](crate::Node::put)
+//! and `crate::tokio_time::timeout` envelope that [`Node::put`](crate::Node::put)
 //! uses are reused for [`Node::put_quorum`](crate::Node::put_quorum).
 //! Only the *decoder* differs: instead of looking for `_ack`/`_err`,
 //! `put_quorum` looks for `__quorum_met__`.
@@ -88,7 +88,7 @@
 //!   matching the `_ack`/`_err` convention
 //! - **No new dependency** — uses existing `std`, `tokio`
 
-use std::time::Duration;
+use web_time::Duration;
 
 /// Reserved sentinel key emitted by the Router when quorum threshold is met.
 ///
@@ -245,7 +245,7 @@ mod tests {
     //! private to the router module.
 
     use super::*;
-    use std::time::Duration;
+    use web_time::Duration;
 
     #[test]
     fn policy_any_quorum_is_one() {

@@ -54,7 +54,7 @@ use oko_multicast_socket::{MulticastOptions, MulticastSocket, all_ipv4_interface
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::Config;
 use crate::actor::{Actor, ActorContext};

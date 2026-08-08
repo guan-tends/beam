@@ -60,8 +60,8 @@ pub fn verify_certificate(
     let payload = super::verify::verify_sync(signed_cert, authority_pubkey)?;
 
     if let Some(expiry) = payload.get("e").and_then(|e| e.as_f64()) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as f64;
         if expiry < now {

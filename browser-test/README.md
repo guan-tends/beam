@@ -110,27 +110,21 @@ import init, { Beam } from "./beam.js";
 await init();
 
 // Create a BEAM node
-const beam = new Beam();                        // in-memory (lost on reload)
-// or: const beam = new Beam.new_persistent();   // IndexedDB (survives reload)
+const beam = new Beam();                  // in-memory (lost on reload)
+// or: const beam = Beam.new_persistent();       // IndexedDB (survives reload)
 
 // Connect to a relay server
 beam.connect("wss://relay.example.com/ws");
 
-// Write data (fire-and-forget, dot-separated paths)
+// Write data (dot-separated paths)
 beam.put("users.alice.name", "Alice");
-beam.put_num("users.alice.age", 30);     // numeric
-beam.put_bool("users.alice.active", true); // boolean
+beam.put("users.alice.age", 30);        // numeric
+beam.put("users.alice.active", true);    // boolean
 beam.put_null("users.alice.deleted");    // explicit null
 
-// Read once (returns a Promise)
-const name = await beam.get("users.alice.name");  // "Alice"
-
-// Subscribe to updates at a path
-beam.on("users.alice.name", (value) => {
-  console.log("name changed:", value);
-});
-
 // Data syncs to all connected peers in real time.
+// Reload the page — data persists via IndexedDB.
+
 // Stop the node and close connections
 beam.stop();
 ```
@@ -156,13 +150,6 @@ beam.stop();
     const beam = new Beam();
     beam.connect("wss://relay.example.com/ws");
 
-    // Receive messages — callback fires on each new value
-    beam.on("chat", (value) => {
-      const div = document.createElement("div");
-      div.textContent = value;
-      document.getElementById("messages").appendChild(div);
-    });
-
     document.getElementById("send").onclick = () => {
       const text = document.getElementById("msg").value;
       const ts = Date.now();
@@ -180,16 +167,13 @@ beam.stop();
 import init, { Beam } from "./beam.js";
 await init();
 
-const beam = new Beam.new_persistent();
+const beam = Beam.new_persistent();
 beam.connect("wss://relay.example.com/ws");
 
 // Writes survive page reload via IndexedDB
 beam.put("app.settings.theme", "dark");
-beam.put_num("app.settings.fontSize", 14);
+beam.put("app.settings.fontSize", 14);
 beam.put_bool("app.settings.notifications", true);
-
-// Read back (returns a Promise)
-const theme = await beam.get("app.settings.theme");  // "dark"
 
 // Multi-user: each browser sees the same data via the relay
 // beam.put("shared.todo.1", "Buy milk");
@@ -415,7 +399,7 @@ BEAM is built on an actor model with a central router. Every component — stora
 | `adapters/webrtc.rs` | WebRTC data channel P2P via `str0m` — ICE/DTLS/SCTP, STUN discovery, TURN relay (feature-gated) |
 | `adapters/wasm_ws.rs` | Browser WebSocket adapter (WASM only) — `web-sys::WebSocket` for relay connections from browser nodes |
 | `adapters/wasm_idb.rs` | IndexedDB persistent storage (WASM only) — write-through cache + async IndexedDB for browser persistence |
-| `wasm.rs` | JavaScript bindings (WASM only) — `#[wasm_bindgen]` exports: `Beam` struct with `connect()`, `put()`, `get()`, `on()`, `stop()` |
+| `wasm.rs` | JavaScript bindings (WASM only) — `#[wasm_bindgen]` exports: `Beam` struct with `connect()`, `put()`, `stop()` |
 | `stun.rs` | STUN Binding Request + TURN Allocate Request helpers (feature-gated) |
 | `main.rs` | CLI entry point: clap argument parsing, adapter configuration, signal-based graceful shutdown (SIGINT + SIGTERM) |
 | `bin/beam-sea-keygen.rs` | Utility binary: generates 32-byte random session key (base64-encoded) |
@@ -912,7 +896,7 @@ cargo test --test wire_live -- --ignored  # Layer 3: live integration (needs Nod
 
 Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (functions return `None`). Without `persy`, the `PersyStorage` adapter is not compiled in and migration to/from Persy is unavailable.
 
-**WASM**: When targeting `wasm32-unknown-unknown`, native-only modules (redb, Persy, tokio-tungstenite, multicast) are cfg-gated out. Browser adapters (`wasm_ws`, `wasm_idb`) are compiled in. Timer functions (`sleep`, `timeout`, `interval`) are provided by `tokio_with_wasm` via the `tokio_time` shim module instead of tokio's `time` feature (which panics on WASM). The `wasm.rs` module provides `#[wasm_bindgen]` JavaScript bindings. Build with `wasm-pack build --target web --release`.
+**WASM**: When targeting `wasm32-unknown-unknown`, native-only modules (redb, Persy, tokio-tungstenite, multicast) are cfg-gated out. Browser adapters (`wasm_ws`, `wasm_idb`) are compiled in. The `wasm.rs` module provides `#[wasm_bindgen]` JavaScript bindings. Build with `wasm-pack build --target web --release`.
 
 ---
 
