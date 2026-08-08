@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-08-08 — Multicast Message Chunking
+
+Application-layer chunking for the UDP multicast adapter. Messages exceeding
+the safe UDP datagram size (~1400 bytes) are now transparently split into
+chunked JSON envelopes and reassembled by the receiver, preventing IP
+fragmentation and enabling multicast to relay large `Put` messages.
+
+### Added
+
+- **Multicast chunking protocol:** Messages > `MAX_DATAGRAM_SIZE` (1400 bytes)
+  are split into `CHUNK_PAYLOAD_SIZE` (900 byte) fragments, each wrapped in a
+  `{"beam_chunk":{"id","seq","total","data"}}` JSON envelope. The receiver's
+  `ReassemblyBuffer` collects chunks by message ID and reassembles when all
+  arrive. Supports out-of-order delivery, duplicate detection, concurrent
+  message reassembly, and timeout-based eviction (5s) with a 64-slot capacity
+  cap.
+- **18 unit tests** for chunking and reassembly: round-trip, out-of-order,
+  duplicate, concurrent, timeout, eviction, threshold boundary, empty
+  message, invalid base64, total mismatch, seq out of bounds.
+
+### Changed
+
+- `Multicast::handle_incoming_message` now accepts a `&mut ReassemblyBuffer`
+  parameter and handles both raw messages (backward compatible) and chunk
+  envelopes. Existing message flow unchanged for small messages.
+- `Multicast::handle` uses `broadcast_message` helper that chunks large
+  messages before sending.
+- Extracted `forward_message` helper to avoid code duplication between
+  direct-parse and reassembly-complete paths.
+
+
 ## [0.9.0] — 2026-08-08 — Enterprise-Grade Release
 
 15 dependency modernization sprints across 3 tiers, eliminating 5 dependencies
