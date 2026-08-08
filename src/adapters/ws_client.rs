@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_tungstenite::connect_async;
-use url::Url;
 
 use crate::Config;
 use crate::actor::{Actor, ActorContext, Addr};
@@ -113,18 +112,11 @@ impl Actor for OutgoingWebsocketManager {
                 }
 
                 debug!("attempting WebSocket connect to {}", url);
-                let result = connect_async(
-                    Url::parse(url).expect("invalid WebSocket URL"),
-                )
-                .await;
+                let result = connect_async(url).await;
 
                 if let Ok((socket, _)) = result {
                     let (sender, receiver) = socket.split();
-                    let client = WsConn::new(
-                        sender,
-                        receiver,
-                        self.config.allow_public_space,
-                    );
+                    let client = WsConn::new(sender, receiver, self.config.allow_public_space);
                     let addr = ctx.start_actor(Box::new(client));
                     self.clients.write().await.insert(url.clone(), addr);
                     debug!("connected to {}", url);
@@ -154,7 +146,7 @@ impl Actor for OutgoingWebsocketManager {
         // periodically. This keeps `handle` simple and avoids
         // priority inversion under load.
         let snapshot: Vec<Addr> = self.clients.read().await.values().cloned().collect();
-                for client in snapshot {
+        for client in snapshot {
             let _ = client.send(message.clone());
         }
     }

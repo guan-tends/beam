@@ -322,9 +322,9 @@ pub async fn sign_value(data: &JsonValue, pair: &KeyPair) -> Result<BeamValue, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::prelude::*;
     use crate::sea::session::InMemorySessionStorage;
-    
+    use base64::prelude::*;
+
     use serde_json::json;
 
     #[tokio::test]

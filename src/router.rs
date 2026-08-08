@@ -46,14 +46,14 @@
 //! 2. Ack + hash (`@` + `##` fields) — deduplicates identical responses
 
 use crate::Dup;
-use crate::actor::{Actor, ActorContext, Addr};
 use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL};
+use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::types::{Children, NodeData, Value};
-use crate::utils::{try_send_or_log, BoundedHashMap};
+use crate::utils::{BoundedHashMap, try_send_or_log};
 use async_trait::async_trait;
 use log::{debug, error, info};
-use rand::{seq::IteratorRandom, thread_rng};
+use rand::{rng, seq::IteratorRandom};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -288,7 +288,7 @@ impl Actor for Router {
             Message::Get(get) => self.handle_get(get),
             Message::Flush(flush) => self.handle_flush(flush),
             Message::Hi { from, peer_id } => {
-                                self.known_peers.insert(from.clone());
+                self.known_peers.insert(from.clone());
                 if !peer_id.is_empty() {
                     if let Some(existing) = self.peer_addrs.get(&peer_id) {
                         if existing != &from {
@@ -441,7 +441,7 @@ impl Router {
         // Ask network subscribers
         let mut errored = HashSet::new();
         let mut sent_to = 0;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         if let Some(topic_subscribers) = self.subscribers_by_topic.get(topic) {
             let sample = topic_subscribers.iter().choose_multiple(&mut rng, 4);
             for addr in sample {
@@ -555,10 +555,7 @@ impl Router {
                             put.from.clone(),
                         );
                         reply.in_response_to = Some(in_response_to.clone());
-                        debug!(
-                            "quorum met for {} ({} acks)",
-                            in_response_to, count
-                        );
+                        debug!("quorum met for {} ({} acks)", in_response_to, count);
                         try_send_or_log(
                             &entry.requester,
                             Message::Put(reply),
@@ -609,18 +606,18 @@ impl Router {
     /// in the hop list are skipped.
     fn handle_put_relay(&mut self, put: &Put) {
         // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
-                let mut hops = put.peer_hop_list.clone().unwrap_or_default();
+        let mut hops = put.peer_hop_list.clone().unwrap_or_default();
         hops.insert(put.from.to_string());
         let mut already_sent_to = HashSet::new();
 
         // Send to server peers
         for addr in self.server_peers.iter() {
             if put.from == *addr || hops.contains(&addr.to_string()) {
-                                continue;
+                continue;
             }
             let mut put = put.clone();
             put.peer_hop_list = Some(hops.clone());
-                        let _ = addr.send(Message::Put(put));
+            let _ = addr.send(Message::Put(put));
             already_sent_to.insert(addr.clone());
         }
 
@@ -651,7 +648,7 @@ impl Router {
         }
         debug!("sent put to {} subscribers", already_sent_to.len());
         if already_sent_to.len() < 4 {
-            let mut rng = thread_rng();
+            let mut rng = rng();
             let mut errored = HashSet::new();
             while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
                 sent_to += 1;
@@ -789,7 +786,7 @@ impl Router {
         }
     }
 
-        /// Handles a `BatchPut`: forwards to storage (single transaction), then
+    /// Handles a `BatchPut`: forwards to storage (single transaction), then
     /// relays each constituent Put individually with deduplication.
     ///
     /// This preserves atomic multi-write semantics for storage adapters while
@@ -873,10 +870,10 @@ impl Router {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
     use super::*;
     use crate::adapters::MemoryStorage;
     use crate::metrics::Metrics;
+    use std::time::Duration;
 
     #[test]
     fn test_router_new() {

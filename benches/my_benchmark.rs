@@ -64,11 +64,11 @@
 //! - `sysinfo = "0.23.5"` available for RSS measurement
 //! - `ctrlc = "3.2.1"` available for graceful shutdown handling
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use beam::actor::Addr;
 use beam::adapters::RedbStorage;
 use beam::message::Message;
 use beam::{Config, Node};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::path::PathBuf;
 use tokio::runtime::Runtime;
 use tokio::time::Duration;
@@ -173,7 +173,9 @@ pub fn setup_node(group: &str, backend: BackendKind) -> Node {
             let config = Config::default();
             Node::new_with_config(
                 config.clone(),
-                vec![Box::new(RedbStorage::new_with_config(config, &path_str, None))],
+                vec![Box::new(RedbStorage::new_with_config(
+                    config, &path_str, None,
+                ))],
                 vec![],
             )
         }
@@ -338,7 +340,8 @@ fn write_storm(c: &mut Criterion) {
                         // prevents mailbox flooding that caused Persy OOM
                         // when puts were fire-and-forget.
                         for i in 0..N {
-                            let _ = node.get(&format!("k{i:08}"))
+                            let _ = node
+                                .get(&format!("k{i:08}"))
                                 .put(format!("v{i}").into())
                                 .await;
                         }
@@ -427,8 +430,7 @@ fn concurrent_write_storm(c: &mut Criterion) {
                                 let start = task_id * PER_TASK;
                                 let end = start + PER_TASK;
                                 for i in start..end {
-                                    let mut child =
-                                        task_node.get(&format!("k{i:08}"));
+                                    let mut child = task_node.get(&format!("k{i:08}"));
                                     // Per-task ack drain keeps actor mailbox
                                     // bounded and produces realistic backpressure.
                                     let _ = child.put(format!("v{i}").into()).await;
@@ -504,9 +506,7 @@ fn read_storm(c: &mut Criterion) {
                                 .put(format!("v{i}").into())
                                 .await;
                         }
-                        let _ = node
-                            .flush_storage(Some(Duration::from_secs(60)))
-                            .await;
+                        let _ = node.flush_storage(Some(Duration::from_secs(60))).await;
                         // Measured: random key reads via `once()`.
                         // `once()` is the idiomatic single-value read for a
                         // known key (vs. `map()` which streams all children).
@@ -573,9 +573,7 @@ fn mixed_workload(c: &mut Criterion) {
                                 .put(format!("seed{i}").into())
                                 .await;
                         }
-                        let _ = node
-                            .flush_storage(Some(Duration::from_secs(60)))
-                            .await;
+                        let _ = node.flush_storage(Some(Duration::from_secs(60))).await;
                         // Measured: LCG PRNG for reproducible op sequencing
                         // (same sequence every iter → apples-to-apples comparison).
                         let mut state: u32 = 0xCAFEBABE;
@@ -584,15 +582,9 @@ fn mixed_workload(c: &mut Criterion) {
                             let is_read = (state >> 16) % READ_RATIO_DEN < READ_RATIO_NUM;
                             let key = format!("k{:08}", op_idx);
                             if is_read {
-                                let _ = node
-                                    .get(&key)
-                                    .once(Some(Duration::from_millis(500)))
-                                    .await;
+                                let _ = node.get(&key).once(Some(Duration::from_millis(500))).await;
                             } else {
-                                let _ = node
-                                    .get(&key)
-                                    .put(format!("v{op_idx}").into())
-                                    .await;
+                                let _ = node.get(&key).put(format!("v{op_idx}").into()).await;
                             }
                         }
                         let _ = tokio::time::timeout(Duration::from_secs(60), async {

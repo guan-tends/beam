@@ -26,10 +26,10 @@
 //! ```
 
 use super::{KeyPair, SeaError};
+use base64::prelude::*;
 use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use serde_json::Value;
 use std::convert::TryInto;
-use base64::prelude::*;
 
 /// Sign JSON data with a key pair's private key.
 ///
@@ -56,7 +56,8 @@ pub async fn sign(data: &Value, pair: &KeyPair) -> Result<Value, SeaError> {
             .map_err(|e| SeaError::Crypto(format!("serialization error: {}", e)))?;
 
         // Decode private key from base64
-        let priv_bytes = BASE64_URL_SAFE_NO_PAD.decode(&priv_key)
+        let priv_bytes = BASE64_URL_SAFE_NO_PAD
+            .decode(&priv_key)
             .map_err(|_| SeaError::InvalidKey)?;
 
         if priv_bytes.len() != 32 {

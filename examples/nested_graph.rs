@@ -32,7 +32,7 @@
 //! ```
 
 use beam::{Node, Value};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// Sentinel emitted by `map()` to signal that the replay of existing
 /// children is complete. After this sentinel, new children arrive in
@@ -46,9 +46,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Write three users under the "users" node using a single batch call.
     // Each entry is (path, value) — the path is a list of keys from root.
     db.batch_put(vec![
-        (vec!["users".into(), "alice".into()], Value::Text("Alice".into())),
-        (vec!["users".into(), "bob".into()], Value::Text("Bob".into())),
-        (vec!["users".into(), "carol".into()], Value::Text("Carol".into())),
+        (
+            vec!["users".into(), "alice".into()],
+            Value::Text("Alice".into()),
+        ),
+        (
+            vec!["users".into(), "bob".into()],
+            Value::Text("Bob".into()),
+        ),
+        (
+            vec!["users".into(), "carol".into()],
+            Value::Text("Carol".into()),
+        ),
     ])
     .await?;
 

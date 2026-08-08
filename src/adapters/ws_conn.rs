@@ -71,7 +71,10 @@ impl WsConn {
 #[async_trait]
 impl Actor for WsConn {
     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
-        let _ = self.sender.send(WsMessage::Text(msg.to_string())).await;
+        let _ = self
+            .sender
+            .send(WsMessage::Text(msg.to_string().into()))
+            .await;
     }
 
     async fn pre_start(&mut self, ctx: &ActorContext) {
@@ -80,7 +83,10 @@ impl Actor for WsConn {
             from: ctx.addr.clone(),
             peer_id: ctx.peer_id.read().clone(),
         };
-        let _ = self.sender.send(WsMessage::Text(hi.to_string())).await;
+        let _ = self
+            .sender
+            .send(WsMessage::Text(hi.to_string().into()))
+            .await;
         let receiver = self.receiver.take().unwrap();
         let mut ctx2 = ctx.clone();
         let allow_public_space = self.allow_public_space;
@@ -89,11 +95,16 @@ impl Actor for WsConn {
                 .try_for_each(|msg| {
                     if let Ok(s) = msg.to_text() {
                         eprintln!("[WSCONN-DIAG] received {} bytes from wire", s.len());
-                        if s.len() < 5000 { eprintln!("[WSCONN-DIAG] content: {}", s); }
+                        if s.len() < 5000 {
+                            eprintln!("[WSCONN-DIAG] content: {}", s);
+                        }
                         debug!("WsConn received: {}", s);
                         match Message::try_from(s, ctx2.addr.clone(), allow_public_space) {
                             Ok(msgs) => {
-                                eprintln!("[WSCONN-DIAG] parsed {} messages, forwarding to router", msgs.len());
+                                eprintln!(
+                                    "[WSCONN-DIAG] parsed {} messages, forwarding to router",
+                                    msgs.len()
+                                );
                                 for msg in msgs.into_iter() {
                                     if ctx2.router.send(msg).is_err() {
                                         error!("failed to forward incoming message to router");
@@ -101,7 +112,11 @@ impl Actor for WsConn {
                                 }
                             }
                             Err(e) => {
-                                eprintln!("[WSCONN-DIAG] try_from FAILED — err: '{}' (len={})", e, s.len());
+                                eprintln!(
+                                    "[WSCONN-DIAG] try_from FAILED — err: '{}' (len={})",
+                                    e,
+                                    s.len()
+                                );
                             }
                         }
                     }

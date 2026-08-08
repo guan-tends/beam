@@ -33,7 +33,7 @@
 //! // sub.recv().await == Some(Value::Text("Hello World!"))
 //! ```
 
-use crate::ack::{AckPolicy, ReplicationStatus, QUORUM_MET_SENTINEL};
+use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL, ReplicationStatus};
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::MemoryStorage;
 use crate::message::{BatchPut, Flush, Get, Message, Put};
@@ -51,7 +51,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, oneshot};
 use tokio_tungstenite::connect_async;
-use url::Url;
 
 /// Configuration for a [`Node`] and its associated adapters.
 ///
@@ -222,11 +221,7 @@ impl Node {
         let addr = node.actor_context.start_actor(Box::new(node.clone()));
         *node.addr.write() = Some(addr);
 
-        let router = Box::new(Router::new(
-            storage_adapters,
-            network_adapters,
-            metrics,
-        ));
+        let router = Box::new(Router::new(storage_adapters, network_adapters, metrics));
         let router_addr = node.actor_context.start_router(router);
         node.actor_context.router = router_addr.clone();
         *node.router.write() = Some(router_addr);
@@ -462,7 +457,7 @@ impl Node {
             let mut backoff = Duration::from_secs(1);
             let max_backoff = Duration::from_secs(60);
             loop {
-                match connect_async(Url::parse(&url).expect("valid URL")).await {
+                match connect_async(&url).await {
                     Ok((socket, _)) => {
                         let (sender, receiver) = socket.split();
                         let conn =
@@ -754,7 +749,10 @@ impl Node {
         let mut self_children = Children::default();
         self_children.insert(
             "_".to_string(),
-            NodeData { value: value.clone(), updated_at },
+            NodeData {
+                value: value.clone(),
+                updated_at,
+            },
         );
         updated_nodes.insert(self_uid, self_children);
         // Continue with parent chain propagation using the raw value so
@@ -964,9 +962,7 @@ impl Node {
     /// The `elapsed` field is filled with the time since this decoder was
     /// called. For accurate elapsed measurement, callers should wrap the
     /// entire drain with an `Instant`.
-    fn decode_quorum_payload(
-        put: &Put,
-    ) -> Option<Result<ReplicationStatus, String>> {
+    fn decode_quorum_payload(put: &Put) -> Option<Result<ReplicationStatus, String>> {
         let started_at = std::time::Instant::now();
         let children = put.updated_nodes.get(QUORUM_MET_SENTINEL)?;
         let node_data = children.get("_")?;
@@ -980,10 +976,7 @@ impl Node {
                     elapsed: started_at.elapsed(),
                 }))
             }
-            Value::Bit(true) => Some(Err(format!(
-                "quorum timed out for put_id={}",
-                put.id
-            ))),
+            Value::Bit(true) => Some(Err(format!("quorum timed out for put_id={}", put.id))),
             // Bit(false), String, Null, etc. — malformed. Fall through.
             _ => None,
         }
@@ -1309,10 +1302,14 @@ mod tests {
         // Pre-fix behavior: get returned stale state (or None) because the
         // storage actor hadn't processed the Put message yet.
         let mut node = Node::new();
-        node.get("race_key").put("race_value".into())
+        node.get("race_key")
+            .put("race_value".into())
             .await
             .expect("put should succeed");
-        let val = node.get("race_key").once(Some(Duration::from_secs(2))).await;
+        let val = node
+            .get("race_key")
+            .once(Some(Duration::from_secs(2)))
+            .await;
         assert_eq!(
             val,
             Some(Value::Text("race_value".to_string())),
@@ -1349,7 +1346,8 @@ mod tests {
         for i in 0..5 {
             let key = format!("seq_{}", i);
             let val = format!("val_{}", i);
-            node.get(&key).put(val.clone().into())
+            node.get(&key)
+                .put(val.clone().into())
                 .await
                 .expect("put should succeed");
             let got = node.get(&key).once(Some(Duration::from_secs(2))).await;
@@ -1357,7 +1355,9 @@ mod tests {
                 got,
                 Some(Value::Text(val.clone())),
                 "put {} → get should see {:?}, got {:?}",
-                i, val, got
+                i,
+                val,
+                got
             );
         }
     }
@@ -1372,7 +1372,10 @@ mod tests {
         // so we exercise the error path indirectly: invalid router state.)
         let mut node = Node::new();
         // First put should succeed (router wired up by Node::new()).
-        node.get("normal_key").put("normal".into()).await.expect("first put ok");
+        node.get("normal_key")
+            .put("normal".into())
+            .await
+            .expect("first put ok");
         // Now corrupt the router addr to force the error path.
         *node.router.write() = None;
         let result = node.get("broken_key").put("x".into()).await;
@@ -1383,223 +1386,215 @@ mod tests {
             "pending_puts should be empty after router-send failure"
         );
     }
-        // ========================================================================
-        // Phase 5: Quorum Drain Tests (Network Fanout Ack)
-        // ========================================================================
-        //
-        // Tests exercise:
-        // - decode_quorum_payload return-shape: Some(Ok) | Some(Err) | None
-        //   (success sentinel, timeout sentinel, fall-through to _ack decoder)
-        // - AckPolicy builder math (any / for_peer_count / all / builders)
-        // - ReplicationStatus invariant (Ok arm has quorum_met = true)
+    // ========================================================================
+    // Phase 5: Quorum Drain Tests (Network Fanout Ack)
+    // ========================================================================
+    //
+    // Tests exercise:
+    // - decode_quorum_payload return-shape: Some(Ok) | Some(Err) | None
+    //   (success sentinel, timeout sentinel, fall-through to _ack decoder)
+    // - AckPolicy builder math (any / for_peer_count / all / builders)
+    // - ReplicationStatus invariant (Ok arm has quorum_met = true)
 
-        /// Build a Put carrying the `__quorum_met__` sentinel for decoder tests.
-        fn make_quorum_put(sentinel_value: Value) -> Put {
-            let mut children: Children = std::collections::BTreeMap::new();
-            children.insert(
-                "_".to_string(),
-                NodeData {
-                    value: sentinel_value,
-                    updated_at: 0.0,
-                },
-            );
-            let mut put = Put::new_from_kv(
-                QUORUM_MET_SENTINEL.to_string(),
-                children,
-                Addr::noop(),
-            );
-            put.id = "test_put_id".to_string();
-            put.in_response_to = Some("test_put_id".to_string());
-            put
-        }
+    /// Build a Put carrying the `__quorum_met__` sentinel for decoder tests.
+    fn make_quorum_put(sentinel_value: Value) -> Put {
+        let mut children: Children = std::collections::BTreeMap::new();
+        children.insert(
+            "_".to_string(),
+            NodeData {
+                value: sentinel_value,
+                updated_at: 0.0,
+            },
+        );
+        let mut put = Put::new_from_kv(QUORUM_MET_SENTINEL.to_string(), children, Addr::noop());
+        put.id = "test_put_id".to_string();
+        put.in_response_to = Some("test_put_id".to_string());
+        put
+    }
 
-        #[test]
-        fn decode_quorum_payload_success_with_number() {
-            let put = make_quorum_put(Value::Number(3.0));
-            let result = Node::decode_quorum_payload(&put);
-            assert!(result.is_some(), "should decode sentinel-bearing Put");
-            let inner = result.unwrap();
-            assert!(inner.is_ok(), "Number payload should decode as Ok");
-            let status = inner.unwrap();
-            assert_eq!(status.put_id, "test_put_id");
-            assert_eq!(status.acked_by, 3);
-            assert!(status.quorum_met);
-        }
+    #[test]
+    fn decode_quorum_payload_success_with_number() {
+        let put = make_quorum_put(Value::Number(3.0));
+        let result = Node::decode_quorum_payload(&put);
+        assert!(result.is_some(), "should decode sentinel-bearing Put");
+        let inner = result.unwrap();
+        assert!(inner.is_ok(), "Number payload should decode as Ok");
+        let status = inner.unwrap();
+        assert_eq!(status.put_id, "test_put_id");
+        assert_eq!(status.acked_by, 3);
+        assert!(status.quorum_met);
+    }
 
-        #[test]
-        fn decode_quorum_payload_timeout_with_bit_true() {
-            let put = make_quorum_put(Value::Bit(true));
-            let result = Node::decode_quorum_payload(&put);
-            assert!(result.is_some(), "Bit(true) is a recognized sentinel");
-            let inner = result.unwrap();
-            assert!(inner.is_err(), "Bit(true) must decode as Err(timeout)");
-            let err_msg = inner.unwrap_err();
-            assert!(
-                err_msg.contains("quorum timed out"),
-                "error message should mention timeout, got: {err_msg}"
-            );
-            assert!(
-                err_msg.contains("test_put_id"),
-                "error message should include put_id, got: {err_msg}"
-            );
-        }
+    #[test]
+    fn decode_quorum_payload_timeout_with_bit_true() {
+        let put = make_quorum_put(Value::Bit(true));
+        let result = Node::decode_quorum_payload(&put);
+        assert!(result.is_some(), "Bit(true) is a recognized sentinel");
+        let inner = result.unwrap();
+        assert!(inner.is_err(), "Bit(true) must decode as Err(timeout)");
+        let err_msg = inner.unwrap_err();
+        assert!(
+            err_msg.contains("quorum timed out"),
+            "error message should mention timeout, got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("test_put_id"),
+            "error message should include put_id, got: {err_msg}"
+        );
+    }
 
-        #[test]
-        fn decode_quorum_payload_no_sentinel_falls_through() {
-            let mut children: Children = std::collections::BTreeMap::new();
-            children.insert(
-                "_".to_string(),
-                NodeData {
-                    value: Value::Number(1.0),
-                    updated_at: 0.0,
-                },
-            );
-            let put = Put::new_from_kv("not_quorum".to_string(), children, Addr::noop());
+    #[test]
+    fn decode_quorum_payload_no_sentinel_falls_through() {
+        let mut children: Children = std::collections::BTreeMap::new();
+        children.insert(
+            "_".to_string(),
+            NodeData {
+                value: Value::Number(1.0),
+                updated_at: 0.0,
+            },
+        );
+        let put = Put::new_from_kv("not_quorum".to_string(), children, Addr::noop());
+        let result = Node::decode_quorum_payload(&put);
+        assert!(
+            result.is_none(),
+            "no sentinel key → None (fall through to _ack decoder)"
+        );
+    }
+
+    #[test]
+    fn decode_quorum_payload_malformed_value_falls_through() {
+        for bad_value in [
+            Value::Bit(false),
+            Value::Null,
+            Value::Text("not a count".to_string()),
+        ] {
+            let put = make_quorum_put(bad_value.clone());
             let result = Node::decode_quorum_payload(&put);
             assert!(
                 result.is_none(),
-                "no sentinel key → None (fall through to _ack decoder)"
+                "malformed value {bad_value:?} should return None (fall through)"
             );
         }
+    }
 
-        #[test]
-        fn decode_quorum_payload_malformed_value_falls_through() {
-            for bad_value in [
-                Value::Bit(false),
-                Value::Null,
-                Value::Text("not a count".to_string()),
-            ] {
-                let put = make_quorum_put(bad_value.clone());
-                let result = Node::decode_quorum_payload(&put);
-                assert!(
-                    result.is_none(),
-                    "malformed value {bad_value:?} should return None (fall through)"
-                );
-            }
+    #[test]
+    fn decode_quorum_payload_missing_underscore_key() {
+        let mut children: Children = std::collections::BTreeMap::new();
+        children.insert(
+            "wrong_key".to_string(),
+            NodeData {
+                value: Value::Number(1.0),
+                updated_at: 0.0,
+            },
+        );
+        let put = Put::new_from_kv(QUORUM_MET_SENTINEL.to_string(), children, Addr::noop());
+        let result = Node::decode_quorum_payload(&put);
+        assert!(result.is_none(), "missing _ key → None");
+    }
+
+    #[test]
+    fn ack_policy_any_has_quorum_one_and_nine_second_timeout() {
+        let p = AckPolicy::any();
+        assert_eq!(p.quorum, 1, "AckPolicy::any → quorum=1");
+        assert_eq!(
+            p.timeout,
+            Duration::from_secs(9),
+            "AckPolicy::any → 9s timeout (Gun.js lack default)"
+        );
+    }
+
+    #[test]
+    fn ack_policy_for_peer_count_majority() {
+        assert_eq!(AckPolicy::for_peer_count(0).quorum, 1, "0 peers → 1");
+        assert_eq!(AckPolicy::for_peer_count(1).quorum, 1);
+        assert_eq!(AckPolicy::for_peer_count(2).quorum, 1); // ⌈2/2⌉ = 1
+        assert_eq!(AckPolicy::for_peer_count(3).quorum, 2); // ⌈3/2⌉ = 2
+        assert_eq!(AckPolicy::for_peer_count(4).quorum, 2);
+        assert_eq!(AckPolicy::for_peer_count(5).quorum, 3); // ⌈5/2⌉ = 3
+        assert_eq!(AckPolicy::for_peer_count(7).quorum, 4); // ⌈7/2⌉ = 4
+    }
+
+    #[test]
+    fn ack_policy_all_is_max_usize() {
+        let p = AckPolicy::all();
+        assert_eq!(p.quorum, usize::MAX, "AckPolicy::all → quorum=MAX");
+        assert_eq!(p.timeout, Duration::from_secs(9));
+    }
+
+    #[test]
+    fn ack_policy_with_timeout_overrides() {
+        let p = AckPolicy::any().with_timeout(Duration::from_secs(30));
+        assert_eq!(p.timeout, Duration::from_secs(30));
+        assert_eq!(p.quorum, 1, "with_timeout preserves quorum");
+    }
+
+    #[test]
+    fn ack_policy_with_quorum_overrides() {
+        let p = AckPolicy::any().with_quorum(5);
+        assert_eq!(p.quorum, 5);
+        assert_eq!(
+            p.timeout,
+            Duration::from_secs(9),
+            "with_quorum preserves timeout"
+        );
+    }
+
+    #[test]
+    fn ack_policy_default_is_any() {
+        let p = AckPolicy::default();
+        assert_eq!(p.quorum, 1);
+        assert_eq!(p.timeout, Duration::from_secs(9));
+    }
+
+    #[test]
+    fn replication_status_quorum_met_true_on_ok_arm() {
+        let status = ReplicationStatus {
+            put_id: "p1".to_string(),
+            acked_by: 3,
+            quorum_met: true, // invariant: Ok arm must have this
+            elapsed: Duration::from_millis(42),
+        };
+        assert_eq!(status.put_id, "p1");
+        assert_eq!(status.acked_by, 3);
+        assert!(status.quorum_met);
+        assert_eq!(status.elapsed, Duration::from_millis(42));
+    }
+
+    #[test]
+    fn drain_dispatch_quorum_ok_vs_err_vs_fallthrough() {
+        // The drain block (Node::handle_put) dispatches three cases based on
+        // decode_quorum_payload's return shape:
+        //   Some(Ok(_))  → send Ok(status)
+        //   Some(Err(_)) → send Err(timeout_msg)
+        //   None         → fall through to local-storage _ack decoder
+        let success_put = make_quorum_put(Value::Number(2.0));
+        match Node::decode_quorum_payload(&success_put) {
+            Some(Ok(_)) => {}
+            other => panic!("expected Some(Ok) for Number payload, got {other:?}"),
         }
-
-        #[test]
-        fn decode_quorum_payload_missing_underscore_key() {
-            let mut children: Children = std::collections::BTreeMap::new();
+        let timeout_put = make_quorum_put(Value::Bit(true));
+        match Node::decode_quorum_payload(&timeout_put) {
+            Some(Err(e)) => assert!(e.contains("timed out")),
+            other => panic!("expected Some(Err) for Bit(true) payload, got {other:?}"),
+        }
+        let non_sentinel_put = {
+            let mut children = std::collections::BTreeMap::new();
             children.insert(
-                "wrong_key".to_string(),
+                "_".to_string(),
                 NodeData {
                     value: Value::Number(1.0),
                     updated_at: 0.0,
                 },
             );
-            let put = Put::new_from_kv(
-                QUORUM_MET_SENTINEL.to_string(),
-                children,
-                Addr::noop(),
-            );
-            let result = Node::decode_quorum_payload(&put);
-            assert!(result.is_none(), "missing _ key → None");
+            Put::new_from_kv("storage_ack".to_string(), children, Addr::noop())
+        };
+        match Node::decode_quorum_payload(&non_sentinel_put) {
+            None => {}
+            other => panic!("expected None for non-sentinel Put, got {other:?}"),
         }
+    }
 
-        #[test]
-        fn ack_policy_any_has_quorum_one_and_nine_second_timeout() {
-            let p = AckPolicy::any();
-            assert_eq!(p.quorum, 1, "AckPolicy::any → quorum=1");
-            assert_eq!(
-                p.timeout,
-                Duration::from_secs(9),
-                "AckPolicy::any → 9s timeout (Gun.js lack default)"
-            );
-        }
-
-        #[test]
-        fn ack_policy_for_peer_count_majority() {
-            assert_eq!(AckPolicy::for_peer_count(0).quorum, 1, "0 peers → 1");
-            assert_eq!(AckPolicy::for_peer_count(1).quorum, 1);
-            assert_eq!(AckPolicy::for_peer_count(2).quorum, 1); // ⌈2/2⌉ = 1
-            assert_eq!(AckPolicy::for_peer_count(3).quorum, 2); // ⌈3/2⌉ = 2
-            assert_eq!(AckPolicy::for_peer_count(4).quorum, 2);
-            assert_eq!(AckPolicy::for_peer_count(5).quorum, 3); // ⌈5/2⌉ = 3
-            assert_eq!(AckPolicy::for_peer_count(7).quorum, 4); // ⌈7/2⌉ = 4
-        }
-
-        #[test]
-        fn ack_policy_all_is_max_usize() {
-            let p = AckPolicy::all();
-            assert_eq!(p.quorum, usize::MAX, "AckPolicy::all → quorum=MAX");
-            assert_eq!(p.timeout, Duration::from_secs(9));
-        }
-
-        #[test]
-        fn ack_policy_with_timeout_overrides() {
-            let p = AckPolicy::any().with_timeout(Duration::from_secs(30));
-            assert_eq!(p.timeout, Duration::from_secs(30));
-            assert_eq!(p.quorum, 1, "with_timeout preserves quorum");
-        }
-
-        #[test]
-        fn ack_policy_with_quorum_overrides() {
-            let p = AckPolicy::any().with_quorum(5);
-            assert_eq!(p.quorum, 5);
-            assert_eq!(
-                p.timeout,
-                Duration::from_secs(9),
-                "with_quorum preserves timeout"
-            );
-        }
-
-        #[test]
-        fn ack_policy_default_is_any() {
-            let p = AckPolicy::default();
-            assert_eq!(p.quorum, 1);
-            assert_eq!(p.timeout, Duration::from_secs(9));
-        }
-
-        #[test]
-        fn replication_status_quorum_met_true_on_ok_arm() {
-            let status = ReplicationStatus {
-                put_id: "p1".to_string(),
-                acked_by: 3,
-                quorum_met: true, // invariant: Ok arm must have this
-                elapsed: Duration::from_millis(42),
-            };
-            assert_eq!(status.put_id, "p1");
-            assert_eq!(status.acked_by, 3);
-            assert!(status.quorum_met);
-            assert_eq!(status.elapsed, Duration::from_millis(42));
-        }
-
-        #[test]
-        fn drain_dispatch_quorum_ok_vs_err_vs_fallthrough() {
-            // The drain block (Node::handle_put) dispatches three cases based on
-            // decode_quorum_payload's return shape:
-            //   Some(Ok(_))  → send Ok(status)
-            //   Some(Err(_)) → send Err(timeout_msg)
-            //   None         → fall through to local-storage _ack decoder
-            let success_put = make_quorum_put(Value::Number(2.0));
-            match Node::decode_quorum_payload(&success_put) {
-                Some(Ok(_)) => {}
-                other => panic!("expected Some(Ok) for Number payload, got {other:?}"),
-            }
-            let timeout_put = make_quorum_put(Value::Bit(true));
-            match Node::decode_quorum_payload(&timeout_put) {
-                Some(Err(e)) => assert!(e.contains("timed out")),
-                other => panic!("expected Some(Err) for Bit(true) payload, got {other:?}"),
-            }
-            let non_sentinel_put = {
-                let mut children = std::collections::BTreeMap::new();
-                children.insert(
-                    "_".to_string(),
-                    NodeData {
-                        value: Value::Number(1.0),
-                        updated_at: 0.0,
-                    },
-                );
-                Put::new_from_kv("storage_ack".to_string(), children, Addr::noop())
-            };
-            match Node::decode_quorum_payload(&non_sentinel_put) {
-                None => {}
-                other => panic!("expected None for non-sentinel Put, got {other:?}"),
-            }
-        }
-
-        // ========================================================================
-        // End Phase 5 tests
-        // ========================================================================
+    // ========================================================================
+    // End Phase 5 tests
+    // ========================================================================
 }

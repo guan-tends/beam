@@ -26,7 +26,7 @@ impl User {
         let proof_input = format!("{}{}", alias, pass);
         // Generate random 9-byte salt per Gun.js convention
         let mut salt_bytes = [0u8; 9];
-        rand::thread_rng().fill_bytes(&mut salt_bytes);
+        rand::rng().fill_bytes(&mut salt_bytes);
 
         let proof = work(
             proof_input.as_bytes(),
@@ -53,7 +53,9 @@ impl User {
             "salt": BASE64_URL_SAFE_NO_PAD.encode(salt_bytes),
         });
         let mut alias_node = db.get("~@").get(alias);
-        let _ = alias_node.put(BeamValue::Text(alias_payload.to_string())).await;
+        let _ = alias_node
+            .put(BeamValue::Text(alias_payload.to_string()))
+            .await;
 
         let state = SessionState {
             pair,
@@ -79,7 +81,8 @@ impl User {
         let encrypted_auth = alias_data.get("auth").ok_or(SeaError::AuthFailed)?;
 
         let salt_decoded = if let Some(salt_b64) = alias_data.get("salt").and_then(|v| v.as_str()) {
-            BASE64_URL_SAFE_NO_PAD.decode(salt_b64)
+            BASE64_URL_SAFE_NO_PAD
+                .decode(salt_b64)
                 .unwrap_or_else(|_| alias.as_bytes().to_vec())
         } else {
             alias.as_bytes().to_vec()
@@ -189,8 +192,8 @@ async fn encrypt_pass(data: &JsonValue, passphrase: &str) -> Result<JsonValue, S
 
         let mut salt = [0u8; 9];
         let mut nonce = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut salt);
-        rand::thread_rng().fill_bytes(&mut nonce);
+        rand::rng().fill_bytes(&mut salt);
+        rand::rng().fill_bytes(&mut nonce);
 
         let aes_key = derive_key_sync(&passphrase, &salt)?;
 
@@ -229,11 +232,14 @@ async fn decrypt_pass(encrypted: &JsonValue, passphrase: &str) -> Result<JsonVal
             .and_then(|v| v.as_str())
             .ok_or_else(|| SeaError::Decryption("missing s".to_string()))?;
 
-        let ciphertext = BASE64_URL_SAFE_NO_PAD.decode(ct)
+        let ciphertext = BASE64_URL_SAFE_NO_PAD
+            .decode(ct)
             .map_err(|_| SeaError::Decryption("bad ct".to_string()))?;
-        let nonce = BASE64_URL_SAFE_NO_PAD.decode(iv)
+        let nonce = BASE64_URL_SAFE_NO_PAD
+            .decode(iv)
             .map_err(|_| SeaError::Decryption("bad iv".to_string()))?;
-        let salt = BASE64_URL_SAFE_NO_PAD.decode(s)
+        let salt = BASE64_URL_SAFE_NO_PAD
+            .decode(s)
             .map_err(|_| SeaError::Decryption("bad s".to_string()))?;
 
         let aes_key = derive_key_sync(&passphrase, &salt)?;
@@ -370,7 +376,7 @@ impl User {
                 }
                 _ => {
                     let mut bytes = [0u8; 16];
-                    rand::thread_rng().fill_bytes(&mut bytes);
+                    rand::rng().fill_bytes(&mut bytes);
                     let new_sec = BASE64_URL_SAFE_NO_PAD.encode(bytes);
                     let enc = encrypt(&json!(new_sec), pair, None).await?;
                     let signed = sign_value(&enc, pair).await?;
@@ -382,7 +388,8 @@ impl User {
 
         // 2. ECDH shared secret with recipient
         let dh = secret(recipient_epub, pair).await?;
-        let dh_bytes = BASE64_URL_SAFE_NO_PAD.decode(&dh)
+        let dh_bytes = BASE64_URL_SAFE_NO_PAD
+            .decode(&dh)
             .map_err(|_| SeaError::Crypto("bad dh".into()))?;
 
         // 3. Encrypt data secret with shared secret
@@ -436,7 +443,8 @@ impl User {
             .as_ref()
             .ok_or_else(|| SeaError::Crypto("no epub".into()))?;
         let dh = secret(epub, pair).await?;
-        let dh_bytes = BASE64_URL_SAFE_NO_PAD.decode(&dh)
+        let dh_bytes = BASE64_URL_SAFE_NO_PAD
+            .decode(&dh)
             .map_err(|_| SeaError::Crypto("bad dh".into()))?;
 
         // Encrypt and sign
@@ -516,7 +524,8 @@ pub async fn accept_grant(
     };
 
     let dh = secret(owner_epub, pair).await?;
-    let dh_bytes = BASE64_URL_SAFE_NO_PAD.decode(&dh)
+    let dh_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(&dh)
         .map_err(|_| SeaError::Decryption("bad dh".into()))?;
 
     let sec_json = decrypt_symmetric(&enc_json, &dh_bytes).await?;

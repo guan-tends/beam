@@ -23,10 +23,10 @@
 //! ```
 
 use super::SeaError;
+use base64::prelude::*;
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::Value;
 use std::convert::TryInto;
-use base64::prelude::*;
 
 /// Verify a signature synchronously.
 ///
@@ -66,9 +66,11 @@ pub fn verify_sync(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError
         return Err(SeaError::InvalidKey);
     }
 
-    let x = BASE64_URL_SAFE_NO_PAD.decode(parts[0])
+    let x = BASE64_URL_SAFE_NO_PAD
+        .decode(parts[0])
         .map_err(|_| SeaError::InvalidKey)?;
-    let y = BASE64_URL_SAFE_NO_PAD.decode(parts[1])
+    let y = BASE64_URL_SAFE_NO_PAD
+        .decode(parts[1])
         .map_err(|_| SeaError::InvalidKey)?;
 
     // Reconstruct uncompressed public key (0x04 || x || y)
@@ -81,7 +83,8 @@ pub fn verify_sync(signed_data: &Value, pub_key: &str) -> Result<Value, SeaError
         .map_err(|e| SeaError::Crypto(format!("invalid public key: {}", e)))?;
 
     // Decode signature (r||s, 64 bytes)
-    let sig_bytes = BASE64_URL_SAFE_NO_PAD.decode(signature)
+    let sig_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(signature)
         .map_err(|_| SeaError::VerificationFailed)?;
 
     if sig_bytes.len() != 64 {

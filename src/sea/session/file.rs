@@ -16,12 +16,12 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
 };
 use async_trait::async_trait;
+use base64::prelude::*;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use base64::prelude::*;
 
 #[derive(Serialize, Deserialize)]
 struct SessionFile {
@@ -148,7 +148,7 @@ impl EncryptedFileSessionStorage {
 
         // 3. Generate new key, save, alert devops
         let mut key = vec![0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
+        rand::rng().fill_bytes(&mut key);
         let b64 = BASE64_STANDARD.encode(&key);
 
         // Ensure parent dir exists
@@ -227,8 +227,8 @@ impl SessionStorage for EncryptedFileSessionStorage {
         let session_file = tokio::task::spawn_blocking(move || {
             let mut nonce = [0u8; 12];
             let mut salt = [0u8; 9];
-            rand::thread_rng().fill_bytes(&mut nonce);
-            rand::thread_rng().fill_bytes(&mut salt);
+            rand::rng().fill_bytes(&mut nonce);
+            rand::rng().fill_bytes(&mut salt);
 
             let cipher = Aes256Gcm::new_from_slice(&key)
                 .map_err(|_| SeaError::SessionStorage("bad cipher key".to_string()))?;
@@ -286,9 +286,11 @@ impl SessionStorage for EncryptedFileSessionStorage {
             return Ok(None);
         }
 
-        let ciphertext = BASE64_URL_SAFE_NO_PAD.decode(&session_file.ct)
+        let ciphertext = BASE64_URL_SAFE_NO_PAD
+            .decode(&session_file.ct)
             .map_err(|_| SeaError::SessionStorage("bad ct".to_string()))?;
-        let nonce = BASE64_URL_SAFE_NO_PAD.decode(&session_file.iv)
+        let nonce = BASE64_URL_SAFE_NO_PAD
+            .decode(&session_file.iv)
             .map_err(|_| SeaError::SessionStorage("bad iv".to_string()))?;
 
         // Decrypt in spawn_blocking

@@ -106,9 +106,8 @@ mod tests {
             }
         }
 
-        let val = received.expect(
-            "timeout waiting for WebRTC sync — mesh/DataChannel may not have established",
-        );
+        let val = received
+            .expect("timeout waiting for WebRTC sync — mesh/DataChannel may not have established");
 
         match val {
             Value::Text(str) => assert_eq!(&str, "Hello from WebRTC"),

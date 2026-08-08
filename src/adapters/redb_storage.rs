@@ -443,7 +443,7 @@ impl RedbStorage {
                         updated_at: SystemTime::now()
                             .duration_since(UNIX_EPOCH)
                             .unwrap_or_default()
-                                .as_millis() as f64,
+                            .as_millis() as f64,
                     },
                 )]
                 .into_iter()
@@ -605,11 +605,7 @@ mod tests {
 
         // Bug: with the old code, no reply arrives (timeout would be required).
         // Fix: redb_storage MUST always reply when in_response_to is Some.
-        let received = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            rx.recv(),
-        )
-        .await;
+        let received = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
 
         let _ = std::fs::remove_file(&storage.path);
 

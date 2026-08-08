@@ -62,8 +62,8 @@ fn unique_persy_path(test_name: &str) -> String {
 
 /// Build a `Node` wired to a fresh `PersyStorage` at `path`.
 fn node_with_persy(path: &str) -> beam::Node {
-    use beam::adapters::PersyStorage;
     use beam::Config;
+    use beam::adapters::PersyStorage;
     let storage = PersyStorage::new_with_path(path);
     beam::Node::new_with_config(
         Config::default(),
@@ -170,10 +170,7 @@ async fn e2e_persy_lww_prefers_newer_value() {
     tokio::time::sleep(Duration::from_millis(10)).await;
     node.get("lww_key").put("newer".into()).await.unwrap();
 
-    let got = node
-        .get("lww_key")
-        .once(Some(Duration::from_secs(2)))
-        .await;
+    let got = node.get("lww_key").once(Some(Duration::from_secs(2))).await;
     assert_eq!(got, Some(Value::Text("newer".to_string())));
 
     let _ = std::fs::remove_file(&path);

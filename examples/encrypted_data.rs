@@ -55,10 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signed = sign(&payload, &alice).await?;
     let verified = beam::sea::verify(&signed, &alice.pub_key).await?;
     assert_eq!(verified, payload);
-    println!(
-        "Signed and verified: {}",
-        serde_json::to_string(&verified)?
-    );
+    println!("Signed and verified: {}", serde_json::to_string(&verified)?);
 
     // Verify with the wrong key — must fail.
     let wrong_key_result = beam::sea::verify(&signed, &bob.pub_key).await;
@@ -70,14 +67,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // AES-256-GCM encrypts the payload with that secret.
     let secret_data = json!({ "message": "Hello from Alice!" });
 
-    let encrypted =
-        encrypt(&secret_data, &alice, bob.epub_key.as_deref()).await?;
+    let encrypted = encrypt(&secret_data, &alice, bob.epub_key.as_deref()).await?;
     println!("Encrypted with ECDH + AES-256-GCM");
 
     // Bob decrypts using his key pair and Alice's encryption public key.
     // ECDH derives the same shared secret from Bob's epriv + Alice's epub.
-    let decrypted =
-        decrypt(&encrypted, &bob, alice.epub_key.as_deref()).await?;
+    let decrypted = decrypt(&encrypted, &bob, alice.epub_key.as_deref()).await?;
     assert_eq!(decrypted, secret_data);
     println!("Decrypted: {}", serde_json::to_string(&decrypted)?);
 
