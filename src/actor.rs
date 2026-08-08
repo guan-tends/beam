@@ -62,6 +62,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{
     Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
 };
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 /// Internal enum holding either an unbounded or bounded channel sender.
@@ -219,6 +220,9 @@ pub struct ActorContext {
     pub addr: Addr,
     /// Whether this actor has been stopped.
     pub is_stopped: Arc<RwLock<bool>>,
+    /// Shutdown signal receiver — set to `true` when graceful shutdown begins.
+    /// Long-running child tasks select on this to break their loops.
+    pub shutdown_rx: watch::Receiver<bool>,
     /// Optional owned Node (set for the root actor).
     pub node: Option<Node>,
 }
@@ -236,6 +240,7 @@ impl ActorContext {
             peer_id: Arc::new(RwLock::new(peer_id)),
             router: Addr::noop(),
             is_stopped: Arc::new(RwLock::new(false)),
+            shutdown_rx: watch::channel(false).1,
             node: None,
         }
     }
@@ -256,6 +261,7 @@ impl ActorContext {
             peer_id: self.peer_id.clone(),
             router: self.router.clone(),
             is_stopped: self.is_stopped.clone(),
+            shutdown_rx: self.shutdown_rx.clone(),
             node: self.node.clone(),
         }
     }
@@ -532,4 +538,62 @@ mod tests {
         ctx.stop();
         assert!(*ctx.is_stopped.read());
     }
+}
+
+#[test]
+fn test_shutdown_signal_default_false() {
+    // A new ActorContext should have shutdown_rx initialized to false.
+    let ctx = ActorContext::new("test-peer".to_string());
+    assert!(
+        !*ctx.shutdown_rx.borrow(),
+        "shutdown_rx should default to false"
+    );
+}
+
+#[test]
+fn test_shutdown_signal_propagates_to_child() {
+    // When the parent sends true on shutdown, child contexts (which
+    // share the same watch channel) should observe the change.
+    let (tx, rx) = watch::channel(false);
+    let mut ctx = ActorContext::new("parent".to_string());
+    ctx.shutdown_rx = rx;
+
+    let (stop_tx, _stop_rx) = channel(1);
+    let child = ctx.child_context(Addr::noop(), stop_tx);
+
+    // Child starts with false
+    assert!(!*child.shutdown_rx.borrow());
+
+    // Parent signals shutdown
+    tx.send(true).unwrap();
+
+    // Child observes the change
+    assert!(
+        *child.shutdown_rx.borrow(),
+        "child should see shutdown signal"
+    );
+}
+
+#[test]
+fn test_shutdown_signal_isolated_per_node() {
+    // Different nodes create independent watch channels —
+    // signaling one should not affect the other.
+    let mut ctx_a = ActorContext::new("node-a".to_string());
+    let ctx_b = ActorContext::new("node-b".to_string());
+
+    // Both start false
+    assert!(!*ctx_a.shutdown_rx.borrow());
+    assert!(!*ctx_b.shutdown_rx.borrow());
+
+    // Replace ctx_a's channel with a controllable one
+    let (tx_a, rx_a) = watch::channel(false);
+    ctx_a.shutdown_rx = rx_a;
+    tx_a.send(true).unwrap();
+
+    // ctx_a sees shutdown, ctx_b does not
+    assert!(*ctx_a.shutdown_rx.borrow());
+    assert!(
+        !*ctx_b.shutdown_rx.borrow(),
+        "unrelated node should not see signal"
+    );
 }
