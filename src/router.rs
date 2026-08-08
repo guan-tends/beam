@@ -352,6 +352,7 @@ impl Router {
     /// * `config` - Node configuration
     /// * `storage_adapter_actors` - Storage actors to be started
     /// * `network_adapter_actors` - Network actors to be started
+    ///
     /// Constructs a new Router with the provided configuration, adapters, and
     /// shared `Arc<Metrics>` handle.
     ///

@@ -192,9 +192,10 @@ impl WsServer {
 
         // Check if the request targets /peer_id
         let request = String::from_utf8_lossy(&buf[..n]);
-        let is_peer_id = request.lines().next().map_or(false, |line| {
-            line.contains("GET /peer_id") || line.contains("GET /peer_id/")
-        });
+        let is_peer_id = request
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("GET /peer_id") || line.contains("GET /peer_id/"));
 
         let response = if is_peer_id {
             format!(
