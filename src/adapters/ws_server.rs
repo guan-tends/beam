@@ -240,25 +240,31 @@ impl WsServer {
 
 #[async_trait]
 impl Actor for WsServer {
+    /// Relays wire-format messages (Put, Get, Hi, BatchPut, Flush, RtcSignal)
+    /// to all connected WebSocket clients except the sender. Internal
+    /// messages (CheckQuorumTimeouts, RegisterQuorum) are never relayed —
+    /// they are router-internal and would produce empty or malformed frames
+    /// on the wire.
     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
-        let client_count = self.clients.read().await.len();
-        eprintln!(
-            "[WSSERVER-DIAG] handle called with {} clients, msg type: {}",
-            client_count,
-            match &msg {
-                Message::Put(_) => "Put",
-                Message::Get(_) => "Get",
-                _ => "Other",
-            }
-        );
+        // Only relay messages that have a valid wire representation.
+        // RegisterQuorum serializes to an empty string; CheckQuorumTimeouts
+        // serializes to "_tick_quorum" — neither is a valid Gun.js wire
+        // message and both would cause parse errors in connected peers.
+        match &msg {
+            Message::Put(_)
+            | Message::Get(_)
+            | Message::BatchPut(_)
+            | Message::Hi { .. }
+            | Message::Flush(_)
+            | Message::RtcSignal(_) => {}
+            Message::CheckQuorumTimeouts | Message::RegisterQuorum { .. } => return,
+        }
+
         for conn in self.clients.read().await.iter() {
             if msg.is_from(conn) {
-                eprintln!("[WSSERVER-DIAG] skipping msg.from == conn");
                 continue;
             }
-            eprintln!("[WSSERVER-DIAG] relaying to WsConn client");
             if conn.send(msg.clone()).is_err() {
-                eprintln!("[WSSERVER-DIAG] send failed, removing client");
                 self.clients.write().await.remove(conn);
             }
         }
