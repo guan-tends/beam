@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+<div id="status">idle</div><div id="data"></div>
+<script type="module">
+import init, { Beam } from "./beam.js";
+await init();
+const beam = new Beam();
+beam.connect('ws://127.0.0.1:4944');
+window.beamReceived = {};
+window.beamSubscribe = (soul) => {
+  beam.on(soul, (value) => {
+    window.beamReceived[value] = true;
+    document.getElementById('data').textContent = JSON.stringify(Object.keys(window.beamReceived));
+    document.getElementById('status').textContent = 'received';
+  });
+};
+window.beamReady = false;
+setTimeout(() => { window.beamReady = true; }, 5000);
+window.beamPut = (soul, key, value) => beam.put(soul + '.' + key, value);
+</script></body></html>

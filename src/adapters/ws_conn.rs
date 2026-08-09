@@ -25,7 +25,6 @@ use futures_util::stream::{SplitSink, SplitStream};
 
 use async_trait::async_trait;
 
-use futures_util::{TryStreamExt, future};
 use log::{debug, error, info};
 use web_time::Duration;
 
@@ -53,13 +52,6 @@ pub struct WsConn {
 
 impl WsConn {
     /// Creates a new `WsConn` from the split halves of a WebSocket stream.
-    ///
-    /// # Arguments
-    ///
-    /// * `sender` - The writing half of the WebSocket stream
-    /// * `receiver` - The reading half of the WebSocket stream
-    /// * `allow_public_space` - Whether to accept public space writes (forwarded
-    ///   to `Message::try_from` for inbound message parsing)
     pub fn new(sender: WsSender, receiver: WsReceiver, allow_public_space: bool) -> Self {
         Self {
             sender,
@@ -71,10 +63,17 @@ impl WsConn {
 
 #[async_trait]
 impl Actor for WsConn {
-    async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
+    async fn handle(&mut self, mut msg: Message, _ctx: &ActorContext) {
+        // Clear cached json_str so Put::to_string() re-serializes with
+        // internal souls (root "", value "soul/key") stripped for wire format.
+        if let Message::Put(ref mut put) = msg {
+            put.json_str = None;
+        }
+        let wire = msg.to_string();
+        debug!("[WS→] SENDING {} bytes: {}", wire.len(), &wire[..wire.len().min(300)]);
         let _ = self
             .sender
-            .send(WsMessage::Text(msg.to_string().into()))
+            .send(WsMessage::Text(wire.into()))
             .await;
     }
 
@@ -92,36 +91,49 @@ impl Actor for WsConn {
         let mut ctx2 = ctx.clone();
         let allow_public_space = self.allow_public_space;
         ctx.child_task(async move {
-            let _ = receiver
-                .try_for_each(|msg| {
-                    if let Ok(s) = msg.to_text() {
-                        debug!("WsConn received: {}", s);
-                        match Message::try_from(s, ctx2.addr.clone(), allow_public_space) {
-                            Ok(msgs) => {
-                                for msg in msgs.into_iter() {
-                                    if ctx2.router.send(msg).is_err() {
-                                        error!("failed to forward incoming message to router");
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                debug!("WsConn parse error: {} (len={})", e, s.len());
+            use futures_util::StreamExt;
+            let mut receiver = receiver;
+            while let Some(result) = receiver.next().await {
+                let ws_msg = match result {
+                    Ok(m) => m,
+                    Err(e) => {
+                        debug!("[WS] recv error: {}", e);
+                        break;
+                    }
+                };
+                let text = match ws_msg {
+                    WsMessage::Text(t) => t,
+                    WsMessage::Binary(_) => { debug!("[WS] binary frame (ignored)"); continue; }
+                    WsMessage::Ping(_) => { debug!("[WS] ping frame (ignored)"); continue; }
+                    WsMessage::Pong(_) => { debug!("[WS] pong frame (ignored)"); continue; }
+                    WsMessage::Close(_) => { debug!("[WS] close frame received from peer"); break; }
+                    WsMessage::Frame(_) => { debug!("[WS] raw frame (ignored)"); continue; }
+                };
+                if text.is_empty() {
+                    debug!("[WS] empty text frame (ignored)");
+                    continue;
+                }
+                debug!("[WS←] RECV {} bytes: {}", text.len(), &text[..text.len().min(300)]);
+                match Message::try_from(&text, ctx2.addr.clone(), allow_public_space) {
+                    Ok(msgs) => {
+                        for msg in msgs {
+                            if ctx2.router.send(msg).is_err() {
+                                error!("failed to forward incoming message to router");
                             }
                         }
                     }
-                    future::ok(())
-                })
-                .await;
+                    Err(e) => {
+                        debug!("[WS] parse error: {} (len={})", e, text.len());
+                    }
+                }
+            }
+            debug!("[WS] receive loop ended — stopping actor");
             ctx2.stop();
         });
     }
 
     async fn stopping(&mut self, _context: &ActorContext) {
         info!("WsConn stopping — sending WebSocket Close frame");
-        // Send a WebSocket Close frame to initiate a clean close handshake.
-        // The remote peer should respond with its own Close frame, after
-        // which the connection is fully closed. We use a timeout so a
-        // non-responsive peer doesn't block shutdown.
         let close_result = crate::tokio_time::timeout(Duration::from_secs(2), self.sender.close()).await;
 
         match close_result {

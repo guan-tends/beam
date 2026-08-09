@@ -103,6 +103,14 @@ impl Put {
         }
 
         for (node_id, children) in self.updated_nodes.iter() {
+            // Skip BEAM-internal souls that have no meaning in Gun.js wire format:
+            // - "" (empty root pointer) — Gun.js doesn't use a root soul
+            // - "soul/key" (value souls containing "/") — Gun.js stores values
+            //   as fields on the parent soul, not as separate souls
+            // These are only needed for BEAM-internal graph traversal.
+            if node_id.is_empty() || node_id.contains('/') {
+                continue;
+            }
             let node = &mut json["put"][node_id];
             node["_"] = json!({
                 "#": node_id,

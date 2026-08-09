@@ -24,7 +24,9 @@
     await init();
 
     const beam = new Beam();
-    beam.connect("ws://192.168.8.142:4944");
+    const params = new URLSearchParams(location.search);
+    const relay = params.get('relay') || 'ws://192.168.8.142:4944';
+    beam.connect(relay);
 
     const messagesDiv = document.getElementById("messages");
     const msgInput = document.getElementById("msg");

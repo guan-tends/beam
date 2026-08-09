@@ -1,0 +1,18 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+<div id="status">idle</div><div id="data">{}</div>
+<script src="gun.js"></script>
+<script>
+window.gunReady = false; window.receivedData = {};
+const gun = Gun('ws://127.0.0.1:4944');
+function subscribe(soul) {
+  gun.get(soul).map().on((value, key) => {
+    if (typeof value === 'string') {
+      window.receivedData[key] = value;
+      document.getElementById('data').textContent = JSON.stringify(window.receivedData);
+    }
+  });
+}
+window.gunSubscribe = subscribe;
+setTimeout(() => { window.gunReady = true; }, 5000);
+window.gunPut = (soul, key, value) => gun.get(soul).get(key).put(value);
+</script></body></html>
