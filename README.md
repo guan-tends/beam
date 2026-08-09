@@ -244,6 +244,10 @@ BEAM browser nodes are wire-compatible with Gun.js. A BEAM WASM node can:
 - Verify Gun.js SEA signatures (P-256 ECDSA, double-hashed)
 - Interoperate with the Gun.js graph format
 
+Bidirectional compatibility is verified by Playwright E2E tests
+(`tests/e2e/gun-beam-interop.spec.mjs`) covering Gun.js→BEAM, BEAM→Gun.js,
+and bidirectional convergence scenarios.
+
 ## Quick Start
 
 ### Build & Run a Node

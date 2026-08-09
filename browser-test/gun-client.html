@@ -22,7 +22,7 @@
   <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
   <script>
     const params = new URLSearchParams(location.search);
-    const relay = params.get('relay') || 'ws://192.168.8.142:4944';
+    const relay = params.get('relay') || 'ws://localhost:4944';
     document.getElementById('status').textContent = 'Connected to ' + relay;
 
     const gun = Gun(relay);

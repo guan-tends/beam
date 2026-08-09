@@ -9,7 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [Unreleased]
+## [0.10.0] — 2026-08-09 — Gun.js Wire Protocol Compatibility Verified
+
+Bidirectional Gun.js ↔ BEAM wire protocol compatibility proven with
+Playwright E2E tests. All three interop scenarios pass: Gun.js→BEAM,
+BEAM→Gun.js, and bidirectional convergence.
+
+### Fixed
+
+- **ws_server.rs**: Internal messages (RegisterQuorum, CheckQuorumTimeouts)
+  no longer relayed to wire clients — only Put/Get forwarded
+- **message.rs**: Put::to_string() now skips BEAM-internal souls (empty root
+  pointer, slash-containing value nodes) in wire serialization — Gun.js
+  cannot parse these internal graph structures
+- **message.rs**: json_str cache is now cleared in WsConn::handle before
+  re-serializing, ensuring soul filtering applies to relayed Puts
+- **ws_conn.rs**: Idiomatic `while let` + `match` receive loop replacing
+  try_for_each closure, with proper handling of all WsMessage variants
+  (Binary, Ping, Pong, Close, Frame) — empty frames no longer cause
+  connection cleanup
+
+### Added
+
+- Playwright E2E test suite for Gun.js ↔ BEAM bidirectional interop
+  (`tests/e2e/gun-beam-interop.spec.mjs`)
+- Each test auto-starts a fresh relay (memory-only) for isolation
+- Dynamic per-test soul subscription prevents cross-test contamination
+- Gun.js served locally for VPN-compatible testing
+
+### Security
+
+- OPSEC audit: removed hardcoded internal network IP from browser-test pages
+- Removed stale duplicate README from browser-test directory
+- Generated test HTML files gitignored
 
 ## [0.9.2] — 2026-08-08 — WASM Browser Support + Automated Test Suite
 

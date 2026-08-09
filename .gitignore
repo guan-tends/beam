@@ -9,3 +9,5 @@ benches/_data/
 README.md.bak
 pkg/
 beam.redb
+browser-test/_beam_test.html
+browser-test/_gun_test.html

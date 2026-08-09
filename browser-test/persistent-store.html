@@ -36,7 +36,7 @@
     await init();
 
     const beam = Beam.new_persistent();
-    beam.connect("ws://192.168.8.142:4944");
+    beam.connect("ws://localhost:4944");
 
     document.getElementById("set").onclick = () => {
       const key = document.getElementById("key").value;
