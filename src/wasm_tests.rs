@@ -373,3 +373,154 @@ fn wasm_bench_get_parse_throughput() {
         1_000_000_000.0 / per_op_ns
     );
 }
+
+// ============================================================================
+// WASM Relay Throughput Benchmarks (T12-T13)
+// ============================================================================
+// Measures relay TPS from a WASM client. Ground truth comes from the
+// relay's `/metrics` HTTP endpoint (same approach as the native bench).
+// The relay binary must be pre-built: `cargo build --bin beam`.
+
+/// Fetch the relay's metrics snapshot as a JSON object.
+/// Fetch the relay's metrics snapshot as a JSON object.
+///
+/// The relay serves HTTP (including `/metrics`) on `port + 1`,
+/// while the WebSocket server runs on `port`. We query the HTTP port.
+async fn fetch_metrics(ws_port: u16) -> JsValue {
+    let http_port = ws_port + 1;
+    eval_promise(&format!(
+        r#"
+        fetch("http://127.0.0.1:{http_port}/metrics")
+            .then(r => r.json())
+        "#
+    ))
+    .await
+}
+
+/// Extract a u64 field from a JS object by key.
+fn get_u64(obj: &JsValue, key: &str) -> u64 {
+    let val = js_sys::Reflect::get(obj, &js_sys::JsString::from(key)).expect("field missing");
+    val.as_f64().unwrap_or(0.0) as u64
+}
+
+/// Run a WASM relay throughput benchmark: send `count` puts through a
+/// real relay and measure messages/sec from the relay's own counters.
+async fn run_wasm_relay_throughput(port: u16, count: usize) {
+    use crate::wasm::Beam;
+
+    let _relay = Relay::start(port).await;
+
+    let mut beam = Beam::new();
+    beam.connect(&format!("ws://127.0.0.1:{port}"));
+    sleep(500).await;
+
+    // Baseline metrics from the relay (ground truth).
+    let before = fetch_metrics(port).await;
+
+    // Send `count` puts (fire-and-forget). Each targets a unique key
+    // to avoid dedup — we want every message to flow through the relay.
+    let start = web_time::Instant::now();
+    for i in 0..count {
+        let key = format!("bench/{}", i);
+        beam.put(&key, &format!("msg_{}", i));
+    }
+    let send_elapsed = start.elapsed();
+
+    // Wait for relay counters to stabilize (no new messages for 500ms).
+    let stabilize_deadline = web_time::Instant::now() + web_time::Duration::from_secs(30);
+    let mut last_relayed = get_u64(&before, "messages_relayed");
+    loop {
+        sleep(500).await;
+        let snap = fetch_metrics(port).await;
+        let now_relayed = get_u64(&snap, "messages_relayed");
+        if now_relayed == last_relayed {
+            break;
+        }
+        last_relayed = now_relayed;
+        if web_time::Instant::now() > stabilize_deadline {
+            break;
+        }
+    }
+
+    let total_elapsed = start.elapsed();
+    let after = fetch_metrics(port).await;
+
+    // Compute deltas from relay's ground-truth counters.
+    let relayed = get_u64(&after, "messages_relayed") - get_u64(&before, "messages_relayed");
+    let ws_sent = get_u64(&after, "ws_messages_sent") - get_u64(&before, "ws_messages_sent");
+    let ws_recv =
+        get_u64(&after, "ws_messages_received") - get_u64(&before, "ws_messages_received");
+    let parsed = get_u64(&after, "messages_parsed") - get_u64(&before, "messages_parsed");
+    let dropped_dup =
+        get_u64(&after, "messages_dropped_dup") - get_u64(&before, "messages_dropped_dup");
+    let fanout =
+        get_u64(&after, "subscriber_fanout_total") - get_u64(&before, "subscriber_fanout_total");
+    let serialized =
+        get_u64(&after, "serialization_calls") - get_u64(&before, "serialization_calls");
+
+    let throughput = if total_elapsed.as_secs_f64() > 0.0 {
+        relayed as f64 / total_elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
+    let send_rate = if send_elapsed.as_secs_f64() > 0.0 {
+        count as f64 / send_elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
+
+    console_log!(
+        "\n============================================================\n  \
+         WASM RELAY THROUGHPUT BENCHMARK\n  \
+         Messages: {} (fire-and-forget puts)\n  \
+         Send phase: {:.3}s ({:.0} puts/sec)\n  \
+         Total elapsed: {:.3}s\n  \
+         --- Relay Hot-Path Counters ---\n  \
+         ws_messages_received: {}\n  \
+         messages_parsed:      {}\n  \
+         messages_dropped_dup: {}\n  \
+         messages_relayed:     {}\n  \
+         subscriber_fanout:    {}\n  \
+         serialization_calls:  {}\n  \
+         ws_messages_sent:     {}\n  \
+         Throughput:       {:.0} msgs/sec (relayed)\n  \
+         Fanout ratio:     {:.1}\n  \
+         Dedup rate:       {:.1}%\n\
+         ============================================================\n",
+        count,
+        send_elapsed.as_secs_f64(),
+        send_rate,
+        total_elapsed.as_secs_f64(),
+        ws_recv,
+        parsed,
+        dropped_dup,
+        relayed,
+        fanout,
+        serialized,
+        ws_sent,
+        throughput,
+        if relayed > 0 {
+            fanout as f64 / relayed as f64
+        } else {
+            0.0
+        },
+        if parsed > 0 {
+            100.0 * dropped_dup as f64 / parsed as f64
+        } else {
+            0.0
+        },
+    );
+
+    assert!(relayed > 0, "relay should have processed messages");
+    beam.stop();
+}
+
+#[wasm_bindgen_test(async)]
+async fn wasm_relay_throughput_1k() {
+    run_wasm_relay_throughput(4971, 1_000).await;
+}
+
+#[wasm_bindgen_test(async)]
+async fn wasm_relay_throughput_5k() {
+    run_wasm_relay_throughput(4972, 5_000).await;
+}
