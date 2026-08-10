@@ -19,7 +19,6 @@ pub struct Get {
     pub node_id: String,
     pub checksum: Option<i32>,
     pub child_key: Option<String>,
-    pub json_str: Option<String>,
 }
 impl Get {
     pub fn new(node_id: String, child_key: Option<String>, from: Addr) -> Self {
@@ -29,23 +28,21 @@ impl Get {
             recipients: None,
             node_id,
             child_key,
-            json_str: None,
             checksum: None,
         }
     }
 
+    /// Serializes to Gun.js wire format. No caching — every call
+    /// re-serializes. The cost is JSON building; Sprint 4 (SIMD JSON)
+    /// will address this with a faster parser.
     pub fn to_string(&self) -> String {
-        if let Some(json_str) = self.json_str.clone() {
-            return json_str;
-        }
-
         let mut json = json!({
             "get": {
                 "#": &self.node_id
             },
             "#": &self.id
         });
-        if let Some(child_key) = self.child_key.clone() {
+        if let Some(child_key) = &self.child_key {
             json["get"]["."] = json!(child_key);
         }
         json.to_string()
@@ -60,7 +57,6 @@ pub struct Put {
     pub in_response_to: Option<String>,
     pub updated_nodes: BTreeMap<String, Children>,
     pub checksum: Option<i32>,
-    pub json_str: Option<String>,
     /// DAM peer-hop list
     pub peer_hop_list: Option<HashSet<String>>,
 }
@@ -77,7 +73,6 @@ impl Put {
             in_response_to,
             updated_nodes,
             checksum: None,
-            json_str: None,
             peer_hop_list: None,
         }
     }
@@ -88,11 +83,13 @@ impl Put {
         Put::new(updated_nodes, None, from)
     }
 
-    pub fn to_string(&mut self) -> String {
-        if let Some(json_str) = self.json_str.clone() {
-            return json_str;
-        }
-
+    /// Serializes to Gun.js wire format. Takes `&self` (immutable) so it
+    /// works through `Arc<Message>` without cloning.
+    ///
+    /// No caching — every call re-serializes. The checksum is computed
+    /// on-the-fly from the put JSON if not already set (incoming wire
+    /// messages carry it; locally created Puts compute it here).
+    pub fn to_string(&self) -> String {
         let mut json = json!({
             "put": {},
             "#": self.id.to_string(),
@@ -124,12 +121,7 @@ impl Put {
 
         let checksum = match &self.checksum {
             Some(s) => *s,
-            _ => {
-                let put_str = json["put"].to_string();
-                let checksum = put_str.hash_code();
-                self.checksum = Some(checksum);
-                checksum
-            }
+            None => json["put"].to_string().hash_code(),
         };
         json["##"] = json!(checksum);
         if let Some(ref hops) = self.peer_hop_list {
@@ -139,9 +131,7 @@ impl Put {
             }
         }
 
-        let s = json.to_string();
-        self.json_str = Some(s.clone());
-        s
+        json.to_string()
     }
 }
 
@@ -169,8 +159,8 @@ impl BatchPut {
     /// Convert to a JSON array of individual Put messages.
     /// BatchPut is an internal optimization; on the wire it
     /// materializes as the constituent puts.
-    pub fn to_string(&mut self) -> String {
-        let parts: Vec<String> = self.puts.iter_mut().map(|put| put.to_string()).collect();
+    pub fn to_string(&self) -> String {
+        let parts: Vec<String> = self.puts.iter().map(|put| put.to_string()).collect();
         format!("[{}]", parts.join(","))
     }
 }
@@ -203,7 +193,6 @@ pub struct RtcSignal {
     /// The UDP socket address of the sender, so the receiver can add it as a
     /// remote ICE candidate for loopback and direct connections.
     pub local_addr: Option<String>,
-    pub json_str: Option<String>,
 }
 
 impl RtcSignal {
@@ -273,11 +262,11 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn to_string(self) -> String {
+    pub fn to_string(&self) -> String {
         match self {
             Message::Get(get) => get.to_string(),
-            Message::Put(mut put) => put.to_string(),
-            Message::BatchPut(mut batch) => batch.to_string(),
+            Message::Put(put) => put.to_string(),
+            Message::BatchPut(batch) => batch.to_string(),
             Message::Flush(flush) => json!({"dam": "flush","#": flush.id}).to_string(),
             Message::Hi { from: _, peer_id } => json!({"dam": "hi","#": peer_id}).to_string(),
             Message::RtcSignal(rtc) => rtc.to_string(),
@@ -589,18 +578,12 @@ impl Message {
             in_response_to,
             updated_nodes,
             checksum,
-            json_str: Some(json_str),
             peer_hop_list,
         };
         Ok(Message::Put(put))
     }
 
-    fn from_get_obj(
-        json: &JsonValue,
-        json_str: String,
-        msg_id: String,
-        from: Addr,
-    ) -> Result<Self, &'static str> {
+    fn from_get_obj(json: &JsonValue, msg_id: String, from: Addr) -> Result<Self, &'static str> {
         /* TODO: other types of child_key selectors than equality.
 
         node.get({'.': {'<': cursor, '-': true}, '%': 20 * 1000}).once().map().on((value, key) => { ...
@@ -635,7 +618,6 @@ impl Message {
             recipients: None,
             node_id: node_id.to_string(),
             child_key,
-            json_str: Some(json_str),
             checksum,
         };
         Ok(Message::Get(get))
@@ -668,7 +650,7 @@ impl Message {
         if obj.contains_key("put") {
             Self::from_put_obj(json, json_str, msg_id, from, allow_public_space)
         } else if obj.contains_key("get") {
-            Self::from_get_obj(json, json_str, msg_id, from)
+            Self::from_get_obj(json, msg_id, from)
         } else if let Some(dam) = obj.get("dam").and_then(|d| d.as_str()) {
             if dam == "rtc" {
                 let to = obj
@@ -694,7 +676,6 @@ impl Message {
                     answer,
                     candidate,
                     local_addr,
-                    json_str: Some(json_str),
                 }))
             } else {
                 Ok(Message::Hi {

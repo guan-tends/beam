@@ -65,16 +65,11 @@ impl WsConn {
 #[async_trait]
 impl Actor for WsConn {
     async fn handle(&mut self, msg: Arc<Message>, ctx: &ActorContext) {
-        // Clear cached json_str so Put::to_string() re-serializes with
-        // internal souls (root "", value "soul/key") stripped for wire format.
+        // Serialize to wire format. Internal souls (root "", value
+        // "soul/key") are stripped during serialization by Put::to_string.
         let wire = match &*msg {
-            Message::Put(put) => {
-                // Clone with cleared json_str cache for wire-format serialization.
-                let mut put = put.clone();
-                put.json_str = None;
-                put.to_string()
-            }
-            _ => (*msg).clone().to_string(),
+            Message::Put(put) => put.to_string(),
+            _ => msg.to_string(),
         };
         ctx.metrics.record_serialization();
         debug!(

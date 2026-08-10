@@ -485,7 +485,7 @@ impl Actor for Multicast {
         match &*msg {
             Message::Put(put) => {
                 let msg_id = put.id.clone();
-                let serialized = put.clone().to_string();
+                let serialized = put.to_string();
                 self.broadcast_message(serialized, msg_id).await;
             }
             Message::Get(get) => {
