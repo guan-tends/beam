@@ -284,20 +284,20 @@ impl Actor for Router {
         info!("Router stopping");
     }
 
-    async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
-        debug!("incoming message {}", msg.clone().to_string());
-        match msg {
-            Message::Put(put) => self.handle_put(put),
+    async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
+        debug!("incoming message {}", msg.get_id());
+        match &*msg {
+            Message::Put(put) => self.handle_put(put.clone()),
             Message::BatchPut(batch) => {
-                self.handle_batch_put(batch);
+                self.handle_batch_put(batch.clone());
             }
-            Message::Get(get) => self.handle_get(get),
-            Message::Flush(flush) => self.handle_flush(flush),
+            Message::Get(get) => self.handle_get(get.clone()),
+            Message::Flush(flush) => self.handle_flush(flush.clone()),
             Message::Hi { from, peer_id } => {
                 self.known_peers.insert(from.clone());
                 if !peer_id.is_empty() {
-                    if let Some(existing) = self.peer_addrs.get(&peer_id) {
-                        if existing != &from {
+                    if let Some(existing) = self.peer_addrs.get(peer_id) {
+                        if existing != from {
                             error!(
                                 "Router peer_id collision: '{}' already mapped to {:?}, rejecting {:?}. Each peer_id must be unique.",
                                 peer_id, existing, from
@@ -305,7 +305,7 @@ impl Actor for Router {
                             return;
                         }
                     }
-                    self.peer_addrs.insert(peer_id, from);
+                    self.peer_addrs.insert(peer_id.clone(), from.clone());
                 }
             }
             Message::RtcSignal(rtc) => {
@@ -321,7 +321,7 @@ impl Actor for Router {
                             "RtcSignal delivering to local addr for peer_id={}",
                             to_peer_id
                         );
-                        let _ = addr.send(Message::RtcSignal(rtc));
+                        let _ = addr.send(Message::RtcSignal(rtc.clone()));
                     } else {
                         debug!(
                             "RtcSignal broadcasting to {} known_peers",
@@ -338,7 +338,7 @@ impl Actor for Router {
                 requester,
                 policy,
             } => {
-                let _ = self.handle_register_quorum(put_id, requester, policy);
+                let _ = self.handle_register_quorum(put_id.clone(), requester.clone(), *policy);
             }
             Message::CheckQuorumTimeouts => {
                 self.handle_quorum_timeout_reaper();

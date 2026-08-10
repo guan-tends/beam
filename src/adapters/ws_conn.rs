@@ -22,6 +22,7 @@ use crate::actor::{Actor, ActorContext};
 use crate::message::Message;
 use futures_util::SinkExt;
 use futures_util::stream::{SplitSink, SplitStream};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -63,13 +64,18 @@ impl WsConn {
 
 #[async_trait]
 impl Actor for WsConn {
-    async fn handle(&mut self, mut msg: Message, ctx: &ActorContext) {
+    async fn handle(&mut self, msg: Arc<Message>, ctx: &ActorContext) {
         // Clear cached json_str so Put::to_string() re-serializes with
         // internal souls (root "", value "soul/key") stripped for wire format.
-        if let Message::Put(ref mut put) = msg {
-            put.json_str = None;
-        }
-        let wire = msg.to_string();
+        let wire = match &*msg {
+            Message::Put(put) => {
+                // Clone with cleared json_str cache for wire-format serialization.
+                let mut put = put.clone();
+                put.json_str = None;
+                put.to_string()
+            }
+            _ => (*msg).clone().to_string(),
+        };
         ctx.metrics.record_serialization();
         debug!(
             "[WS→] SENDING {} bytes: {}",

@@ -1,11 +1,11 @@
 #![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
 
-//! Actor framework — a lightweight actor model built on Tokio channels.
+//! Actor framework — a lightweight actor model built on [`Mailbox`].
 //!
-//! This module provides a minimal actor system inspired by
-//! [Alice Ryhl's "Actors with Tokio"](https://ryhl.io/blog/actors-with-tokio/)
-//! guide. Actors communicate via typed messages over channels and run on the
-//! Tokio async runtime.
+//! This module provides a minimal actor system where actors communicate via
+//! [`Arc<Message>`] over pre-allocated ring-buffer mailboxes. The mailbox
+//! replaces tokio's `mpsc` channels, eliminating per-message allocation and
+//! reducing scheduler overhead through batch draining.
 //!
 //! # Architecture
 //!
@@ -14,33 +14,39 @@
 //!   child actor management
 //! - [`Addr`] — a clonable, hashable address for sending messages to an actor
 //!
-//! # Channel Types
+//! # Mailbox
 //!
-//! Actors can use either unbounded or bounded channels:
+//! All actors use [`crate::mailbox::mailbox`] — a bounded `VecDeque` protected
+//! by `parking_lot::Mutex` with `tokio::sync::Notify` for wakeups. Messages
+//! are wrapped in [`Arc<Message>`] so fanout is a refcount bump (~2 ns),
+//! not a deep clone.
 //!
-//! - **Unbounded** (default) — [`ActorContext::start_actor`] creates an actor
-//!   with an unbounded channel. No backpressure; messages are always enqueued.
+//! - **Default capacity** (65536) — [`ActorContext::start_actor`] creates an
+//!   actor with a generous mailbox. Backpressure only under extreme load.
 //! - **Bounded** — [`ActorContext::start_actor_bounded`] creates an actor with
-//!   a bounded channel of the given capacity. When full, [`Addr::send`]
-//!   returns `Err(())`, applying backpressure. Used for storage write actors
-//!   where unbounded queue growth is undesirable.
-//!
-//! Both channel types are abstracted behind [`AddrSender`]/[`AddrReceiver`]
-//! enums, so callers use the same [`Addr::send`] API regardless of channel
-//! type.
+//!   a smaller capacity. When full, [`Addr::send`] returns `Err(())`,
+//!   applying backpressure. Used for storage write actors.
 //!
 //! # Message Flow
 //!
 //! ```text
-//! Sender → Addr.send(msg) → Channel (bounded or unbounded)
+//! Sender → Addr.send(msg) → Mailbox (bounded VecDeque<Arc<Message>>)
 //!                                ↓
-//!                          Actor.handle(msg, ctx)
+//!                      Actor.handle(Arc<Message>, ctx)
 //!                                ↓
 //!                          Actor can:
 //!                          - spawn child actors
 //!                          - send to router
 //!                          - spawn child tasks
 //! ```
+//!
+//! # `Arc<Message>` Semantics
+//!
+//! [`Addr::send`] accepts `impl Into<Arc<Message>>`, so existing call sites
+//! that pass `Message::Put(put)` still compile — the message is wrapped in
+//! `Arc` inside `send`. For fanout paths (e.g. relay), callers can pass
+//! `Arc::clone(&msg)` to skip the allocation entirely — all subscribers
+//! share the same `Arc`.
 //!
 //! # Shutdown
 //!
@@ -49,6 +55,7 @@
 //! to all child actors.
 
 use crate::Node;
+use crate::mailbox::{self, MailboxReceiver, MailboxSender};
 use crate::message::Message;
 use crate::metrics::Metrics;
 use crate::tokio_spawn::JoinHandle;
@@ -61,38 +68,11 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::Send;
 use std::sync::Arc;
-use tokio::sync::mpsc::{
-    Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
-};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::sync::watch;
 
-/// Internal enum holding either an unbounded or bounded channel sender.
-///
-/// [`Addr::send`] dispatches over this enum so callers don't need to know
-/// whether the underlying channel has backpressure.
-#[derive(Clone, Debug)]
-enum AddrSender {
-    Unbounded(UnboundedSender<Message>),
-    Bounded(Sender<Message>),
-}
-
-/// Internal enum holding either an unbounded or bounded channel receiver.
-///
-/// [`Actor::run`] consumes this, abstracting over the two receiver types.
-enum AddrReceiver {
-    Unbounded(UnboundedReceiver<Message>),
-    Bounded(Receiver<Message>),
-}
-
-impl AddrReceiver {
-    /// Receives the next message, or `None` when the channel is closed.
-    async fn recv(&mut self) -> Option<Message> {
-        match self {
-            Self::Unbounded(r) => r.recv().await,
-            Self::Bounded(r) => r.recv().await,
-        }
-    }
-}
+/// Default mailbox capacity for unbounded actors.
+const DEFAULT_MAILBOX_CAPACITY: usize = 65536;
 
 /// The core actor trait.
 ///
@@ -111,20 +91,25 @@ impl AddrReceiver {
 /// use beam::actor::{Actor, ActorContext};
 /// use beam::message::Message;
 /// use async_trait::async_trait;
+/// use std::sync::Arc;
 ///
 /// struct EchoActor;
 ///
 /// #[async_trait]
 /// impl Actor for EchoActor {
-///     async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
-///         // Process message
+///     async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
+///         // Process message — &*msg gives &Message
 ///     }
 /// }
 /// ```
 #[async_trait]
 pub trait Actor: Send + Sync + 'static {
     /// Handle an incoming message.
-    async fn handle(&mut self, message: Message, context: &ActorContext);
+    ///
+    /// Messages are wrapped in [`Arc<Message>`] so that fanout paths
+    /// (e.g. relay) can share a single allocation across all subscribers.
+    /// Use `&*msg` or `msg.as_ref()` to access the inner [`Message`].
+    async fn handle(&mut self, message: Arc<Message>, context: &ActorContext);
 
     /// Called once before the actor starts processing messages.
     ///
@@ -164,30 +149,34 @@ pub trait Actor: Send + Sync + 'static {
 
 impl dyn Actor {
     /// Internal run loop — receives messages until the stop signal fires
-    /// or the channel is closed.
+    /// or the mailbox is closed.
     ///
-    /// Accepts [`AddrReceiver`] so the run loop works with both unbounded
-    /// and bounded channels. Bounded channels provide backpressure for
-    /// write-heavy actors (e.g. storage write actors).
+    /// Uses [`MailboxReceiver::recv_batch`] to drain up to 64 messages per
+    /// wakeup, amortizing scheduler overhead across batches. This is the
+    /// key performance difference from tokio's `mpsc::recv` which wakes
+    /// per message.
     async fn run(
         &mut self,
-        mut receiver: AddrReceiver,
+        mut receiver: MailboxReceiver,
         mut stop_receiver: Receiver<()>,
         mut context: ActorContext,
     ) {
         self.pre_start(&context).await;
+        let mut batch: Vec<Arc<Message>> = Vec::with_capacity(64);
         loop {
             tokio::select! {
                 _v = stop_receiver.recv() => {
                     context.stop();
                     break;
                 },
-                opt_msg = receiver.recv() => {
-                    let msg = match opt_msg {
-                        Some(msg) => msg,
-                        None => break,
-                    };
-                    self.handle(msg, &context).await
+                count = receiver.recv_batch(&mut batch, 64) => {
+                    if count == 0 {
+                        // Mailbox closed.
+                        break;
+                    }
+                    for msg in batch.drain(..) {
+                        self.handle(msg, &context).await;
+                    }
                 }
             }
         }
@@ -328,16 +317,9 @@ impl ActorContext {
         is_router: bool,
         bound: Option<usize>,
     ) -> Addr {
-        let (addr, receiver) = match bound {
-            Some(cap) => {
-                let (sender, receiver) = channel::<Message>(cap);
-                (Addr::new_bounded(sender), AddrReceiver::Bounded(receiver))
-            }
-            None => {
-                let (sender, receiver) = unbounded_channel::<Message>();
-                (Addr::new(sender), AddrReceiver::Unbounded(receiver))
-            }
-        };
+        let capacity = bound.unwrap_or(DEFAULT_MAILBOX_CAPACITY);
+        let (sender, receiver) = mailbox::mailbox(capacity);
+        let addr = Addr::new(sender);
         let (stop_sender, stop_receiver) = channel(1);
         let mut new_context = self.child_context(addr.clone(), stop_sender.clone());
         if is_router {
@@ -380,61 +362,50 @@ impl ActorContext {
 /// ```no_run
 /// use beam::actor::Addr;
 /// use beam::message::Message;
+/// use std::sync::Arc;
 ///
-/// // addr.send(msg) returns Result<(), ()>
-/// // Err(()) means the actor's channel is closed (actor stopped)
+/// // addr.send(Message::Put(put)) — wraps in Arc internally
+/// // addr.send(Arc::clone(&msg)) — refcount bump, no allocation
+/// // Err(()) means the actor's mailbox is closed (actor stopped)
 /// ```
 #[derive(Clone, Debug)]
 pub struct Addr {
     id: String,
-    sender: AddrSender,
+    sender: MailboxSender,
 }
 
 impl Addr {
-    /// Creates a new address wrapping an unbounded channel sender.
-    pub fn new(sender: UnboundedSender<Message>) -> Self {
+    /// Creates a new address wrapping a [`MailboxSender`].
+    pub fn new(sender: MailboxSender) -> Self {
         Self {
             id: random_string(32),
-            sender: AddrSender::Unbounded(sender),
-        }
-    }
-
-    /// Creates a new address wrapping a bounded channel sender.
-    ///
-    /// Bounded addresses apply backpressure: when the channel is full,
-    /// `send` returns `Err(())` (same error as a closed channel).
-    pub fn new_bounded(sender: Sender<Message>) -> Self {
-        Self {
-            id: random_string(32),
-            sender: AddrSender::Bounded(sender),
+            sender,
         }
     }
 
     /// Sends a message to this actor.
     ///
+    /// Accepts `impl Into<Arc<Message>>` so callers can pass either:
+    /// - `Message::Put(put)` — wrapped in `Arc` internally (one allocation)
+    /// - `Arc::clone(&msg)` — refcount bump, zero allocation (for fanout)
+    ///
     /// Returns `Ok(())` if the message was enqueued, `Err(())` if the
-    /// actor's channel is closed (actor has stopped) or — for bounded
-    /// channels — if the channel is full (backpressure).
+    /// mailbox is full (backpressure) or closed (actor stopped).
     ///
     /// Callers that must not lose messages should retry on `Err`. The
     /// Router's storage dispatch uses `let _ = addr.send(...)` and accepts
     /// occasional drops under extreme backpressure, which is the correct
     /// trade-off for an LWW graph store.
-    #[allow(clippy::result_unit_err)] // channel-closed/full is unrecoverable; no meaningful error payload
-    pub fn send(&self, msg: Message) -> Result<(), ()> {
-        match &self.sender {
-            AddrSender::Unbounded(s) => s.send(msg).map_err(|_| ()),
-            AddrSender::Bounded(s) => s.try_send(msg).map_err(|_| ()),
-        }
+    #[allow(clippy::result_unit_err)] // mailbox-closed/full is unrecoverable; no meaningful error payload
+    pub fn send(&self, msg: impl Into<Arc<Message>>) -> Result<(), ()> {
+        self.sender.send(msg.into())
     }
 
-    /// Returns a no-op address with a discarded receiver.
+    /// Returns a no-op address that silently drops all messages.
     ///
-    /// Messages sent to a noop address are silently dropped. Useful as a
-    /// placeholder before a real address is set.
+    /// Useful as a placeholder before a real address is set.
     pub fn noop() -> Addr {
-        let (sender, _receiver) = unbounded_channel::<Message>();
-        Addr::new(sender)
+        Addr::new(MailboxSender::noop())
     }
 }
 
@@ -464,8 +435,8 @@ mod tests {
 
     #[test]
     fn test_addr_equality() {
-        let (s1, _r1) = unbounded_channel::<Message>();
-        let (s2, _r2) = unbounded_channel::<Message>();
+        let (s1, _r1) = crate::mailbox::mailbox(16);
+        let (s2, _r2) = crate::mailbox::mailbox(16);
         let a1 = Addr::new(s1);
         let a2 = Addr::new(s2);
         assert_ne!(a1, a2, "different addrs are not equal");
@@ -474,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_addr_hash() {
-        let (s1, _r1) = unbounded_channel::<Message>();
+        let (s1, _r1) = crate::mailbox::mailbox(16);
         let a1 = Addr::new(s1);
         let a2 = a1.clone();
         let mut set = std::collections::HashSet::new();
@@ -484,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_addr_display() {
-        let (s, _r) = unbounded_channel::<Message>();
+        let (s, _r) = crate::mailbox::mailbox(16);
         let addr = Addr::new(s);
         let display = format!("{}", addr);
         assert!(display.starts_with("actor:"));
@@ -494,15 +465,12 @@ mod tests {
     #[test]
     fn test_addr_noop_sends_silently() {
         let addr = Addr::noop();
-        // Sending to noop should not panic
-        // We can't easily send a Message without constructing one,
-        // but noop creates a valid channel with a discarded receiver
         assert_eq!(addr.id.len(), 32);
     }
 
     #[test]
     fn test_addr_id_length() {
-        let (s, _r) = unbounded_channel::<Message>();
+        let (s, _r) = crate::mailbox::mailbox(16);
         let addr = Addr::new(s);
         assert_eq!(addr.id.len(), 32);
         assert!(
@@ -517,8 +485,9 @@ mod tests {
 
     #[async_trait]
     impl Actor for TestActor {
-        async fn handle(&mut self, message: Message, _ctx: &ActorContext) {
-            self.received.write().push(message);
+        async fn handle(&mut self, message: Arc<Message>, _ctx: &ActorContext) {
+            // Clone the inner Message out of the Arc for the test vector.
+            self.received.write().push((*message).clone());
         }
     }
 

@@ -2,6 +2,7 @@ pub mod ack;
 pub mod actor;
 pub mod adapters;
 mod dup;
+pub mod mailbox;
 #[doc(hidden)]
 pub mod message; // pub for benchmarking
 pub mod metrics;

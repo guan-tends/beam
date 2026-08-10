@@ -457,14 +457,14 @@ impl Actor for WebRtcPeer {
         });
     }
 
-    async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
+    async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
         if let Some(tx) = &self.tx {
-            match msg {
+            match &*msg {
                 Message::RtcSignal(signal) => {
                     if signal.to.as_ref() != Some(&self.peer_id) {
                         return;
                     }
-                    let _ = tx.send(WrtcCommand::Signal(signal));
+                    let _ = tx.send(WrtcCommand::Signal(signal.clone()));
                 }
                 other => {
                     let text = other.to_string();

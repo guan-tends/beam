@@ -297,12 +297,13 @@ impl Actor for RedbStorage {
         );
     }
 
-    async fn handle(&mut self, message: Message, ctx: &ActorContext) {
-        match message {
-            Message::Get(get) => self.handle_get(get, ctx),
+    async fn handle(&mut self, message: Arc<Message>, ctx: &ActorContext) {
+        match &*message {
+            Message::Get(get) => self.handle_get(get.clone(), ctx),
             Message::Put(put) => {
                 let put_id = put.id.clone();
                 let put_from = put.from.clone();
+                let put = put.clone();
                 let storage = self.clone();
                 let result =
                     tokio::task::spawn_blocking(move || storage.handle_put_internal(put)).await;
@@ -311,6 +312,7 @@ impl Actor for RedbStorage {
             Message::BatchPut(batch) => {
                 let batch_id = batch.id.clone();
                 let batch_from = batch.from.clone();
+                let batch = batch.clone();
                 let storage = self.clone();
                 let result =
                     tokio::task::spawn_blocking(move || storage.handle_batch_put(batch)).await;
@@ -562,7 +564,6 @@ mod tests {
         use crate::actor::{Actor, ActorContext};
         use crate::message::Put;
         use std::collections::BTreeMap;
-        use tokio::sync::mpsc::unbounded_channel;
 
         let mut storage = create_test_storage("ack-always");
         let ctx = ActorContext::new("test".to_string());
@@ -579,11 +580,12 @@ mod tests {
         let mut nodes = BTreeMap::new();
         nodes.insert("n1".to_string(), children.clone());
         let seed_put = Put::new(nodes, None, ctx.addr.clone());
-        Actor::handle(&mut storage, Message::Put(seed_put), &ctx).await;
+        Actor::handle(&mut storage, Arc::new(Message::Put(seed_put)), &ctx).await;
 
         // Build a buffered `from` address so we can read the reply.
-        let (tx, mut rx) = unbounded_channel::<Message>();
+        let (tx, rx) = crate::mailbox::mailbox(16);
         let from_addr = crate::actor::Addr::new(tx);
+        let mut rx = rx;
 
         // Compute the checksum the storage will produce for the reply.
         let mut reply = Put::new(
@@ -610,7 +612,7 @@ mod tests {
             json_str: None,
         };
 
-        Actor::handle(&mut storage, Message::Get(get), &ctx).await;
+        Actor::handle(&mut storage, Arc::new(Message::Get(get)), &ctx).await;
 
         // Bug: with the old code, no reply arrives (timeout would be required).
         // Fix: redb_storage MUST always reply when in_response_to is Some.
@@ -620,14 +622,16 @@ mod tests {
         let _ = std::fs::remove_file(&storage.path);
 
         match received {
-            Ok(Some(Message::Put(reply_put))) => {
-                assert_eq!(
-                    reply_put.in_response_to.as_deref(),
-                    Some("get-id-42"),
-                    "reply must carry in_response_to so client can drain sentinel"
-                );
-            }
-            Ok(Some(other)) => panic!("expected Put reply, got {:?}", other),
+            Ok(Some(msg)) => match &*msg {
+                Message::Put(reply_put) => {
+                    assert_eq!(
+                        reply_put.in_response_to.as_deref(),
+                        Some("get-id-42"),
+                        "reply must carry in_response_to so client can drain sentinel"
+                    );
+                }
+                other => panic!("expected Put reply, got {:?}", other),
+            },
             Ok(None) => panic!("sender closed before reply sent"),
             Err(_) => panic!(
                 "BUG: redb_storage stayed silent despite matching in_response_to. \

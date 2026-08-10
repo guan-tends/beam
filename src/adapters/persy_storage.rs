@@ -416,15 +416,16 @@ impl Actor for PersyStorage {
         );
     }
 
-    async fn handle(&mut self, message: Message, ctx: &ActorContext) {
-        match message {
-            Message::Get(get) => self.handle_get(get, ctx),
+    async fn handle(&mut self, message: Arc<Message>, ctx: &ActorContext) {
+        match &*message {
+            Message::Get(get) => self.handle_get(get.clone(), ctx),
             Message::Put(put) => {
                 let put_id = put.id.clone();
                 let put_from = put.from.clone();
                 let storage = self.clone();
                 let result =
-                    tokio::task::spawn_blocking(move || storage.handle_put_internal(put)).await;
+                    tokio::task::spawn_blocking(move || storage.handle_put_internal(put.clone()))
+                        .await;
                 self.send_put_ack_after_commit(&put_id, &put_from, &result, ctx);
             }
             Message::BatchPut(batch) => {
@@ -432,7 +433,8 @@ impl Actor for PersyStorage {
                 let batch_from = batch.from.clone();
                 let storage = self.clone();
                 let result =
-                    tokio::task::spawn_blocking(move || storage.handle_batch_put(batch)).await;
+                    tokio::task::spawn_blocking(move || storage.handle_batch_put(batch.clone()))
+                        .await;
                 self.send_put_ack_after_commit(&batch_id, &batch_from, &result, ctx);
             }
             Message::Flush(flush) => {

@@ -734,13 +734,14 @@ fn dedup_benchmarks(c: &mut Criterion) {
 fn actor_mailbox_benchmarks(c: &mut Criterion) {
     use beam::actor::{Actor, ActorContext};
     use beam::message::Message;
+    use std::sync::Arc;
 
     /// Minimal echo actor — receives messages and drops them.
     /// Measures pure channel + scheduler cost.
     struct EchoActor;
     #[async_trait::async_trait]
     impl Actor for EchoActor {
-        async fn handle(&mut self, _msg: Message, _ctx: &ActorContext) {}
+        async fn handle(&mut self, _msg: Arc<Message>, _ctx: &ActorContext) {}
     }
 
     let rt = Runtime::new().unwrap();

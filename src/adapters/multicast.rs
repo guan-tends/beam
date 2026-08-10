@@ -477,15 +477,15 @@ impl Multicast {
 
 #[async_trait]
 impl Actor for Multicast {
-    async fn handle(&mut self, msg: Message, ctx: &ActorContext) {
+    async fn handle(&mut self, msg: Arc<Message>, ctx: &ActorContext) {
         debug!("out {}", msg.get_id());
         if msg.is_from(&ctx.addr) {
             return;
         }
-        match msg {
-            Message::Put(mut put) => {
+        match &*msg {
+            Message::Put(put) => {
                 let msg_id = put.id.clone();
-                let serialized = put.to_string();
+                let serialized = put.clone().to_string();
                 self.broadcast_message(serialized, msg_id).await;
             }
             Message::Get(get) => {
