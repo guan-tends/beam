@@ -268,12 +268,12 @@ impl Actor for WsServer {
     /// messages (CheckQuorumTimeouts, RegisterQuorum) are never relayed —
     /// they are router-internal and would produce empty or malformed frames
     /// on the wire.
-    async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
+    async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
         // Only relay messages that have a valid wire representation.
         // RegisterQuorum serializes to an empty string; CheckQuorumTimeouts
         // serializes to "_tick_quorum" — neither is a valid Gun.js wire
         // message and both would cause parse errors in connected peers.
-        match &msg {
+        match &*msg {
             Message::Put(_)
             | Message::Get(_)
             | Message::BatchPut(_)
@@ -287,7 +287,7 @@ impl Actor for WsServer {
             if msg.is_from(conn) {
                 continue;
             }
-            if conn.send(msg.clone()).is_err() {
+            if conn.send((*msg).clone()).is_err() {
                 self.clients.write().await.remove(conn);
             }
         }

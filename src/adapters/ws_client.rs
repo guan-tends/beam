@@ -135,7 +135,7 @@ impl Actor for OutgoingWebsocketManager {
         true
     }
 
-    async fn handle(&mut self, message: Message, _ctx: &ActorContext) {
+    async fn handle(&mut self, message: Arc<Message>, _ctx: &ActorContext) {
         // Fan out to all connected clients.
         //
         // Snapshot under the read lock so we don't hold the lock while
@@ -148,7 +148,7 @@ impl Actor for OutgoingWebsocketManager {
         // priority inversion under load.
         let snapshot: Vec<Addr> = self.clients.read().await.values().cloned().collect();
         for client in snapshot {
-            let _ = client.send(message.clone());
+            let _ = client.send(Arc::clone(&message));
         }
     }
 

@@ -511,10 +511,10 @@ impl Actor for WasmIdbStorage {
         // subsequent operations once the success callback completes.
     }
 
-    async fn handle(&mut self, message: Message, ctx: &ActorContext) {
-        match message {
-            Message::Get(get) => self.handle_get(get, ctx),
-            Message::Put(put) => self.handle_put(put, ctx),
+    async fn handle(&mut self, message: Arc<Message>, ctx: &ActorContext) {
+        match &*message {
+            Message::Get(get) => self.handle_get(get.clone(), ctx),
+            Message::Put(put) => self.handle_put(put.clone(), ctx),
             Message::Flush(flush) => {
                 // IndexedDB writes are flushed immediately (write-through).
                 // Ack the barrier so callers don't hang.
@@ -531,10 +531,10 @@ impl Actor for WasmIdbStorage {
                 );
                 let mut nodes = BTreeMap::new();
                 nodes.insert("_ack".to_string(), ack);
-                let put = Put::new(nodes, Some(flush.id), ctx.addr.clone());
+                let put = Put::new(nodes, Some(flush.id.clone()), ctx.addr.clone());
                 let _ = flush.from.send(Message::Put(put));
             }
-            Message::BatchPut(batch) => self.handle_batch_put(batch, ctx),
+            Message::BatchPut(batch) => self.handle_batch_put(batch.clone(), ctx),
             _ => {}
         }
     }

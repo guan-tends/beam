@@ -241,10 +241,10 @@ impl Actor for MemoryStorage {
         info!("MemoryStorage adapter starting");
     }
 
-    async fn handle(&mut self, message: Message, ctx: &ActorContext) {
-        match message {
-            Message::Get(get) => self.handle_get(get, ctx),
-            Message::Put(put) => self.handle_put(put, ctx),
+    async fn handle(&mut self, message: Arc<Message>, ctx: &ActorContext) {
+        match &*message {
+            Message::Get(get) => self.handle_get(get.clone(), ctx),
+            Message::Put(put) => self.handle_put(put.clone(), ctx),
             Message::Flush(flush) => {
                 // Memory storage has no disk state; flush is a no-op.
                 // Ack the barrier so callers never hang.
@@ -261,11 +261,11 @@ impl Actor for MemoryStorage {
                 );
                 let mut nodes = BTreeMap::new();
                 nodes.insert("_ack".to_string(), ack);
-                let mut put = Put::new(nodes, Some(flush.id), ctx.addr.clone());
+                let mut put = Put::new(nodes, Some(flush.id.clone()), ctx.addr.clone());
                 put.to_string(); // compute checksum
                 let _ = flush.from.send(Message::Put(put));
             }
-            Message::BatchPut(batch) => self.handle_batch_put(batch, ctx),
+            Message::BatchPut(batch) => self.handle_batch_put(batch.clone(), ctx),
             _ => {}
         }
     }

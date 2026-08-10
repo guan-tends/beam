@@ -123,7 +123,7 @@ impl Actor for WasmWsConn {
         });
     }
 
-    async fn handle(&mut self, msg: Message, _ctx: &ActorContext) {
+    async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
         let text = msg.to_string();
         // Check readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
         if self.ws.ready_state() == 1 {

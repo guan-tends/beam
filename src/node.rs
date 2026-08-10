@@ -159,9 +159,9 @@ pub struct Node {
 
 #[async_trait]
 impl Actor for Node {
-    async fn handle(&mut self, msg: Message, _context: &ActorContext) {
-        if let Message::Put(put) = msg {
-            self.handle_put(put)
+    async fn handle(&mut self, msg: Arc<Message>, _context: &ActorContext) {
+        if let Message::Put(put) = &*msg {
+            self.handle_put(put.clone())
         }
     }
 }
@@ -1364,7 +1364,7 @@ mod tests {
 
         // Inject via the actor handle
         let ctx = ActorContext::new("test-peer".to_string());
-        node.handle(Message::Put(ack), &ctx).await;
+        node.handle(Arc::new(Message::Put(ack)), &ctx).await;
 
         // The future should resolve with Ok(())
         let result = crate::tokio_time::timeout(Duration::from_secs(1), rx)
@@ -1390,7 +1390,7 @@ mod tests {
         let ack = make_ack_put(&put_id, "_err");
 
         let ctx = ActorContext::new("test-peer".to_string());
-        node.handle(Message::Put(ack), &ctx).await;
+        node.handle(Arc::new(Message::Put(ack)), &ctx).await;
 
         let result = crate::tokio_time::timeout(Duration::from_secs(1), rx)
             .await
@@ -1414,7 +1414,7 @@ mod tests {
         let ack = make_ack_put("different-id", "_ack");
 
         let ctx = ActorContext::new("test-peer".to_string());
-        node.handle(Message::Put(ack), &ctx).await;
+        node.handle(Arc::new(Message::Put(ack)), &ctx).await;
 
         // The original pending_put should still be registered (not drained)
         assert!(
