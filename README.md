@@ -23,6 +23,7 @@
 - [Wire Protocol](#wire-protocol)
 - [Configuration](#configuration)
 - [Testing](#testing)
+- [Benchmarks](#benchmarks)
 - [Features](#features)
 - [Security](#security)
 - [Contributing](#contributing)
@@ -876,7 +877,6 @@ cargo clippy -- -D warnings
 # Doctests only (verifies README code examples compile)
 cargo test --doc
 
-# Benchmarks
 cargo bench
 
 # Run a specific integration test
@@ -906,6 +906,55 @@ cargo test --test wire_live -- --ignored  # Layer 3: live integration (needs Nod
 | `wire_live` | Live BEAM ↔ Gun.js bidirectional sync (4 scenarios) |
 
 ---
+
+## Benchmarks
+
+BEAM includes a comprehensive benchmarking suite covering relay throughput,
+micro-benchmarks for hot-path components, and storage performance.
+
+### Relay Throughput
+
+Real WebSocket connections through a memory-only relay (no disk I/O):
+
+| Scenario | Messages | Throughput |
+|----------|----------|------------|
+| 1 sender × 10k | 10,000 | ~3,000 msgs/sec |
+| 1 sender × 50k | 50,000 | ~2,400 msgs/sec |
+| 10 senders × 5k | 50,000 | ~2,000 msgs/sec |
+
+The relay's internal processing (parse + dedup + route + serialize) runs in
+microseconds — the bottleneck is client-side `put().await`, not the relay.
+
+### Micro-Benchmarks (Criterion)
+
+| Operation | Time |
+|-----------|------|
+| Parse small Put JSON | 851 ns |
+| Parse medium Put JSON | 2.00 µs |
+| Serialize small Put JSON | 152 ns |
+| Parse Get | 425 ns |
+| Dedup check (fresh) | 274 µs |
+| Dedup check (duplicate) | 41.8 µs |
+| Actor mailbox send+recv | 309 µs |
+
+### Running Benchmarks
+
+```bash
+# Relay throughput (release mode required)
+cargo test --release --test relay_throughput_bench -- --ignored --nocapture
+
+# Micro-benchmarks (hot-path components)
+cargo bench --bench my_benchmark -- "wire_|dup_check|actor_mailbox"
+
+# Storage benchmarks
+cargo bench --bench my_benchmark -- "write_storm|read_storm|mixed"
+
+# Live metrics endpoint (while relay is running)
+curl http://localhost:8080/metrics
+```
+
+See [`benches/RESULTS.md`](benches/RESULTS.md) for full results with
+methodology and analysis.
 
 ## Features
 

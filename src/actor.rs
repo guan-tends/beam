@@ -50,6 +50,8 @@
 
 use crate::Node;
 use crate::message::Message;
+use crate::metrics::Metrics;
+use crate::tokio_spawn::JoinHandle;
 use crate::utils::random_string;
 use async_trait::async_trait;
 use futures_util::Future;
@@ -63,7 +65,6 @@ use tokio::sync::mpsc::{
     Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded_channel,
 };
 use tokio::sync::watch;
-use crate::tokio_spawn::JoinHandle;
 
 /// Internal enum holding either an unbounded or bounded channel sender.
 ///
@@ -225,6 +226,12 @@ pub struct ActorContext {
     pub shutdown_rx: watch::Receiver<bool>,
     /// Optional owned Node (set for the root actor).
     pub node: Option<Node>,
+    /// Shared metrics handle — lock-free counters for the relay hot path.
+    ///
+    /// Cloned from the root Node's `Metrics` so all actors in the tree
+    /// observe the same atomic counters. Set in `Node::new_with_config`
+    /// and propagated through `child_context`.
+    pub metrics: Arc<Metrics>,
 }
 
 impl ActorContext {
@@ -242,6 +249,7 @@ impl ActorContext {
             is_stopped: Arc::new(RwLock::new(false)),
             shutdown_rx: watch::channel(false).1,
             node: None,
+            metrics: Arc::new(Metrics::new()),
         }
     }
 
@@ -263,6 +271,7 @@ impl ActorContext {
             is_stopped: self.is_stopped.clone(),
             shutdown_rx: self.shutdown_rx.clone(),
             node: self.node.clone(),
+            metrics: self.metrics.clone(),
         }
     }
 

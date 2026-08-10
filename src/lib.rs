@@ -1,12 +1,12 @@
 pub mod ack;
-mod tokio_time;
-mod tokio_spawn;
 pub mod actor;
 pub mod adapters;
 mod dup;
 #[doc(hidden)]
 pub mod message; // pub for benchmarking
 pub mod metrics;
+mod tokio_spawn;
+mod tokio_time;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod migration;
@@ -24,7 +24,6 @@ pub use types::Value;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
-
 
 #[cfg(all(target_arch = "wasm32", test))]
 mod wasm_tests;

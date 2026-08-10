@@ -19,6 +19,7 @@ use crate::Config;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::ws_conn::WsConn;
 use crate::message::Message;
+use crate::metrics::Metrics;
 
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -123,7 +124,7 @@ impl WsServer {
     /// TLS stack as the WebSocket server) rather than warp's built-in TLS,
     /// which was removed in warp 0.4. This keeps one TLS implementation
     /// across the codebase (DRY).
-    async fn start_web_server(config: WsServerConfig, peer_id: String) {
+    async fn start_web_server(config: WsServerConfig, peer_id: String, metrics: Arc<Metrics>) {
         let port = config.port + 1;
 
         if let Some(cert_path) = config.cert_path {
@@ -154,12 +155,13 @@ impl WsServer {
                 };
                 let acceptor = acceptor.clone();
                 let peer_id = peer_id.clone();
+                let metrics_clone = metrics.clone();
                 crate::tokio_spawn::spawn(async move {
                     let stream = match acceptor.accept(stream).await {
                         Ok(s) => s,
                         Err(_) => return,
                     };
-                    Self::handle_peer_id_request(stream, &peer_id).await;
+                    Self::handle_http_request(stream, &peer_id, &metrics_clone).await;
                 });
             }
         }
@@ -169,18 +171,28 @@ impl WsServer {
         eprintln!("Web UI:             {}", addr);
         use warp::Filter;
         let peer_id_route = warp::path("peer_id".to_string()).map(move || peer_id.to_string());
-        let routes = warp::get().and(peer_id_route);
+        let metrics_clone = metrics.clone();
+        let metrics_route = warp::path("metrics".to_string()).map(move || {
+            let snap = metrics_clone.snapshot();
+            serde_json::to_string_pretty(&snap).unwrap_or_else(|_| "{}".to_string())
+        });
+        let routes = warp::get()
+            .and(peer_id_route)
+            .or(warp::get().and(metrics_route));
         warp::serve(routes).run(([0, 0, 0, 0], port)).await;
     }
 
-    /// Handle a single HTTP request over a TLS stream for the `/peer_id` endpoint.
+    /// Handle a single HTTP request over a TLS stream.
     ///
-    /// Reads one HTTP/1.1 request, responds with the peer ID as plain text,
-    /// and closes the connection. This is a minimal handler — no routing
-    /// framework needed for a single endpoint.
-    async fn handle_peer_id_request(
+    /// Reads one HTTP/1.1 request, responds based on the path:
+    /// - `/peer_id` — returns this node's peer ID as plain text
+    /// - `/metrics` — returns the current metrics snapshot as JSON
+    ///
+    /// Minimal handler — no routing framework needed for two endpoints.
+    async fn handle_http_request(
         mut stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
         peer_id: &str,
+        metrics: &Metrics,
     ) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -190,22 +202,33 @@ impl WsServer {
             Err(_) => return,
         };
 
-        // Check if the request targets /peer_id
         let request = String::from_utf8_lossy(&buf[..n]);
-        let is_peer_id = request
-            .lines()
-            .next()
-            .is_some_and(|line| line.contains("GET /peer_id") || line.contains("GET /peer_id/"));
+        let request_line = request.lines().next().unwrap_or("");
 
-        let response = if is_peer_id {
-            format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                peer_id.len(),
-                peer_id
+        let (body, content_type) = if request_line.contains("GET /peer_id") {
+            (peer_id.to_string(), "text/plain")
+        } else if request_line.contains("GET /metrics") {
+            let snap = metrics.snapshot();
+            (
+                serde_json::to_string_pretty(&snap).unwrap_or_else(|_| "{}".to_string()),
+                "application/json",
             )
         } else {
-            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+            // 404 — empty body
+            let response =
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_string();
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.shutdown().await;
+            return;
         };
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            content_type,
+            body.len(),
+            body
+        );
 
         let _ = stream.write_all(response.as_bytes()).await;
         let _ = stream.shutdown().await;
@@ -276,8 +299,9 @@ impl Actor for WsServer {
 
         let peer_id = ctx.peer_id.read().clone();
         let config_clone = self.ws_config.clone();
+        let metrics = ctx.metrics.clone();
         ctx.child_task(async move {
-            Self::start_web_server(config_clone, peer_id).await;
+            Self::start_web_server(config_clone, peer_id, metrics).await;
         });
 
         // Create the TCP listener

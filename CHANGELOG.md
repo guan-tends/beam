@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-10 — Benchmark & Instrumentation
+
+Comprehensive benchmarking suite: hot-path instrumentation, relay
+throughput tests, Criterion micro-benchmarks, and WASM/browser
+benchmarks. First published performance numbers for BEAM.
+
+### Added
+
+- **Hot-path metrics** (`metrics.rs`): 7 new lock-free `AtomicU64` counters
+  tracking the relay's critical path — `ws_messages_received`,
+  `messages_parsed`, `messages_dropped_dup`, `messages_relayed`,
+  `subscriber_fanout_total`, `serialization_calls`, `ws_messages_sent`
+- **`/metrics` HTTP endpoint**: JSON metrics snapshot on relay web UI
+  (both warp HTTP and TLS paths). `start_web_server` now takes
+  `Arc<Metrics>`.
+- **Relay throughput benchmark** (`tests/relay_throughput_bench.rs`):
+  Real WebSocket connections through memory-only relay. 3 scenarios:
+  single-publisher burst, multi-publisher concurrent, relay fan-out.
+  Measured from relay's metrics counters (ground truth).
+- **Criterion micro-benchmarks** (T4/T5): Wire protocol parse/serialize
+  (small/medium/large JSON), dedup check (fresh + duplicate), actor
+  mailbox throughput, router dispatch throughput.
+- **WASM benchmarks** (`src/wasm_tests.rs`): `performance.now()`-based
+  benchmarks for parse, serialize, and Get operations behind
+  `wasm-bench` feature flag.
+- **Browser benchmark page** (`examples/bench.html`): Interactive HTML
+  page for running WASM benchmarks in the browser.
+- **`benches/RESULTS.md`**: Full benchmark results with methodology and
+  analysis.
+- **README benchmark section**: Summary tables and run commands.
+
+### Changed
+
+- `ActorContext` now carries `metrics: Arc<Metrics>` — propagated through
+  `child_context()`. Counters incremented at call sites (no method
+  signatures changed). Composition-Root IoC pattern.
+- `Cargo.toml`: Fixed `[[bench]]` section — was `[target.cfg.bench]`
+  which didn't activate Criterion's custom harness. Now uses standard
+  `[[bench]]` with `harness = false`.
+- `Cargo.toml`: Added `Performance` and `PerformanceTiming` to web-sys
+  features for WASM `performance.now()` access.
+- `Cargo.toml`: Added `wasm-bench` feature flag.
+
+### Performance Results (v0.11.0)
+
+| Metric | Value |
+|--------|-------|
+| Relay throughput (1 sender, 10k msgs) | ~3,000 msgs/sec |
+| Relay throughput (1 sender, 50k msgs) | ~2,400 msgs/sec |
+| Relay throughput (10 senders, 50k msgs) | ~2,000 msgs/sec |
+| Parse small Put JSON | 851 ns |
+| Serialize small Put JSON | 152 ns |
+| Dedup check (fresh) | 274 µs |
+| Actor mailbox send+recv | 309 µs |
+
+
 ## [0.10.0] — 2026-08-09 — Gun.js Wire Protocol Compatibility Verified
 
 Bidirectional Gun.js ↔ BEAM wire protocol compatibility proven with
