@@ -720,6 +720,87 @@ fn dedup_benchmarks(c: &mut Criterion) {
     });
 }
 
+// =====================================================================================
+// Group 10 — Actor Mailbox Throughput (tokio channel cost) (v0.11.0)
+// =====================================================================================
+
+/// Actor mailbox throughput — measures raw tokio channel + actor dispatch cost
+/// without any router logic, storage, or network I/O.
+///
+/// A minimal echo actor (handle() just drops the message) receives N messages
+/// through `Addr::send`. The benchmark measures messages/sec that the actor
+/// can process. This is the ceiling — router logic, dedup, and serialization
+/// all add cost on top of this baseline.
+fn actor_mailbox_benchmarks(c: &mut Criterion) {
+    use beam::actor::{Actor, ActorContext};
+    use beam::message::Message;
+
+    /// Minimal echo actor — receives messages and drops them.
+    /// Measures pure channel + scheduler cost.
+    struct EchoActor;
+    #[async_trait::async_trait]
+    impl Actor for EchoActor {
+        async fn handle(&mut self, _msg: Message, _ctx: &ActorContext) {}
+    }
+
+    let rt = Runtime::new().unwrap();
+
+    c.bench_function("actor_mailbox_throughput", |b| {
+        b.iter_custom(|iters| {
+            rt.block_on(async {
+                let start = std::time::Instant::now();
+                for _ in 0..iters {
+                    let mut ctx = ActorContext::new("bench".to_string());
+                    let addr = ctx.start_actor(Box::new(EchoActor));
+                    // Send 1000 messages and drain
+                    for _ in 0..1000 {
+                        let _ = addr.send(Message::Hi {
+                            from: addr.clone(),
+                            peer_id: "bench".to_string(),
+                        });
+                    }
+                    ctx.stop();
+                }
+                start.elapsed()
+            })
+        });
+    });
+}
+
+// =====================================================================================
+// Group 11 — Router Dispatch Throughput (router logic, no network) (v0.11.0)
+// =====================================================================================
+
+/// Router dispatch throughput — measures the cost of the full router pipeline
+/// (dedup + storage dispatch + relay fan-out) without any WebSocket I/O.
+///
+/// A Node with MemoryStorage (no network adapters) receives N puts via
+/// `Node::put()`. The benchmark measures puts/sec through the complete
+/// actor pipeline: Node actor → Router → MemoryStorage → ack. This is
+/// the router throughput ceiling before network I/O is added.
+fn router_dispatch_benchmarks(c: &mut Criterion) {
+    use beam::Value;
+
+    let rt = Runtime::new().unwrap();
+
+    c.bench_function("router_dispatch_throughput", |b| {
+        b.iter_custom(|iters| {
+            rt.block_on(async {
+                let start = std::time::Instant::now();
+                for _ in 0..iters {
+                    let mut node = Node::new();
+                    for i in 0..1000u64 {
+                        let key = format!("bench_key_{}", i);
+                        let _ = node.get(&key).put(Value::Text("v".into())).await;
+                    }
+                    node.stop();
+                }
+                start.elapsed()
+            })
+        });
+    });
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     parsing_benchmarks(c);
     write_storm(c);
@@ -729,9 +810,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     // Hot-path benchmarks (v0.11.0)
     wire_parse_serialize_benchmarks(c);
     dedup_benchmarks(c);
+    actor_mailbox_benchmarks(c);
+    router_dispatch_benchmarks(c);
     // Future groups appended here:
-    //   actor_mailbox_benchmarks(c);
-    //   router_dispatch_benchmarks(c);
     //   memory_pressure(c);
     //   cross_backend_mesh(c);
 }
