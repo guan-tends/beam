@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! End-to-end integration tests for the async put/batch_put ack pattern.
 //!
 //! These tests exercise the full path: Node → Router → Storage adapter →

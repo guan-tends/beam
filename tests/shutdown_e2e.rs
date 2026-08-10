@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! End-to-end tests for BEAM graceful shutdown.
 //!
 //! These tests verify the shutdown sequence:

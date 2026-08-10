@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for BEAM — the Rust Gun Protocol implementation.
 //!
 //! These tests exercise the full stack: Node + adapters + network protocols.

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Layer 3: Live integration tests for BEAM ↔ Gun.js wire compatibility.
 //!
 //! These tests spawn a real Gun.js relay server as a subprocess, connect a

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! # E2E Tests for Examples
 //!
 //! Integration tests that verify the core behavior patterns demonstrated

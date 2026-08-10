@@ -33,7 +33,7 @@ benchmarks. First published performance numbers for BEAM.
   mailbox throughput, router dispatch throughput.
 - **WASM benchmarks** (`src/wasm_tests.rs`): `performance.now()`-based
   benchmarks for parse, serialize, and Get operations behind
-  `wasm-bench` feature flag.
+  regular `#[wasm_bindgen_test]` functions (no feature gate needed).
 - **Browser benchmark page** (`examples/bench.html`): Interactive HTML
   page for running WASM benchmarks in the browser.
 - **`benches/RESULTS.md`**: Full benchmark results with methodology and
@@ -48,9 +48,8 @@ benchmarks. First published performance numbers for BEAM.
 - `Cargo.toml`: Fixed `[[bench]]` section — was `[target.cfg.bench]`
   which didn't activate Criterion's custom harness. Now uses standard
   `[[bench]]` with `harness = false`.
-- `Cargo.toml`: Added `Performance` and `PerformanceTiming` to web-sys
-  features for WASM `performance.now()` access.
-- `Cargo.toml`: Added `wasm-bench` feature flag.
+- `Cargo.toml`: No new dependencies — uses existing `web_time::Instant`.
+- `Cargo.toml`: Added regular `#[wasm_bindgen_test]` functions (no feature gate needed).
 
 ### Performance Results (v0.11.0)
 
@@ -63,6 +62,9 @@ benchmarks. First published performance numbers for BEAM.
 | Serialize small Put JSON | 152 ns |
 | Dedup check (fresh) | 274 µs |
 | Actor mailbox send+recv | 309 µs |
+| WASM parse small Put | 8,069 ns |
+| WASM serialize small Put | 18,144 ns |
+| WASM parse Get | 4,644 ns |
 
 
 ## [0.10.0] — 2026-08-09 — Gun.js Wire Protocol Compatibility Verified
