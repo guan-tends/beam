@@ -947,6 +947,39 @@ microseconds — the bottleneck is client-side `put().await`, not the relay.
 
 Run with: `wasm-pack test --node --no-default-features -- --nocapture`
 
+### WASM Relay Throughput
+
+End-to-end relay TPS measured from a WASM client (Node.js):
+
+| Scenario | Messages | Throughput |
+|----------|----------|------------|
+| 1k burst | 1,000 | ~115 msgs/sec |
+| 5k sustained | 5,000 | ~651 msgs/sec |
+
+Ground truth from relay `/metrics` HTTP endpoint. See `benches/RESULTS.md`
+for full hot-path counter breakdown.
+
+### Browser Benchmark
+
+An interactive benchmark page is available at `examples/bench.html`:
+
+```bash
+# Start a relay
+cargo run -- start --port 4944 --memory-storage true --redb-storage false
+
+# Serve the benchmark page
+python3 -m http.server 8080 -d examples/
+
+# Open in browser
+open http://localhost:8080/bench.html
+```
+
+The browser benchmark measures:
+- **Relay TPS**: end-to-end throughput through a real relay
+- **Put throughput**: local WASM API fire-and-forget puts
+- **Get throughput**: local WASM API promise resolution
+- **Put→Get round-trip**: full local cycle
+
 ### Running Benchmarks
 
 ```bash

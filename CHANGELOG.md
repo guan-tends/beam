@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-08-10 — WASM Relay TPS + Browser Benchmark
+
+Native + browser relay throughput parity. WASM relay TPS benchmarks
+and interactive browser benchmark page.
+
+### Added
+
+- **WASM relay throughput benchmarks** (`src/wasm_tests.rs`): Two new
+  `#[wasm_bindgen_test(async)]` tests measuring end-to-end relay TPS
+  from a WASM client. Ground truth from relay `/metrics` HTTP endpoint.
+  - `wasm_relay_throughput_1k`: 1,000 messages → 115 msgs/sec
+  - `wasm_relay_throughput_5k`: 5,000 messages → 651 msgs/sec
+- **Browser relay TPS** (`examples/bench.html`): Relay URL input,
+  connect button, and TPS measurement using `/metrics` ground truth.
+  Shows full hot-path counter breakdown (ws_recv, parsed, relayed,
+  dedup, fanout, ws_sent).
+- **Local WASM API benchmarks**: Put throughput, Get throughput, and
+  Put→Get round-trip — all using BEAM's WASM API (not native JS).
+- **RESULTS.md**: WASM relay TPS section with analysis.
+- **README**: WASM relay TPS table + browser benchmark instructions.
+
+### Changed
+
+- `bench.html`: Removed native JS `JSON.parse`/`JSON.stringify`
+  benchmarks — they didn't measure BEAM at all. Replaced with BEAM
+  WASM API benchmarks.
+- `bench.html`: Added relay connection UI with configurable message count.
+
+### Performance Results (v0.11.1)
+
+| Metric | Native | WASM (Node) |
+|--------|--------|-------------|
+| Relay 1k burst | 3,041 msgs/sec | 115 msgs/sec |
+| Relay 5k sustained | 2,410 msgs/sec | 651 msgs/sec |
+| Parse small Put | 851 ns | 8,069 ns |
+| Serialize small Put | 152 ns | 18,144 ns |
+
 ## [0.11.0] — 2026-08-10 — Benchmark & Instrumentation
 
 Comprehensive benchmarking suite: hot-path instrumentation, relay
