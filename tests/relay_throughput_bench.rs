@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Relay throughput integration benchmark — measures real WebSocket
 //! relay throughput with memory-only storage.
 //!

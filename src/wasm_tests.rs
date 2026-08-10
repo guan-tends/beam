@@ -308,77 +308,68 @@ async fn bidirectional_cross_talk() {
 // These use performance.now() for high-resolution timing in the browser/Node.
 // Run with: wasm-pack test --node -- --features wasm-bench
 
-#[cfg(feature = "wasm-bench")]
-mod wasm_bench {
-    use super::*;
-    use web_sys::Performance;
+// ============================================================================
+// WASM Benchmarks (T7)
+// ============================================================================
+// Uses `web_time::Instant` — the same cross-platform timer used throughout
+// the codebase. Works in both Node.js and browser. No feature gate needed.
 
-    fn performance() -> Performance {
-        web_sys::window()
-            .expect("no window")
-            .performance()
-            .expect("no performance API")
+#[wasm_bindgen_test]
+fn wasm_bench_parse_throughput() {
+    let json =
+        r##"{"#":"bench/test","put":{"bench/test":{"msg":"hello world","time":1234567890.123}}}"##;
+    let iterations = 10_000;
+    let start = web_time::Instant::now();
+    for _ in 0..iterations {
+        let _: serde_json::Value = serde_json::from_str(json).unwrap();
     }
+    let elapsed = start.elapsed();
+    let per_op_ns = elapsed.as_nanos() as f64 / iterations as f64;
+    console_log!(
+        "WASM parse small JSON: {:.0} ns/op ({:.0} ops/sec)",
+        per_op_ns,
+        1_000_000_000.0 / per_op_ns
+    );
+}
 
-    #[wasm_bindgen_test]
-    fn wasm_bench_parse_throughput() {
-        let json = r##"{"#":"bench/test","put":{"bench/test":{"msg":"hello world","time":1234567890.123}}}"##;
-        let perf = performance();
-        let iterations = 10_000;
-        let start = perf.now();
-        for _ in 0..iterations {
-            let _ = json.parse::<serde_json::Value>();
-        }
-        let elapsed_ms = perf.now() - start;
-        let per_op_us = elapsed_ms * 1000.0 / iterations as f64;
-        console_log!(
-            "WASM parse small JSON: {:.2} us/op ({:.0} ops/sec)",
-            per_op_us,
-            1_000_000.0 / per_op_us
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn wasm_bench_serialize_throughput() {
-        let obj = serde_json::json!({
-            "#": "bench/test",
-            "put": {
-                "bench/test": {
-                    "msg": "hello world",
-                    "time": 1234567890.123
-                }
+#[wasm_bindgen_test]
+fn wasm_bench_serialize_throughput() {
+    let obj = serde_json::json!({
+        "#": "bench/test",
+        "put": {
+            "bench/test": {
+                "msg": "hello world",
+                "time": 1234567890.123
             }
-        });
-        let perf = performance();
-        let iterations = 10_000;
-        let start = perf.now();
-        for _ in 0..iterations {
-            let _ = obj.to_string();
         }
-        let elapsed_ms = perf.now() - start;
-        let per_op_us = elapsed_ms * 1000.0 / iterations as f64;
-        console_log!(
-            "WASM serialize small JSON: {:.2} us/op ({:.0} ops/sec)",
-            per_op_us,
-            1_000_000.0 / per_op_us
-        );
+    });
+    let iterations = 10_000;
+    let start = web_time::Instant::now();
+    for _ in 0..iterations {
+        let _ = obj.to_string();
     }
+    let elapsed = start.elapsed();
+    let per_op_ns = elapsed.as_nanos() as f64 / iterations as f64;
+    console_log!(
+        "WASM serialize small JSON: {:.0} ns/op ({:.0} ops/sec)",
+        per_op_ns,
+        1_000_000_000.0 / per_op_ns
+    );
+}
 
-    #[wasm_bindgen_test]
-    fn wasm_bench_get_parse_throughput() {
-        let json = r##"{"#":"bench/test","get":{"#":"bench/test","."<":">"}}"##;
-        let perf = performance();
-        let iterations = 10_000;
-        let start = perf.now();
-        for _ in 0..iterations {
-            let _ = json.parse::<serde_json::Value>();
-        }
-        let elapsed_ms = perf.now() - start;
-        let per_op_us = elapsed_ms * 1000.0 / iterations as f64;
-        console_log!(
-            "WASM parse Get: {:.2} us/op ({:.0} ops/sec)",
-            per_op_us,
-            1_000_000.0 / per_op_us
-        );
+#[wasm_bindgen_test]
+fn wasm_bench_get_parse_throughput() {
+    let json = r##"{"#":"bench/test","get":{"#":"bench/test"}}"##;
+    let iterations = 10_000;
+    let start = web_time::Instant::now();
+    for _ in 0..iterations {
+        let _: serde_json::Value = serde_json::from_str(json).unwrap();
     }
+    let elapsed = start.elapsed();
+    let per_op_ns = elapsed.as_nanos() as f64 / iterations as f64;
+    console_log!(
+        "WASM parse Get: {:.0} ns/op ({:.0} ops/sec)",
+        per_op_ns,
+        1_000_000_000.0 / per_op_ns
+    );
 }

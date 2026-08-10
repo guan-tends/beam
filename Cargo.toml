@@ -67,12 +67,34 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [features]
-default = []
+default = ["native"]
 webrtc = ["dep:str0m", "dep:stun"]
+native = []
 persy = ["dep:persy"]
-wasm-bench = []
 
 [dev-dependencies]
+
+[[example]]
+name = "dump_redb"
+required-features = ["native"]
+[[example]]
+name = "encrypted_data"
+required-features = ["native"]
+[[example]]
+name = "nested_graph"
+required-features = ["native"]
+[[example]]
+name = "persistent_storage"
+required-features = ["native"]
+[[example]]
+name = "quickstart"
+required-features = ["native"]
+[[example]]
+name = "two_node_sync"
+required-features = ["native"]
+[[example]]
+name = "user_auth"
+required-features = ["native"]
 
 [[bench]]
 name = "my_benchmark"
@@ -82,10 +104,12 @@ required-features = []
 [[bin]]
 name = "beam"
 path = "src/main.rs"
+required-features = ["native"]
 
 [[bin]]
 name = "beam-sea-keygen"
 path = "src/bin/beam-sea-keygen.rs"
+required-features = ["native"]
 
 [profile.release]
 opt-level = 3
@@ -115,8 +139,6 @@ features = [
     "IdbVersionChangeEvent",
     "IdbOpenDbRequest",
     "DomStringList",
-    "Performance",
-    "PerformanceTiming",
 ]
 
 [target.wasm32-unknown-unknown.dependencies.wasm-bindgen]

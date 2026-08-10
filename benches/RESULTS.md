@@ -92,6 +92,24 @@ machine with more memory.*
 
 ---
 
+
+### WASM Benchmarks (T7)
+
+Run in Node.js via `wasm-pack test --node --no-default-features`.
+Uses `web_time::Instant` for cross-platform timing.
+
+| Operation | WASM (Node.js) | Native (Criterion) | Ratio |
+|-----------|----------------|--------------------|-------|
+| Parse small Put | 8,069 ns | 851 ns | ~9.5× |
+| Serialize small Put | 18,144 ns | 152 ns | ~119× |
+| Parse Get | 4,644 ns | 425 ns | ~11× |
+
+WASM is 10–100× slower than native — expected for a JIT-compiled
+sandbox. Serialize shows the largest gap because `serde_json`'s
+`to_string()` involves heavy string allocation, which is costlier
+under WASM's memory model.
+
+
 ## Storage Benchmarks (v0.7.0, for reference)
 
 | Operation | Backend | Throughput |

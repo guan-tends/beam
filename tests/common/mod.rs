@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(dead_code)]
 //! Shared async readiness helpers for beam e2e tests.
 //!

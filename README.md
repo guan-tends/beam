@@ -937,6 +937,16 @@ microseconds — the bottleneck is client-side `put().await`, not the relay.
 | Dedup check (duplicate) | 41.8 µs |
 | Actor mailbox send+recv | 309 µs |
 
+### WASM Benchmarks (Node.js)
+
+| Operation | WASM | Native | Ratio |
+|-----------|------|--------|-------|
+| Parse small Put | 8.1 µs | 851 ns | ~9.5× |
+| Serialize small Put | 18.1 µs | 152 ns | ~119× |
+| Parse Get | 4.6 µs | 425 ns | ~11× |
+
+Run with: `wasm-pack test --node --no-default-features -- --nocapture`
+
 ### Running Benchmarks
 
 ```bash
