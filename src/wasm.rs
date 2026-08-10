@@ -24,9 +24,9 @@
 //! beam.on("chat", (value) => console.log("new message:", value));
 //! ```
 
+use crate::Config;
 use crate::adapters::WasmIdbStorage;
 use crate::node::Node;
-use crate::Config;
 use crate::types::Value;
 use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
@@ -68,9 +68,7 @@ impl Beam {
     pub fn new() -> Beam {
         console_error_panic_hook::set_once();
         let _guard = runtime().enter();
-        Beam {
-            node: Node::new(),
-        }
+        Beam { node: Node::new() }
     }
 
     /// Creates a new BEAM node with IndexedDB persistent storage.
@@ -117,7 +115,9 @@ impl Beam {
     /// * `value` - String to store
     pub fn put(&mut self, path: &str, value: &str) {
         let _guard = runtime().enter();
-        let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+        let mut node = path
+            .split('.')
+            .fold(self.node.clone(), |mut n, key| n.get(key));
         let value = value.to_string();
         spawn_local(async move {
             let _ = node.put(Value::Text(value)).await;
@@ -127,7 +127,9 @@ impl Beam {
     /// Writes a numeric value to the graph at the given path.
     pub fn put_num(&mut self, path: &str, value: f64) {
         let _guard = runtime().enter();
-        let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+        let mut node = path
+            .split('.')
+            .fold(self.node.clone(), |mut n, key| n.get(key));
         spawn_local(async move {
             let _ = node.put(Value::Number(value)).await;
         });
@@ -136,7 +138,9 @@ impl Beam {
     /// Writes a boolean value to the graph at the given path.
     pub fn put_bool(&mut self, path: &str, value: bool) {
         let _guard = runtime().enter();
-        let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+        let mut node = path
+            .split('.')
+            .fold(self.node.clone(), |mut n, key| n.get(key));
         spawn_local(async move {
             let _ = node.put(Value::Bit(value)).await;
         });
@@ -145,7 +149,9 @@ impl Beam {
     /// Writes a null value to the graph at the given path.
     pub fn put_null(&mut self, path: &str) {
         let _guard = runtime().enter();
-        let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+        let mut node = path
+            .split('.')
+            .fold(self.node.clone(), |mut n, key| n.get(key));
         spawn_local(async move {
             let _ = node.put(Value::Null).await;
         });
@@ -165,7 +171,9 @@ impl Beam {
     #[wasm_bindgen(js_name = get)]
     pub fn get(&mut self, path: &str) -> js_sys::Promise {
         let _guard = runtime().enter();
-        let mut node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+        let mut node = path
+            .split('.')
+            .fold(self.node.clone(), |mut n, key| n.get(key));
 
         wasm_bindgen_futures::future_to_promise(async move {
             match node.once(None).await {
@@ -195,7 +203,9 @@ impl Beam {
     /// ```
     pub fn on(&mut self, path: &str, callback: js_sys::Function) {
         let _guard = runtime().enter();
-        let node = path.split('.').fold(self.node.clone(), |mut n, key| n.get(key));
+        let node = path
+            .split('.')
+            .fold(self.node.clone(), |mut n, key| n.get(key));
         let mut rx = node.map();
 
         spawn_local(async move {

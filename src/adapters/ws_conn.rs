@@ -63,18 +63,21 @@ impl WsConn {
 
 #[async_trait]
 impl Actor for WsConn {
-    async fn handle(&mut self, mut msg: Message, _ctx: &ActorContext) {
+    async fn handle(&mut self, mut msg: Message, ctx: &ActorContext) {
         // Clear cached json_str so Put::to_string() re-serializes with
         // internal souls (root "", value "soul/key") stripped for wire format.
         if let Message::Put(ref mut put) = msg {
             put.json_str = None;
         }
         let wire = msg.to_string();
-        debug!("[WS→] SENDING {} bytes: {}", wire.len(), &wire[..wire.len().min(300)]);
-        let _ = self
-            .sender
-            .send(WsMessage::Text(wire.into()))
-            .await;
+        ctx.metrics.record_serialization();
+        debug!(
+            "[WS→] SENDING {} bytes: {}",
+            wire.len(),
+            &wire[..wire.len().min(300)]
+        );
+        let _ = self.sender.send(WsMessage::Text(wire.into())).await;
+        ctx.metrics.record_ws_sent();
     }
 
     async fn pre_start(&mut self, ctx: &ActorContext) {
@@ -103,19 +106,40 @@ impl Actor for WsConn {
                 };
                 let text = match ws_msg {
                     WsMessage::Text(t) => t,
-                    WsMessage::Binary(_) => { debug!("[WS] binary frame (ignored)"); continue; }
-                    WsMessage::Ping(_) => { debug!("[WS] ping frame (ignored)"); continue; }
-                    WsMessage::Pong(_) => { debug!("[WS] pong frame (ignored)"); continue; }
-                    WsMessage::Close(_) => { debug!("[WS] close frame received from peer"); break; }
-                    WsMessage::Frame(_) => { debug!("[WS] raw frame (ignored)"); continue; }
+                    WsMessage::Binary(_) => {
+                        debug!("[WS] binary frame (ignored)");
+                        continue;
+                    }
+                    WsMessage::Ping(_) => {
+                        debug!("[WS] ping frame (ignored)");
+                        continue;
+                    }
+                    WsMessage::Pong(_) => {
+                        debug!("[WS] pong frame (ignored)");
+                        continue;
+                    }
+                    WsMessage::Close(_) => {
+                        debug!("[WS] close frame received from peer");
+                        break;
+                    }
+                    WsMessage::Frame(_) => {
+                        debug!("[WS] raw frame (ignored)");
+                        continue;
+                    }
                 };
                 if text.is_empty() {
                     debug!("[WS] empty text frame (ignored)");
                     continue;
                 }
-                debug!("[WS←] RECV {} bytes: {}", text.len(), &text[..text.len().min(300)]);
+                ctx2.metrics.record_ws_received();
+                debug!(
+                    "[WS←] RECV {} bytes: {}",
+                    text.len(),
+                    &text[..text.len().min(300)]
+                );
                 match Message::try_from(&text, ctx2.addr.clone(), allow_public_space) {
                     Ok(msgs) => {
+                        ctx2.metrics.record_parsed();
                         for msg in msgs {
                             if ctx2.router.send(msg).is_err() {
                                 error!("failed to forward incoming message to router");
@@ -134,7 +158,8 @@ impl Actor for WsConn {
 
     async fn stopping(&mut self, _context: &ActorContext) {
         info!("WsConn stopping — sending WebSocket Close frame");
-        let close_result = crate::tokio_time::timeout(Duration::from_secs(2), self.sender.close()).await;
+        let close_result =
+            crate::tokio_time::timeout(Duration::from_secs(2), self.sender.close()).await;
 
         match close_result {
             Ok(Ok(())) => debug!("WsConn Close frame acknowledged"),

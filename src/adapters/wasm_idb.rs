@@ -37,9 +37,7 @@ use std::sync::Arc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{
-    IdbDatabase,
-    IdbOpenDbRequest, IdbRequest, IdbTransactionMode,
-    IdbVersionChangeEvent,
+    IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode, IdbVersionChangeEvent,
 };
 
 /// IndexedDB storage adapter for browser/WASM.
@@ -105,14 +103,13 @@ impl WasmIdbStorage {
 
         // On upgrade needed: create object store
         let store_name = self.store_name.clone();
-        let onupgradeneeded: Closure<dyn FnMut(IdbVersionChangeEvent)> = Closure::new(
-            move |event: IdbVersionChangeEvent| {
+        let onupgradeneeded: Closure<dyn FnMut(IdbVersionChangeEvent)> =
+            Closure::new(move |event: IdbVersionChangeEvent| {
                 let request: IdbRequest = event.target().unwrap().unchecked_into();
                 let db: IdbDatabase = request.result().unwrap().unchecked_into();
                 let _ = db.create_object_store(&store_name);
                 info!("WasmIdbStorage: created object store");
-            },
-        );
+            });
         request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
         onupgradeneeded.forget();
 
@@ -150,16 +147,15 @@ impl WasmIdbStorage {
         };
 
         let store_name = self.store_name.clone();
-        let onupgradeneeded: Closure<dyn FnMut(IdbVersionChangeEvent)> = Closure::new(
-            move |event: IdbVersionChangeEvent| {
+        let onupgradeneeded: Closure<dyn FnMut(IdbVersionChangeEvent)> =
+            Closure::new(move |event: IdbVersionChangeEvent| {
                 let request: IdbRequest = event.target().unwrap().unchecked_into();
                 if let Ok(db_result) = request.result() {
                     let db: IdbDatabase = db_result.unchecked_into();
                     let _ = db.create_object_store(&store_name);
                     info!("WasmIdbStorage: created object store");
                 }
-            },
-        );
+            });
         request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
         onupgradeneeded.forget();
 
@@ -214,9 +210,7 @@ impl WasmIdbStorage {
             }
         };
         map.into_iter()
-            .map(|(k, (value, updated_at))| {
-                (k, NodeData { value, updated_at })
-            })
+            .map(|(k, (value, updated_at))| (k, NodeData { value, updated_at }))
             .collect()
     }
 
@@ -245,10 +239,9 @@ impl WasmIdbStorage {
         let my_addr = ctx.addr.clone();
         let cache = self.cache.clone();
 
-        let tx = match db.transaction_with_str_and_mode(
-            &self.store_name,
-            IdbTransactionMode::Readonly,
-        ) {
+        let tx = match db
+            .transaction_with_str_and_mode(&self.store_name, IdbTransactionMode::Readonly)
+        {
             Ok(tx) => tx,
             Err(e) => {
                 error!("WasmIdbStorage: transaction error: {:?}", e);
@@ -376,10 +369,9 @@ impl WasmIdbStorage {
         if let Some(db) = &self.db {
             for (node_id, update_data) in &put.updated_nodes {
                 let serialized = WasmIdbStorage::serialize_children(update_data);
-                let tx = match db.transaction_with_str_and_mode(
-                    &self.store_name,
-                    IdbTransactionMode::Readwrite,
-                ) {
+                let tx = match db
+                    .transaction_with_str_and_mode(&self.store_name, IdbTransactionMode::Readwrite)
+                {
                     Ok(tx) => tx,
                     Err(e) => {
                         error!("WasmIdbStorage: put transaction error: {:?}", e);
@@ -393,7 +385,8 @@ impl WasmIdbStorage {
                         continue;
                     }
                 };
-                let _ = store.put_with_key(&JsValue::from_str(&serialized), &JsValue::from_str(node_id));
+                let _ = store
+                    .put_with_key(&JsValue::from_str(&serialized), &JsValue::from_str(node_id));
             }
         }
 
@@ -464,7 +457,8 @@ impl WasmIdbStorage {
                             continue;
                         }
                     };
-                    let _ = store.put_with_key(&JsValue::from_str(&serialized), &JsValue::from_str(node_id));
+                    let _ = store
+                        .put_with_key(&JsValue::from_str(&serialized), &JsValue::from_str(node_id));
                 }
             }
         }

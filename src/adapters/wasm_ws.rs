@@ -73,20 +73,23 @@ impl WasmWsConn {
         // --- onmessage: parse and forward to router ---
         let router_for_msg = router.clone();
         let addr_for_msg = addr.clone();
-        let onmessage: Closure<dyn FnMut(MessageEvent)> = Closure::new(move |event: MessageEvent| {
-            if let Some(text) = event.data().as_string() {
-                match Message::try_from(&text, addr_for_msg.clone(), allow_public_space) {
-                    Ok(msgs) => {
-                        for msg in msgs {
-                            let _ = router_for_msg.send(msg);
+        let onmessage: Closure<dyn FnMut(MessageEvent)> =
+            Closure::new(move |event: MessageEvent| {
+                if let Some(text) = event.data().as_string() {
+                    match Message::try_from(&text, addr_for_msg.clone(), allow_public_space) {
+                        Ok(msgs) => {
+                            for msg in msgs {
+                                let _ = router_for_msg.send(msg);
+                            }
+                        }
+                        Err(e) => {
+                            web_sys::console::error_1(
+                                &format!("WasmWsConn: parse error: {}", e).into(),
+                            );
                         }
                     }
-                    Err(e) => {
-                        web_sys::console::error_1(&format!("WasmWsConn: parse error: {}", e).into());
-                    }
                 }
-            }
-        });
+            });
 
         // --- onerror ---
         let onerror: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {
