@@ -10,6 +10,10 @@
 //! 5. **Storage — Mixed 70/30 Workload** (redb vs Persy) — realistic OLTP-ish, 1k ops
 //! 6. **Storage — Memory Pressure** (redb vs Persy) — placeholder (deferred)
 //! 7. **Storage — Cross-Backend Mesh** (redb ↔ Persy) — placeholder (deferred)
+//! 8. **Hot-Path — Wire Parse/Serialize** — pure CPU JSON layer (v0.11.0)
+//! 9. **Hot-Path — Dedup Gate** — Dup::check/track throughput (v0.11.0)
+//! 10. **Hot-Path — Actor Mailbox** — tokio channel throughput (v0.11.0)
+//! 11. **Hot-Path — Router Dispatch** — router logic without network (v0.11.0)
 //!
 //! ## Per-iteration fresh state (three-step teardown)
 //!
@@ -65,6 +69,7 @@
 //! - `sysinfo = "0.23.5"` available for RSS measurement
 //! - `ctrlc = "3.2.1"` available for graceful shutdown handling
 
+use beam::Dup;
 use beam::actor::Addr;
 use beam::adapters::RedbStorage;
 use beam::message::Message;
@@ -605,13 +610,128 @@ fn mixed_workload(c: &mut Criterion) {
     group.finish();
 }
 
+// =====================================================================================
+// Group 8 — Wire Parse/Serialize (pure CPU, no runtime) (v0.11.0)
+// =====================================================================================
+
+/// Wire-format parse and serialize benchmarks — the JSON layer of the hot path.
+///
+/// These isolate the CPU cost of `Message::try_from` (JSON → Message) and
+/// `Message::to_string` (Message → wire JSON) without any tokio runtime,
+/// actor mailbox, or I/O. They are the pure serialization cost per message.
+///
+/// Message sizes:
+/// - small: single Put with one child key (typical relay message)
+/// - medium: Put with 5 child keys (moderate graph node)
+/// - large: Put with 20 child keys (large graph node, nested structure)
+fn wire_parse_serialize_benchmarks(c: &mut Criterion) {
+    let addr = Addr::noop();
+
+    // --- Small Put: single key, short string value ---
+    let small_put = r##"{"put":{"users/alice":{"_":{"#":"users/alice",">":{"name":1653465227430}},"name":"Alice"}},"#":"msg001ab"}"##;
+
+    // --- Medium Put: 5 child keys ---
+    let medium_put = r##"{"put":{"users/bob":{"_":{"#":"users/bob",">":{"name":1653465227430,"age":1653465227431,"city":1653465227432,"email":1653465227433,"role":1653465227434}},"name":"Bob","age":"30","city":"NYC","email":"bob@example.com","role":"admin"}},"#":"msg002cd"}"##;
+
+    // --- Large Put: 20 child keys ---
+    let large_put = r##"{"put":{"data/node1":{"_":{"#":"data/node1",">":{"k0":1653465227430,"k1":1653465227431,"k2":1653465227432,"k3":1653465227433,"k4":1653465227434,"k5":1653465227435,"k6":1653465227436,"k7":1653465227437,"k8":1653465227438,"k9":1653465227439,"k10":1653465227440,"k11":1653465227441,"k12":1653465227442,"k13":1653465227443,"k14":1653465227444,"k15":1653465227445,"k16":1653465227446,"k17":1653465227447,"k18":1653465227448,"k19":1653465227449}},"k0":"val0","k1":"val1","k2":"val2","k3":"val3","k4":"val4","k5":"val5","k6":"val6","k7":"val7","k8":"val8","k9":"val9","k10":"val10","k11":"val11","k12":"val12","k13":"val13","k14":"val14","k15":"val15","k16":"val16","k17":"val17","k18":"val18","k19":"val19"}},"#":"msg003ef"}"##;
+
+    let cases: &[(&str, &str)] = &[
+        ("small", small_put),
+        ("medium", medium_put),
+        ("large", large_put),
+    ];
+
+    for (label, json) in cases {
+        // Parse benchmark: JSON → Message
+        c.bench_function(&format!("wire_parse_put_{}", label), |b| {
+            b.iter(|| {
+                Message::try_from(json, addr.clone(), true).unwrap();
+            });
+        });
+
+        // Serialize benchmark: Message → JSON
+        // Pre-parse once, then measure serialization only.
+        let msgs = Message::try_from(json, addr.clone(), true).unwrap();
+        c.bench_function(&format!("wire_serialize_put_{}", label), |b| {
+            b.iter(|| {
+                // to_string consumes self, so we clone each iteration
+                let msg = msgs[0].clone();
+                msg.to_string();
+            });
+        });
+    }
+
+    // --- Get message parse ---
+    let get_json = r##"{"get":{"#":"users/alice"},"#":"msg004ab"}"##;
+    c.bench_function("wire_parse_get", |b| {
+        b.iter(|| {
+            Message::try_from(get_json, addr.clone(), true).unwrap();
+        });
+    });
+}
+
+// =====================================================================================
+// Group 9 — Dedup Gate (pure CPU, no runtime) (v0.11.0)
+// =====================================================================================
+
+/// Dedup gate benchmark — measures `Dup::check` + `Dup::track` throughput.
+///
+/// The Dup gate is the first check every inbound message hits. Under relay
+/// load, the ratio of `messages_dropped_dup / messages_parsed` tells us
+/// how much redundant relay traffic exists. This benchmark measures the
+/// raw cost of the check+track operation itself.
+///
+/// Two scenarios:
+/// - fresh: each message ID is unique (best case — check passes, track inserts)
+/// - duplicate: all messages are the same (worst case — check hits every time)
+fn dedup_benchmarks(c: &mut Criterion) {
+    // Fresh IDs: check passes, track inserts — the common case for relay traffic
+    c.bench_function("dup_check_track_fresh", |b| {
+        b.iter_batched(
+            || Dup::new(999, 9),
+            |mut dup| {
+                for i in 0..1000u64 {
+                    let id = format!("msg{:08x}", i);
+                    dup.check(&id);
+                    dup.track(&id);
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    // Duplicate IDs: check hits every time — the dedup-heavy scenario
+    c.bench_function("dup_check_duplicate", |b| {
+        b.iter_batched(
+            || {
+                let mut dup = Dup::new(999, 9);
+                // Pre-populate with one ID
+                dup.track("msgdup001");
+                dup
+            },
+            |mut dup| {
+                for _ in 0..1000 {
+                    dup.check("msgdup001");
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     parsing_benchmarks(c);
     write_storm(c);
     concurrent_write_storm(c);
     read_storm(c);
     mixed_workload(c);
+    // Hot-path benchmarks (v0.11.0)
+    wire_parse_serialize_benchmarks(c);
+    dedup_benchmarks(c);
     // Future groups appended here:
+    //   actor_mailbox_benchmarks(c);
+    //   router_dispatch_benchmarks(c);
     //   memory_pressure(c);
     //   cross_backend_mesh(c);
 }
