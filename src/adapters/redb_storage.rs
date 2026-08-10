@@ -152,7 +152,7 @@ impl RedbStorage {
                 // Empty set is still a valid replay — send sentinel so `.map()` listeners don't hang.
                 let mut reply_with_nodes = BTreeMap::new();
                 reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
-                let mut put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
+                let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
                 put.to_string(); // compute checksum
                 let _ = get.from.send(Message::Put(put));
                 return;
@@ -177,7 +177,7 @@ impl RedbStorage {
         let mut reply_with_nodes = BTreeMap::new();
         reply_with_nodes.insert(get.node_id.clone(), reply_with_children);
 
-        let mut put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
+        let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
         put.to_string(); // compute checksum
 
         // Ack replies (those with `in_response_to`) MUST always be sent,
@@ -338,7 +338,7 @@ impl Actor for RedbStorage {
                 );
                 let mut ack_nodes = BTreeMap::new();
                 ack_nodes.insert("_ack".to_string(), ack_children);
-                let mut put = Put::new(ack_nodes, Some(flush_id), ctx_addr.clone());
+                let put = Put::new(ack_nodes, Some(flush_id), ctx_addr.clone());
                 put.to_string(); // compute checksum
                 let _ = from_addr.send(Message::Put(put));
             }
@@ -588,7 +588,7 @@ mod tests {
         let mut rx = rx;
 
         // Compute the checksum the storage will produce for the reply.
-        let mut reply = Put::new(
+        let reply = Put::new(
             {
                 let mut m = BTreeMap::new();
                 m.insert("n1".to_string(), children.clone());
@@ -609,7 +609,6 @@ mod tests {
             node_id: "n1".to_string(),
             checksum: matching_checksum,
             child_key: None,
-            json_str: None,
         };
 
         Actor::handle(&mut storage, Arc::new(Message::Get(get)), &ctx).await;

@@ -1290,7 +1290,7 @@ mod tests {
         );
         let mut nodes = BTreeMap::new();
         nodes.insert("_ack".to_string(), children);
-        let mut put = Put::new(nodes, Some(put_id.to_string()), Addr::noop());
+        let put = Put::new(nodes, Some(put_id.to_string()), Addr::noop());
         // Compute checksum so callers can serialize.
         put.to_string();
         put

@@ -261,7 +261,7 @@ impl Actor for MemoryStorage {
                 );
                 let mut nodes = BTreeMap::new();
                 nodes.insert("_ack".to_string(), ack);
-                let mut put = Put::new(nodes, Some(flush.id.clone()), ctx.addr.clone());
+                let put = Put::new(nodes, Some(flush.id.clone()), ctx.addr.clone());
                 put.to_string(); // compute checksum
                 let _ = flush.from.send(Message::Put(put));
             }

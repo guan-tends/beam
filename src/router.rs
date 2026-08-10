@@ -645,22 +645,27 @@ impl Router {
         // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
         let mut hops = put.peer_hop_list.clone().unwrap_or_default();
         hops.insert(put.from.to_string());
+
+        // Build the relay Put ONCE with peer_hop_list set, wrap in Arc.
+        // Each peer receives Arc::clone — refcount bump, not Put::clone.
+        let mut relay_put = put.clone();
+        relay_put.peer_hop_list = Some(hops.clone());
+        let relay_msg: Arc<Message> = Arc::new(Message::Put(relay_put));
+
         let mut already_sent_to = HashSet::new();
 
-        // Send to server peers
+        // Send to server peers — Arc::clone, no Put::clone
         for addr in self.server_peers.iter() {
             if put.from == *addr || hops.contains(&addr.to_string()) {
                 continue;
             }
-            let mut put = put.clone();
-            put.peer_hop_list = Some(hops.clone());
-            let _ = addr.send(Message::Put(put));
+            let _ = addr.send(Arc::clone(&relay_msg));
             already_sent_to.insert(addr.clone());
         }
 
-        // Relay to subscribers
+        // Relay to subscribers — Arc::clone per subscriber
         let mut sent_to = 0;
-        for node_id in put.clone().updated_nodes.keys() {
+        for node_id in put.updated_nodes.keys() {
             let topic = node_id.split("/").next().unwrap_or("");
             if let Some(topic_subscribers) = self.subscribers_by_topic.get_mut(topic) {
                 topic_subscribers.retain(|addr| {
@@ -671,9 +676,7 @@ impl Router {
                         return true;
                     }
                     already_sent_to.insert(addr.clone());
-                    let mut put = put.clone();
-                    put.peer_hop_list = Some(hops.clone());
-                    match addr.send(Message::Put(put)) {
+                    match addr.send(Arc::clone(&relay_msg)) {
                         Ok(_) => {
                             sent_to += 1;
                             true
@@ -708,9 +711,7 @@ impl Router {
                 if put.from == *addr || hops.contains(&addr.to_string()) {
                     continue;
                 }
-                let mut put = put.clone();
-                put.peer_hop_list = Some(hops.clone());
-                match addr.send(Message::Put(put)) {
+                match addr.send(Arc::clone(&relay_msg)) {
                     Ok(_) => {
                         #[cfg(target_arch = "wasm32")]
                         web_sys::console::log_1(
