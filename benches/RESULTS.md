@@ -45,6 +45,46 @@ dropped_sends:        0
 
 ---
 
+
+### WASM Relay Throughput (T12-T13)
+
+Real WebSocket connections from a WASM client (Node.js) through a
+memory-only relay. Same methodology as native relay throughput, but
+the client is BEAM's WASM binding instead of a native Node.
+
+Ground truth from relay `/metrics` HTTP endpoint (port + 1).
+
+| Scenario | Messages | Throughput | Send Rate |
+|----------|----------|------------|-----------|
+| 1k burst | 1,000 | **115 msgs/sec** | ~7,400 puts/sec |
+| 5k sustained | 5,000 | **651 msgs/sec** | ~4,400 puts/sec |
+
+**Key observations:**
+- WASM relay throughput is lower than native (115–651 vs 2,400–3,000
+  msgs/sec) due to WASM's slower JSON serialization (10–100× overhead).
+- The 1k burst shows lower throughput than 5k sustained because the
+  stabilization wait dominates the total elapsed time for small message
+  counts — the relay processes 1k messages quickly but the 500ms
+  stabilization poll adds fixed overhead.
+- Send rate (client-side `beam.put()` fire-and-forget) is actually
+  faster in WASM than native `put().await` because fire-and-forget
+  returns immediately without awaiting the actor round-trip.
+
+### WASM Relay Throughput (Browser)
+
+Use `examples/bench.html` to run relay TPS benchmarks from a browser:
+
+1. Start a BEAM relay: `cargo run -- start --port 4944 --memory-storage true --redb-storage false`
+2. Serve the examples: `python3 -m http.server 8080 -d examples/`
+3. Open `http://localhost:8080/bench.html` in a browser
+4. Enter relay URL (default `ws://127.0.0.1:4944`) and click "Connect"
+5. Click "Run Relay TPS" to measure end-to-end throughput
+
+The browser benchmark uses the same `/metrics` ground-truth approach
+as the Node.js WASM tests.
+
+---
+
 ## Micro-Benchmarks (Criterion)
 
 Pure CPU measurements — no network, no I/O. These isolate the
