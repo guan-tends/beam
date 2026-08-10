@@ -73,9 +73,10 @@ persy = ["dep:persy"]
 
 [dev-dependencies]
 
-[target.'cfg(not(target_arch = "wasm32"))'.bench]
+[[bench]]
 name = "my_benchmark"
 harness = false
+required-features = []
 
 [[bin]]
 name = "beam"
