@@ -428,7 +428,6 @@ async fn wait_for_connected(client: &OutgoingWebsocketManager, expected: usize, 
     );
 }
 
-
 // ===========================================================================
 // Part 2: Gun.js client → BEAM relay → BEAM native (BEAM as server)
 //
@@ -494,7 +493,10 @@ impl GunClient {
             }
             sleep(Duration::from_millis(100)).await;
         }
-        panic!("Gun client API did not become ready within {}ms", timeout_ms);
+        panic!(
+            "Gun client API did not become ready within {}ms",
+            timeout_ms
+        );
     }
 
     /// HTTP GET to the client's API.
@@ -554,7 +556,11 @@ impl BeamRelay {
             vec![Box::new(MemoryStorage::new())],
             vec![Box::new(ws_server.clone())],
         );
-        Self { ws_server, node, port }
+        Self {
+            ws_server,
+            node,
+            port,
+        }
     }
 
     /// The WebSocket URL for Gun.js / BEAM clients to connect to.
@@ -606,10 +612,7 @@ async fn gun_client_put_beam_receives() {
 
     // Create a BEAM native node also connected to the relay
     let config = Config::default();
-    let ws_client = OutgoingWebsocketManager::new(
-        config.clone(),
-        vec![beam_relay.url()],
-    );
+    let ws_client = OutgoingWebsocketManager::new(config.clone(), vec![beam_relay.url()]);
     let mut beam = Node::new_with_config(
         config,
         vec![Box::new(MemoryStorage::new())],
@@ -666,10 +669,7 @@ async fn beam_put_gun_client_receives() {
     beam_relay.wait_for_peers(1, 10000).await;
 
     let config = Config::default();
-    let ws_client = OutgoingWebsocketManager::new(
-        config.clone(),
-        vec![beam_relay.url()],
-    );
+    let ws_client = OutgoingWebsocketManager::new(config.clone(), vec![beam_relay.url()]);
     let mut beam = Node::new_with_config(
         config,
         vec![Box::new(MemoryStorage::new())],
@@ -720,10 +720,7 @@ async fn gun_beam_bidirectional_convergence() {
     beam_relay.wait_for_peers(1, 10000).await;
 
     let config = Config::default();
-    let ws_client = OutgoingWebsocketManager::new(
-        config.clone(),
-        vec![beam_relay.url()],
-    );
+    let ws_client = OutgoingWebsocketManager::new(config.clone(), vec![beam_relay.url()]);
     let mut beam = Node::new_with_config(
         config,
         vec![Box::new(MemoryStorage::new())],

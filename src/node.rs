@@ -49,11 +49,11 @@ use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use web_time::{Duration, SystemTime};
 use tokio::sync::watch;
 use tokio::sync::{broadcast, oneshot};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_tungstenite::connect_async;
+use web_time::{Duration, SystemTime};
 
 /// Configuration for a [`Node`] and its associated adapters.
 ///
@@ -212,6 +212,7 @@ impl Node {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut actor_context = ActorContext::new(random_string(16));
         actor_context.shutdown_rx = shutdown_rx;
+        actor_context.metrics = metrics.clone();
         let mut node = Self {
             path: vec![],
             uid: Arc::new(RwLock::new("".to_string())),
@@ -442,14 +443,15 @@ impl Node {
     ///
     /// * `wait` - Optional timeout. Defaults to 66ms.
     pub async fn once(&mut self, wait: Option<Duration>) -> Option<Value> {
-        let val = crate::tokio_time::timeout(wait.unwrap_or(Duration::from_millis(66)), self.on().recv())
-            .await
-            .ok()?
-            .expect("recv error??");
+        let val =
+            crate::tokio_time::timeout(wait.unwrap_or(Duration::from_millis(66)), self.on().recv())
+                .await
+                .ok()?
+                .expect("recv error??");
         Some(val)
     }
 
-#[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_arch = "wasm32"))]
     /// Connects to a remote peer via WebSocket with automatic reconnection.
     ///
     /// Retries with exponential backoff starting at 1 second, maxing at 60
@@ -954,7 +956,8 @@ impl Node {
         // The flush message goes through the router, which processes
         // messages in FIFO order. Any puts ahead of the flush in the
         // mailbox are committed before the flush ack returns.
-        let flush_result = crate::tokio_time::timeout(timeout, self.flush_storage(Some(timeout))).await;
+        let flush_result =
+            crate::tokio_time::timeout(timeout, self.flush_storage(Some(timeout))).await;
 
         match flush_result {
             Ok(Ok(())) => info!("Storage flush completed during shutdown"),

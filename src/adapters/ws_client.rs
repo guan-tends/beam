@@ -26,9 +26,9 @@ use crate::Config;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::ws_conn::WsConn;
 use crate::message::Message;
+use crate::tokio_time::sleep;
 use async_trait::async_trait;
 use log::{debug, info};
-use crate::tokio_time::sleep;
 use web_time::Duration;
 
 /// Manages outbound WebSocket connections to relay servers.

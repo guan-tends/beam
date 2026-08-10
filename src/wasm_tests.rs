@@ -10,7 +10,7 @@
 
 #![cfg(test)]
 
-use wasm_bindgen::{prelude::*, JsCast};
+use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_node_experimental);
@@ -95,10 +95,7 @@ impl Relay {
 impl Drop for Relay {
     fn drop(&mut self) {
         // Best-effort kill — relay process should clean up on SIGTERM.
-        let f = js_sys::Function::new_with_args(
-            "p",
-            "if (p && p.kill) p.kill('SIGTERM');",
-        );
+        let f = js_sys::Function::new_with_args("p", "if (p && p.kill) p.kill('SIGTERM');");
         let _ = f.call1(&JsValue::UNDEFINED, &self.proc);
     }
 }

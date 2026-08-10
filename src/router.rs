@@ -465,7 +465,9 @@ impl Router {
                     }
                     _ => {
                         #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&format!("router: FAILED to send put to known_peer {}", addr).into());
+                        web_sys::console::log_1(
+                            &format!("router: FAILED to send put to known_peer {}", addr).into(),
+                        );
                         errored.insert(addr.clone());
                     }
                 }
@@ -501,7 +503,9 @@ impl Router {
                     Ok(_) => {}
                     _ => {
                         #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&format!("router: FAILED to send put to known_peer {}", addr).into());
+                        web_sys::console::log_1(
+                            &format!("router: FAILED to send put to known_peer {}", addr).into(),
+                        );
                         errored.insert(addr.clone());
                     }
                 }
@@ -526,6 +530,7 @@ impl Router {
     ///    been seen, it's suppressed
     fn handle_put(&mut self, put: Put) {
         if self.is_message_seen(&put.id) {
+            self.metrics.record_dropped_dup();
             return;
         }
 
@@ -534,6 +539,7 @@ impl Router {
             let checksum_key = format!("{}##{}", ack, hash);
             if self.dup.check(&checksum_key) {
                 debug!("duplicate response checksum: {}", checksum_key);
+                self.metrics.record_dropped_dup();
                 return;
             }
             self.dup.track(&checksum_key);
@@ -626,7 +632,14 @@ impl Router {
                 self.subscribers_by_topic.len(),
             ).into());
             for addr in self.known_peers.iter() {
-                web_sys::console::log_1(&format!("  known_peer: {} (from matches: {})", addr, *addr == put.from).into());
+                web_sys::console::log_1(
+                    &format!(
+                        "  known_peer: {} (from matches: {})",
+                        addr,
+                        *addr == put.from
+                    )
+                    .into(),
+                );
             }
         }
         // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
@@ -673,7 +686,14 @@ impl Router {
         debug!("sent put to {} subscribers", already_sent_to.len());
         if already_sent_to.len() < 4 {
             #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(&format!("router: entering random sampling, known_peers={}, sent_to={}", self.known_peers.len(), sent_to).into());
+            web_sys::console::log_1(
+                &format!(
+                    "router: entering random sampling, known_peers={}, sent_to={}",
+                    self.known_peers.len(),
+                    sent_to
+                )
+                .into(),
+            );
             let mut rng = rng();
             let mut errored = HashSet::new();
             while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
@@ -693,12 +713,16 @@ impl Router {
                 match addr.send(Message::Put(put)) {
                     Ok(_) => {
                         #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&format!("router: sent put to known_peer {}", addr).into());
+                        web_sys::console::log_1(
+                            &format!("router: sent put to known_peer {}", addr).into(),
+                        );
                         debug!("sent put to random peer");
                     }
                     _ => {
                         #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(&format!("router: FAILED to send put to known_peer {}", addr).into());
+                        web_sys::console::log_1(
+                            &format!("router: FAILED to send put to known_peer {}", addr).into(),
+                        );
                         errored.insert(addr.clone());
                     }
                 }
@@ -707,6 +731,13 @@ impl Router {
                 self.known_peers.remove(&addr);
             }
         }
+
+        // Hot-path metrics: record that a relay happened and how many
+        // subscribers received the message. `sent_to` counts subscriber
+        // deliveries from the relay loop above (server peers + topic
+        // subscribers + random sampling).
+        self.metrics.record_relayed();
+        self.metrics.record_subscriber_fanout(sent_to as u64);
     }
 
     /// Register a new quorum-acked Put.
