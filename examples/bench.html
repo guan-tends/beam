@@ -7,21 +7,50 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
         h1 { color: #64ffda; }
+        h2 { color: #64ffda; margin-top: 32px; }
         .bench-result { background: #16213e; border-radius: 8px; padding: 16px; margin: 12px 0; border-left: 3px solid #64ffda; }
         .bench-name { font-weight: bold; color: #64ffda; font-size: 1.1em; }
         .bench-time { font-size: 1.4em; color: #fff; margin: 4px 0; }
         .bench-throughput { color: #a0a0c0; font-size: 0.9em; }
+        .bench-detail { color: #707090; font-size: 0.85em; margin-top: 4px; }
         #results { margin-top: 20px; }
         button { background: #64ffda; color: #1a1a2e; border: none; padding: 12px 24px; font-size: 1.1em; border-radius: 4px; cursor: pointer; margin: 8px 0; }
         button:hover { background: #4dd0e1; }
         button:disabled { background: #555; color: #999; cursor: not-allowed; }
         .status { color: #a0a0c0; font-style: italic; }
+        input[type="text"] { background: #16213e; color: #e0e0e0; border: 1px solid #333; border-radius: 4px; padding: 8px 12px; font-size: 1em; width: 300px; }
+        .relay-section { background: #0d1b2a; border-radius: 8px; padding: 20px; margin: 16px 0; }
+        .relay-connected { color: #4caf50; }
+        .relay-disconnected { color: #f44336; }
     </style>
 </head>
 <body>
     <h1>⚡ BEAM Browser Benchmark</h1>
     <p>Measures BEAM's WASM performance in the browser using <code>performance.now()</code>.</p>
-    <p><button id="runBench" onclick="runBenchmarks()">Run Benchmarks</button></p>
+
+    <!-- Relay TPS Section -->
+    <div class="relay-section">
+        <h2>Relay Throughput</h2>
+        <p>Connect to a BEAM relay to measure end-to-end throughput.</p>
+        <label>
+            Relay WebSocket URL:
+            <input type="text" id="relayUrl" value="ws://127.0.0.1:4944" />
+        </label>
+        <button id="connectBtn" onclick="connectRelay()">Connect</button>
+        <span id="relayStatus" class="relay-disconnected">Disconnected</span>
+        <br/>
+        <label>
+            Messages to send:
+            <input type="text" id="msgCount" value="1000" style="width: 80px" />
+        </label>
+        <button id="runRelayBench" onclick="runRelayTps()" disabled>Run Relay TPS</button>
+    </div>
+
+    <!-- Local WASM Benchmarks -->
+    <h2>Local WASM Benchmarks</h2>
+    <p>These measure BEAM's WASM API directly — no relay needed.</p>
+    <button id="runBench" onclick="runLocalBenchmarks()">Run Local Benchmarks</button>
+
     <div id="status" class="status"></div>
     <div id="results"></div>
 
@@ -29,6 +58,8 @@
         import init, { Beam } from "./pkg/beam.js";
 
         let wasmLoaded = false;
+        let connectedBeam = null;
+        let connectedRelayUrl = null;
 
         async function loadWasm() {
             if (!wasmLoaded) {
@@ -37,7 +68,118 @@
             }
         }
 
-        window.runBenchmarks = async function() {
+        // ─── Relay connection ───────────────────────────────────────────
+
+        window.connectRelay = async function() {
+            const url = document.getElementById('relayUrl').value;
+            const status = document.getElementById('relayStatus');
+            const connectBtn = document.getElementById('connectBtn');
+            const relayBenchBtn = document.getElementById('runRelayBench');
+
+            try {
+                await loadWasm();
+
+                // Disconnect previous if any
+                if (connectedBeam) {
+                    connectedBeam.stop();
+                    connectedBeam = null;
+                }
+
+                connectedBeam = new Beam();
+                connectedBeam.connect(url);
+                connectedRelayUrl = url;
+
+                // Wait for WebSocket handshake
+                await new Promise(r => setTimeout(r, 500));
+
+                status.textContent = 'Connected';
+                status.className = 'relay-connected';
+                connectBtn.textContent = 'Reconnect';
+                relayBenchBtn.disabled = false;
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+                status.className = 'relay-disconnected';
+                console.error(e);
+            }
+        };
+
+        // ─── Relay TPS Benchmark ────────────────────────────────────────
+
+        window.runRelayTps = async function() {
+            const btn = document.getElementById('runRelayBench');
+            const status = document.getElementById('status');
+            const count = parseInt(document.getElementById('msgCount').value, 10);
+
+            if (!connectedBeam) {
+                status.textContent = 'Connect to a relay first.';
+                return;
+            }
+
+            btn.disabled = true;
+            status.textContent = 'Running relay TPS benchmark...';
+
+            try {
+                // Derive HTTP metrics URL from WebSocket URL.
+                // Relay serves /metrics on ws_port + 1.
+                const wsUrl = new URL(connectedRelayUrl);
+                const httpPort = parseInt(wsUrl.port, 10) + 1;
+                const metricsUrl = `http://${wsUrl.hostname}:${httpPort}/metrics`;
+
+                // Baseline metrics from relay (ground truth).
+                const before = await fetch(metricsUrl).then(r => r.json());
+
+                // Send `count` fire-and-forget puts through the relay.
+                const start = performance.now();
+                for (let i = 0; i < count; i++) {
+                    connectedBeam.put("bench/" + i, "msg_" + i);
+                }
+                const sendElapsed = performance.now() - start;
+
+                // Wait for relay counters to stabilize (no new messages for 500ms).
+                let lastRelayed = 0;
+                const deadline = performance.now() + 30000;
+                while (true) {
+                    await new Promise(r => setTimeout(r, 500));
+                    const snap = await fetch(metricsUrl).then(r => r.json());
+                    if (snap.messages_relayed === lastRelayed) break;
+                    lastRelayed = snap.messages_relayed;
+                    if (performance.now() > deadline) break;
+                }
+
+                const totalElapsed = performance.now() - start;
+                const after = await fetch(metricsUrl).then(r => r.json());
+
+                // Compute deltas from relay's ground-truth counters.
+                const relayed = after.messages_relayed - before.messages_relayed;
+                const wsSent = after.ws_messages_sent - before.ws_messages_sent;
+                const wsRecv = after.ws_messages_received - before.ws_messages_received;
+                const parsed = after.messages_parsed - before.messages_parsed;
+                const droppedDup = after.messages_dropped_dup - before.messages_dropped_dup;
+                const fanout = after.subscriber_fanout_total - before.subscriber_fanout_total;
+
+                const throughput = relayed / (totalElapsed / 1000);
+                const sendRate = count / (sendElapsed / 1000);
+
+                addResult(
+                    `Relay TPS (${count.toLocaleString()} messages)`,
+                    { elapsed_ms: totalElapsed, per_op_us: totalElapsed * 1000 / count, ops_per_sec: throughput },
+                    `Send phase: ${sendElapsed.toFixed(1)} ms (${sendRate.toFixed(0)} puts/sec) · ` +
+                    `ws_recv: ${wsRecv} · parsed: ${parsed} · relayed: ${relayed} · ` +
+                    `dedup: ${droppedDup} · fanout: ${fanout} · ws_sent: ${wsSent}`
+                );
+
+                status.textContent = 'Relay TPS benchmark complete.';
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+                console.error(e);
+            } finally {
+                btn.disabled = false;
+            }
+        };
+
+        // ─── Local WASM Benchmarks ──────────────────────────────────────
+
+        window.runLocalBenchmarks = async function() {
             const btn = document.getElementById('runBench');
             const status = document.getElementById('status');
             const results = document.getElementById('results');
@@ -49,21 +191,17 @@
                 await loadWasm();
                 status.textContent = 'Running benchmarks...';
 
-                // Bench 1: Put operations (fire-and-forget)
-                const benchPut = await benchPutOperations(10000);
-                addResult('Put operations (10k, fire-and-forget)', benchPut);
+                // Bench 1: Put throughput (fire-and-forget, measures WASM binding + serde)
+                const benchPut = benchPutThroughput(10000);
+                addResult('Put throughput (10k, fire-and-forget)', benchPut);
 
-                // Bench 2: Get operations
-                const benchGet = await benchGetOperations(10000);
-                addResult('Get operations (10k)', benchGet);
+                // Bench 2: Get throughput (measures WASM binding + promise creation)
+                const benchGet = await benchGetThroughput(10000);
+                addResult('Get throughput (10k)', benchGet);
 
-                // Bench 3: JSON parse throughput
-                const benchParse = benchJsonParse(10000);
-                addResult('JSON parse (10k iterations)', benchParse);
-
-                // Bench 4: JSON serialize throughput
-                const benchSerialize = benchJsonSerialize(10000);
-                addResult('JSON serialize (10k iterations)', benchSerialize);
+                // Bench 3: Put + Get round-trip (measures full local cycle)
+                const benchRoundtrip = await benchRoundtrip(1000);
+                addResult('Put→Get round-trip (1k)', benchRoundtrip);
 
                 status.textContent = 'Done.';
             } catch (e) {
@@ -74,60 +212,61 @@
             }
         };
 
-        function benchPutOperations(iterations) {
+        function benchPutThroughput(iterations) {
             const beam = new Beam();
             const start = performance.now();
             for (let i = 0; i < iterations; i++) {
                 beam.put("bench/" + i, JSON.stringify({ msg: "hello_" + i }));
             }
             const elapsed = performance.now() - start;
+            beam.stop();
             return { elapsed_ms: elapsed, per_op_us: elapsed * 1000 / iterations, ops_per_sec: iterations / (elapsed / 1000) };
         }
 
-        function benchGetOperations(iterations) {
+        async function benchGetThroughput(iterations) {
             const beam = new Beam();
-            // First put some data
+            // Pre-populate data
             for (let i = 0; i < iterations; i++) {
                 beam.put("bench/" + i, JSON.stringify({ msg: "hello_" + i }));
             }
-            // Now benchmark get
-            let received = 0;
+            // Measure get (promise creation + resolution)
             const start = performance.now();
+            const promises = [];
             for (let i = 0; i < iterations; i++) {
-                beam.get("bench/" + i).then(() => received++);
+                promises.push(beam.get("bench/" + i));
             }
+            await Promise.all(promises);
             const elapsed = performance.now() - start;
+            beam.stop();
             return { elapsed_ms: elapsed, per_op_us: elapsed * 1000 / iterations, ops_per_sec: iterations / (elapsed / 1000) };
         }
 
-        function benchJsonParse(iterations) {
-            const json = '{"#":"bench/test","put":{"bench/test":{"msg":"hello world","time":1234567890.123}}}';
+        async function benchRoundtrip(iterations) {
+            const beam = new Beam();
             const start = performance.now();
             for (let i = 0; i < iterations; i++) {
-                JSON.parse(json);
+                beam.put("bench/rt/" + i, "val_" + i);
+                await beam.get("bench/rt/" + i);
             }
             const elapsed = performance.now() - start;
+            beam.stop();
             return { elapsed_ms: elapsed, per_op_us: elapsed * 1000 / iterations, ops_per_sec: iterations / (elapsed / 1000) };
         }
 
-        function benchJsonSerialize(iterations) {
-            const obj = { "#": "bench/test", put: { "bench/test": { msg: "hello world", time: 1234567890.123 } } };
-            const start = performance.now();
-            for (let i = 0; i < iterations; i++) {
-                JSON.stringify(obj);
-            }
-            const elapsed = performance.now() - start;
-            return { elapsed_ms: elapsed, per_op_us: elapsed * 1000 / iterations, ops_per_sec: iterations / (elapsed / 1000) };
-        }
+        // ─── Result rendering ───────────────────────────────────────────
 
-        function addResult(name, result) {
+        function addResult(name, result, detail) {
             const div = document.createElement('div');
             div.className = 'bench-result';
-            div.innerHTML = `
+            let html = `
                 <div class="bench-name">${name}</div>
                 <div class="bench-time">${result.per_op_us.toFixed(2)} µs/op</div>
                 <div class="bench-throughput">${result.ops_per_sec.toFixed(0)} ops/sec (${result.elapsed_ms.toFixed(1)} ms total)</div>
             `;
+            if (detail) {
+                html += `<div class="bench-detail">${detail}</div>`;
+            }
+            div.innerHTML = html;
             document.getElementById('results').appendChild(div);
         }
     </script>
