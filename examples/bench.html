@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BEAM Browser Benchmark</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
+        h1 { color: #64ffda; }
+        .bench-result { background: #16213e; border-radius: 8px; padding: 16px; margin: 12px 0; border-left: 3px solid #64ffda; }
+        .bench-name { font-weight: bold; color: #64ffda; font-size: 1.1em; }
+        .bench-time { font-size: 1.4em; color: #fff; margin: 4px 0; }
+        .bench-throughput { color: #a0a0c0; font-size: 0.9em; }
+        #results { margin-top: 20px; }
+        button { background: #64ffda; color: #1a1a2e; border: none; padding: 12px 24px; font-size: 1.1em; border-radius: 4px; cursor: pointer; margin: 8px 0; }
+        button:hover { background: #4dd0e1; }
+        button:disabled { background: #555; color: #999; cursor: not-allowed; }
+        .status { color: #a0a0c0; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>⚡ BEAM Browser Benchmark</h1>
+    <p>Measures BEAM's WASM performance in the browser using <code>performance.now()</code>.</p>
+    <p><button id="runBench" onclick="runBenchmarks()">Run Benchmarks</button></p>
+    <div id="status" class="status"></div>
+    <div id="results"></div>
+
+    <script type="module">
+        import init, { Beam } from "./pkg/beam.js";
+
+        let wasmLoaded = false;
+
+        async function loadWasm() {
+            if (!wasmLoaded) {
+                await init();
+                wasmLoaded = true;
+            }
+        }
+
+        window.runBenchmarks = async function() {
+            const btn = document.getElementById('runBench');
+            const status = document.getElementById('status');
+            const results = document.getElementById('results');
+            btn.disabled = true;
+            results.innerHTML = '';
+            status.textContent = 'Loading WASM...';
+
+            try {
+                await loadWasm();
+                status.textContent = 'Running benchmarks...';
+
+                // Bench 1: Put operations (fire-and-forget)
+                const benchPut = await benchPutOperations(10000);
+                addResult('Put operations (10k, fire-and-forget)', benchPut);
+
+                // Bench 2: Get operations
+                const benchGet = await benchGetOperations(10000);
+                addResult('Get operations (10k)', benchGet);
+
+                // Bench 3: JSON parse throughput
+                const benchParse = benchJsonParse(10000);
+                addResult('JSON parse (10k iterations)', benchParse);
+
+                // Bench 4: JSON serialize throughput
+                const benchSerialize = benchJsonSerialize(10000);
+                addResult('JSON serialize (10k iterations)', benchSerialize);
+
+                status.textContent = 'Done.';
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+                console.error(e);
+            } finally {
+                btn.disabled = false;
+            }
+        };
+
+        function benchPutOperations(iterations) {
+            const beam = new Beam();
+            const start = performance.now();
+            for (let i = 0; i < iterations; i++) {
+                beam.put("bench/" + i, JSON.stringify({ msg: "hello_" + i }));
+            }
+            const elapsed = performance.now() - start;
+            return { elapsed_ms: elapsed, per_op_us: elapsed * 1000 / iterations, ops_per_sec: iterations / (elapsed / 1000) };
+        }
+
+        function benchGetOperations(iterations) {
+            const beam = new Beam();
+            // First put some data
+            for (let i = 0; i < iterations; i++) {
+                beam.put("bench/" + i, JSON.stringify({ msg: "hello_" + i }));
+            }
+            // Now benchmark get
+            let received = 0;
+            const start = performance.now();
+            for (let i = 0; i < iterations; i++) {
+                beam.get("bench/" + i).then(() => received++);
+            }
+            const elapsed = performance.now() - start;
+            return { elapsed_ms: elapsed, per_op_us: elapsed * 1000 / iterations, ops_per_sec: iterations / (elapsed / 1000) };
+        }
+
+        function benchJsonParse(iterations) {
+            const json = '{"#":"bench/test","put":{"bench/test":{"msg":"hello world","time":1234567890.123}}}';
+            const start = performance.now();
+            for (let i = 0; i < iterations; i++) {
+                JSON.parse(json);
+            }
+            const elapsed = performance.now() - start;
+            return { elapsed_ms: elapsed, per_op_us: elapsed * 1000 / iterations, ops_per_sec: iterations / (elapsed / 1000) };
+        }
+
+        function benchJsonSerialize(iterations) {
+            const obj = { "#": "bench/test", put: { "bench/test": { msg: "hello world", time: 1234567890.123 } } };
+            const start = performance.now();
+            for (let i = 0; i < iterations; i++) {
+                JSON.stringify(obj);
+            }
+            const elapsed = performance.now() - start;
+            return { elapsed_ms: elapsed, per_op_us: elapsed * 1000 / iterations, ops_per_sec: iterations / (elapsed / 1000) };
+        }
+
+        function addResult(name, result) {
+            const div = document.createElement('div');
+            div.className = 'bench-result';
+            div.innerHTML = `
+                <div class="bench-name">${name}</div>
+                <div class="bench-time">${result.per_op_us.toFixed(2)} µs/op</div>
+                <div class="bench-throughput">${result.ops_per_sec.toFixed(0)} ops/sec (${result.elapsed_ms.toFixed(1)} ms total)</div>
+            `;
+            document.getElementById('results').appendChild(div);
+        }
+    </script>
+</body>
+</html>
