@@ -1,6 +1,6 @@
 [package]
 name = "beamdb"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 repository = "https://github.com/guan-tends/beam"
 homepage = "https://github.com/guan-tends/beam"
@@ -70,6 +70,7 @@ getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] 
 default = []
 webrtc = ["dep:str0m", "dep:stun"]
 persy = ["dep:persy"]
+wasm-bench = []
 
 [dev-dependencies]
 
@@ -114,6 +115,8 @@ features = [
     "IdbVersionChangeEvent",
     "IdbOpenDbRequest",
     "DomStringList",
+    "Performance",
+    "PerformanceTiming",
 ]
 
 [target.wasm32-unknown-unknown.dependencies.wasm-bindgen]

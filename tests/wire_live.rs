@@ -539,8 +539,10 @@ impl BeamRelay {
     /// Start a BEAM relay on the given port with memory storage and
     /// public space enabled (required for unsigned test data).
     fn new(port: u16) -> Self {
-        let mut config = Config::default();
-        config.allow_public_space = true;
+        let config = Config {
+            allow_public_space: true,
+            ..Config::default()
+        };
         let ws_server = WsServer::new_with_config(
             config.clone(),
             WsServerConfig {
