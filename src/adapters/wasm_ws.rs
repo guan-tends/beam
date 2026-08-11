@@ -124,10 +124,12 @@ impl Actor for WasmWsConn {
     }
 
     async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
-        let text = msg.to_string();
+        let mut buf = Vec::with_capacity(256);
+        msg.to_writer(&mut buf);
+        let text = std::str::from_utf8(&buf).unwrap_or("");
         // Check readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
         if self.ws.ready_state() == 1 {
-            let _ = self.ws.send_with_str(&text);
+            let _ = self.ws.send_with_str(text);
         } else {
             // Buffer until onopen flushes.
             self.outbox.lock().unwrap().push(text);
