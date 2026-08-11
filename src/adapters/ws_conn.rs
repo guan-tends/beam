@@ -49,6 +49,9 @@ pub struct WsConn {
     sender: WsSender,
     receiver: Option<WsReceiver>,
     allow_public_space: bool,
+    /// Reusable serialization buffer — eliminates per-message allocation.
+    /// `to_writer` writes directly here; `clear()` preserves capacity.
+    send_buf: Vec<u8>,
 }
 
 impl WsConn {
@@ -58,6 +61,7 @@ impl WsConn {
             sender,
             receiver: Some(receiver),
             allow_public_space,
+            send_buf: Vec::with_capacity(512),
         }
     }
 }
@@ -65,19 +69,27 @@ impl WsConn {
 #[async_trait]
 impl Actor for WsConn {
     async fn handle(&mut self, msg: Arc<Message>, ctx: &ActorContext) {
-        // Serialize to wire format. Internal souls (root "", value
-        // "soul/key") are stripped during serialization by Put::to_string.
-        let wire = match &*msg {
-            Message::Put(put) => put.to_string(),
-            _ => msg.to_string(),
-        };
+        // Serialize to wire format using reusable buffer — zero alloc
+        // after warmup. Internal souls (root "", value "soul/key") are
+        // stripped during serialization by Put::to_writer.
+        msg.to_writer(&mut self.send_buf);
         ctx.metrics.record_serialization();
         debug!(
             "[WS→] SENDING {} bytes: {}",
-            wire.len(),
-            &wire[..wire.len().min(300)]
+            self.send_buf.len(),
+            std::str::from_utf8(&self.send_buf[..self.send_buf.len().min(300)]).unwrap_or("<utf8>")
         );
-        let _ = self.sender.send(WsMessage::Text(wire.into())).await;
+        // Clone bytes from the reusable buffer into the WS message.
+        // This is the one unavoidable allocation (the WS frame owns its
+        // text), but it's a single memcpy vs the old 3-alloc chain.
+        let _ = self
+            .sender
+            .send(WsMessage::Text(
+                String::from_utf8(self.send_buf.clone())
+                    .expect("wire format is valid UTF-8")
+                    .into(),
+            ))
+            .await;
         ctx.metrics.record_ws_sent();
     }
 
@@ -87,9 +99,14 @@ impl Actor for WsConn {
             from: ctx.addr.clone(),
             peer_id: ctx.peer_id.read().clone(),
         };
+        hi.to_writer(&mut self.send_buf);
         let _ = self
             .sender
-            .send(WsMessage::Text(hi.to_string().into()))
+            .send(WsMessage::Text(
+                String::from_utf8(self.send_buf.clone())
+                    .expect("wire format is valid UTF-8")
+                    .into(),
+            ))
             .await;
         let receiver = self.receiver.take().unwrap();
         let mut ctx2 = ctx.clone();
