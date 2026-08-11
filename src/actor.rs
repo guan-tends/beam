@@ -111,6 +111,20 @@ pub trait Actor: Send + Sync + 'static {
     /// Use `&*msg` or `msg.as_ref()` to access the inner [`Message`].
     async fn handle(&mut self, message: Arc<Message>, context: &ActorContext);
 
+    /// Handle a batch of messages drained from the mailbox.
+    ///
+    /// Override to process multiple messages in a single call, enabling
+    /// batch optimizations like coalescing WebSocket writes. The default
+    /// implementation calls [`handle`](Actor::handle) for each message.
+    ///
+    /// Implementors that override this **must** drain all messages from
+    /// `batch` (e.g. via `batch.drain(..)` or `batch.clear()`).
+    async fn handle_batch(&mut self, batch: &mut Vec<Arc<Message>>, context: &ActorContext) {
+        for msg in batch.drain(..) {
+            self.handle(msg, context).await;
+        }
+    }
+
     /// Called once before the actor starts processing messages.
     ///
     /// Override to initialize state, spawn child actors, or establish
@@ -174,9 +188,7 @@ impl dyn Actor {
                         // Mailbox closed.
                         break;
                     }
-                    for msg in batch.drain(..) {
-                        self.handle(msg, &context).await;
-                    }
+                    self.handle_batch(&mut batch, &context).await;
                 }
             }
         }
