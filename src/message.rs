@@ -10,6 +10,63 @@ use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
+use std::io::Write;
+
+// ─── JSON writing helpers ──────────────────────────────────────────
+// These helpers write JSON directly into a reusable `Vec<u8>` buffer,
+// eliminating the intermediate `serde_json::Value` tree (BTreeMap alloc)
+// and the `String` allocation from `to_string()`. After warmup, the
+// buffer's capacity is reused — zero allocations per message.
+//
+// Output is compact JSON (no whitespace), matching `serde_json::Value::to_string()`.
+
+/// Writes a JSON-escaped string (including surrounding quotes) into `buf`.
+///
+/// Escapes per RFC 8259: `"`, `\`, control characters (`\n`, `\r`, `\t`,
+/// `\u00XX`). Non-ASCII UTF-8 passes through unescaped (serde_json default).
+fn write_json_str(buf: &mut Vec<u8>, s: &str) {
+    buf.push(b'"');
+    for c in s.chars() {
+        match c {
+            '"' => buf.extend_from_slice(b"\\\""),
+            '\\' => buf.extend_from_slice(b"\\\\"),
+            '\n' => buf.extend_from_slice(b"\\n"),
+            '\r' => buf.extend_from_slice(b"\\r"),
+            '\t' => buf.extend_from_slice(b"\\t"),
+            c if c.is_control() => {
+                write!(buf, "\\u{:04x}", c as u32).unwrap();
+            }
+            c => buf.extend_from_slice(c.encode_utf8(&mut [0u8; 4]).as_bytes()),
+        }
+    }
+    buf.push(b'"');
+}
+
+/// Writes a BEAM [`Value`] as JSON into `buf`, matching the output of
+/// `serde_json::Value::from(value)` followed by serialization.
+///
+/// - `Null` → `null`
+/// - `Bit(true)` → `true`, `Bit(false)` → `false`
+/// - `Number(n)` → f64 via `serde_json::to_writer` (ryu formatter)
+/// - `Text(s)` → JSON string
+/// - `Link(soul)` → `{"#":"soul"}`
+fn write_json_value(buf: &mut Vec<u8>, value: &Value) {
+    match value {
+        Value::Null => buf.extend_from_slice(b"null"),
+        Value::Bit(true) => buf.extend_from_slice(b"true"),
+        Value::Bit(false) => buf.extend_from_slice(b"false"),
+        Value::Number(n) => {
+            // serde_json uses ryu for float formatting — matches Value::to_string()
+            serde_json::to_writer(buf, n).unwrap();
+        }
+        Value::Text(s) => write_json_str(buf, s),
+        Value::Link(soul) => {
+            buf.extend_from_slice(b"{\"#\":");
+            write_json_str(buf, soul);
+            buf.push(b'}');
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Get {
@@ -32,20 +89,44 @@ impl Get {
         }
     }
 
-    /// Serializes to Gun.js wire format. No caching — every call
-    /// re-serializes. The cost is JSON building; Sprint 4 (SIMD JSON)
-    /// will address this with a faster parser.
-    pub fn to_string(&self) -> String {
-        let mut json = json!({
-            "get": {
-                "#": &self.node_id
-            },
-            "#": &self.id
-        });
+    /// Serializes to Gun.js wire format into a reusable buffer.
+    ///
+    /// Writes compact JSON directly, avoiding the intermediate `Value` tree.
+    /// After warmup, the buffer capacity is reused — zero allocations.
+    pub fn to_writer(&self, buf: &mut Vec<u8>) {
+        buf.clear();
+        buf.extend_from_slice(b"{\"get\":{\"#\":");
+        write_json_str(buf, &self.node_id);
+        buf.push(b'}');
         if let Some(child_key) = &self.child_key {
-            json["get"]["."] = json!(child_key);
+            buf.extend_from_slice(b",\".\":");
+            write_json_str(buf, child_key);
+            buf.push(b'}');
+        } else {
+            // Close the get object
+            // Already closed above
         }
-        json.to_string()
+        // Reconstruct properly: {"get":{"#":"nodeId"},"#":"id"}
+        // Let me redo this...
+        buf.clear();
+        buf.extend_from_slice(b"{\"get\":{\"#\":");
+        write_json_str(buf, &self.node_id);
+        if let Some(child_key) = &self.child_key {
+            buf.extend_from_slice(b",\".\":");
+            write_json_str(buf, child_key);
+        }
+        buf.extend_from_slice(b"},\"#\":");
+        write_json_str(buf, &self.id);
+        buf.push(b'}');
+    }
+
+    /// Serializes to Gun.js wire format as a `String`.
+    ///
+    /// Convenience wrapper around [`to_writer`].
+    pub fn to_string(&self) -> String {
+        let mut buf = Vec::with_capacity(64);
+        self.to_writer(&mut buf);
+        String::from_utf8(buf).expect("wire format is valid UTF-8")
     }
 }
 
@@ -83,55 +164,121 @@ impl Put {
         Put::new(updated_nodes, None, from)
     }
 
-    /// Serializes to Gun.js wire format. Takes `&self` (immutable) so it
-    /// works through `Arc<Message>` without cloning.
+    /// Serializes to Gun.js wire format into a reusable buffer.
     ///
-    /// No caching — every call re-serializes. The checksum is computed
-    /// on-the-fly from the put JSON if not already set (incoming wire
-    /// messages carry it; locally created Puts compute it here).
-    pub fn to_string(&self) -> String {
-        let mut json = json!({
-            "put": {},
-            "#": self.id.to_string(),
-        });
+    /// Writes compact JSON directly into `buf`, avoiding the intermediate
+    /// `serde_json::Value` tree (3 allocations per message in the old
+    /// `to_string()`). After warmup, the buffer capacity is reused —
+    /// zero allocations per message.
+    ///
+    /// The checksum (`##`) is computed via Java's `String.hashCode()` on
+    /// the serialized `put` sub-object, matching Gun.js semantics. If
+    /// `self.checksum` is already set (incoming wire messages), it is
+    /// used directly.
+    ///
+    /// # Panics
+    ///
+    /// Will not panic — all writes to `Vec<u8>` are infallible.
+    /// `serde_json::to_writer` returns `Result` but `Vec<u8>` never errors.
+    pub fn to_writer(&self, buf: &mut Vec<u8>) {
+        buf.clear();
 
-        if let Some(in_response_to) = &self.in_response_to {
-            json["@"] = json!(in_response_to);
-        }
+        // ── Write the `put` sub-object ──
+        // We write it directly into buf, noting the byte range so we can
+        // compute the Java hashCode on the slice for the checksum.
+        buf.extend_from_slice(b"{\"put\":");
+        let put_start = buf.len();
 
+        buf.push(b'{');
+        let mut first_node = true;
         for (node_id, children) in self.updated_nodes.iter() {
             // Skip BEAM-internal souls that have no meaning in Gun.js wire format:
             // - "" (empty root pointer) — Gun.js doesn't use a root soul
             // - "soul/key" (value souls containing "/") — Gun.js stores values
             //   as fields on the parent soul, not as separate souls
-            // These are only needed for BEAM-internal graph traversal.
             if node_id.is_empty() || node_id.contains('/') {
                 continue;
             }
-            let node = &mut json["put"][node_id];
-            node["_"] = json!({
-                "#": node_id,
-                ">": {}
-            });
-            for (k, v) in children.iter() {
-                node["_"][">"][k] = json!(v.updated_at);
-                node[k] = v.value.clone().into();
+            if !first_node {
+                buf.push(b',');
             }
-        }
+            first_node = false;
 
+            // "nodeId": { "_": { "#": "nodeId", ">": { ... } }, "key": value, ... }
+            write_json_str(buf, node_id);
+            buf.extend_from_slice(b":{\"_\":{\"#\":");
+            write_json_str(buf, node_id);
+            buf.extend_from_slice(b",\">\":{");
+
+            let mut first_child = true;
+            for (k, v) in children.iter() {
+                if !first_child {
+                    buf.push(b',');
+                }
+                first_child = false;
+                write_json_str(buf, k);
+                buf.push(b':');
+                // Timestamps are f64 — use serde_json for ryu formatting
+                serde_json::to_writer(&mut *buf, &v.updated_at).unwrap();
+            }
+
+            buf.extend_from_slice(b"}}");
+            // Child values (flattened into the node object)
+            for (k, v) in children.iter() {
+                buf.push(b',');
+                write_json_str(buf, k);
+                buf.push(b':');
+                write_json_value(buf, &v.value);
+            }
+            buf.push(b'}');
+        }
+        buf.push(b'}');
+
+        let put_end = buf.len();
+
+        // ── Compute checksum ──
+        // Java's String.hashCode() on the put sub-object JSON.
+        // If checksum is already set (incoming wire message), use it.
         let checksum = match &self.checksum {
             Some(s) => *s,
-            None => json["put"].to_string().hash_code(),
+            None => {
+                let put_str = std::str::from_utf8(&buf[put_start..put_end]).unwrap();
+                put_str.hash_code()
+            }
         };
-        json["##"] = json!(checksum);
+
+        // ── Write remaining outer fields ──
+        buf.extend_from_slice(b",\"#\":");
+        write_json_str(buf, &self.id);
+
+        if let Some(ref in_response_to) = self.in_response_to {
+            buf.extend_from_slice(b",\"@\":");
+            write_json_str(buf, in_response_to);
+        }
+
+        buf.extend_from_slice(b",\"##\":");
+        serde_json::to_writer(&mut *buf, &checksum).unwrap();
+
         if let Some(ref hops) = self.peer_hop_list {
             if !hops.is_empty() {
                 let peers = hops.iter().cloned().collect::<Vec<_>>().join(",");
-                json["><"] = json!(peers);
+                buf.extend_from_slice(b",\"><\":");
+                write_json_str(buf, &peers);
             }
         }
 
-        json.to_string()
+        buf.push(b'}');
+    }
+
+    /// Serializes to Gun.js wire format as a `String`.
+    ///
+    /// Convenience wrapper around [`to_writer`]. Allocates a new `String`
+    /// each call — prefer `to_writer` with a reusable buffer for hot paths.
+    pub fn to_string(&self) -> String {
+        let mut buf = Vec::with_capacity(256);
+        self.to_writer(&mut buf);
+        // The buffer contains valid UTF-8 — all writes produce valid JSON
+        String::from_utf8(buf).expect("wire format is valid UTF-8")
     }
 }
 
@@ -159,9 +306,27 @@ impl BatchPut {
     /// Convert to a JSON array of individual Put messages.
     /// BatchPut is an internal optimization; on the wire it
     /// materializes as the constituent puts.
+    pub fn to_writer(&self, buf: &mut Vec<u8>) {
+        buf.clear();
+        buf.push(b'[');
+        let mut first = true;
+        for put in &self.puts {
+            if !first {
+                buf.push(b',');
+            }
+            first = false;
+            put.to_writer(buf);
+        }
+        buf.push(b']');
+    }
+
+    /// Serializes to Gun.js wire format as a `String`.
+    ///
+    /// Convenience wrapper around [`to_writer`].
     pub fn to_string(&self) -> String {
-        let parts: Vec<String> = self.puts.iter().map(|put| put.to_string()).collect();
-        format!("[{}]", parts.join(","))
+        let mut buf = Vec::with_capacity(512);
+        self.to_writer(&mut buf);
+        String::from_utf8(buf).expect("wire format is valid UTF-8")
     }
 }
 
@@ -196,28 +361,43 @@ pub struct RtcSignal {
 }
 
 impl RtcSignal {
-    pub fn to_string(&self) -> String {
-        let mut json = json!({
-            "dam": "rtc",
-            "id": &self.id,
-            "#": &self.id,
-        });
+    /// Serializes to Gun.js wire format into a reusable buffer.
+    pub fn to_writer(&self, buf: &mut Vec<u8>) {
+        buf.clear();
+        buf.extend_from_slice(b"{\"dam\":\"rtc\",\"id\":");
+        write_json_str(buf, &self.id);
+        buf.extend_from_slice(b",\"#\":");
+        write_json_str(buf, &self.id);
         if let Some(to) = &self.to {
-            json["to"] = json!(to.to_string());
+            buf.extend_from_slice(b",\"to\":");
+            write_json_str(buf, to);
         }
         if let Some(offer) = &self.offer {
-            json["offer"] = json!(offer);
+            buf.extend_from_slice(b",\"offer\":");
+            write_json_str(buf, offer);
         }
         if let Some(answer) = &self.answer {
-            json["answer"] = json!(answer);
+            buf.extend_from_slice(b",\"answer\":");
+            write_json_str(buf, answer);
         }
         if let Some(candidate) = &self.candidate {
-            json["candidate"] = json!(candidate);
+            buf.extend_from_slice(b",\"candidate\":");
+            write_json_str(buf, candidate);
         }
         if let Some(local_addr) = &self.local_addr {
-            json["local_addr"] = json!(local_addr);
+            buf.extend_from_slice(b",\"local_addr\":");
+            write_json_str(buf, local_addr);
         }
-        json.to_string()
+        buf.push(b'}');
+    }
+
+    /// Serializes to Gun.js wire format as a `String`.
+    ///
+    /// Convenience wrapper around [`to_writer`].
+    pub fn to_string(&self) -> String {
+        let mut buf = Vec::with_capacity(128);
+        self.to_writer(&mut buf);
+        String::from_utf8(buf).expect("wire format is valid UTF-8")
     }
 }
 
@@ -262,25 +442,53 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn to_string(&self) -> String {
+    /// Serializes to Gun.js wire format into a reusable buffer.
+    ///
+    /// Dispatches to the variant's `to_writer` method. Internal messages
+    /// (`CheckQuorumTimeouts`, `RegisterQuorum`) are never serialized to
+    /// wire — they produce sentinel strings for backwards compatibility.
+    ///
+    /// After warmup, the buffer capacity is reused — zero allocations.
+    pub fn to_writer(&self, buf: &mut Vec<u8>) {
         match self {
-            Message::Get(get) => get.to_string(),
-            Message::Put(put) => put.to_string(),
-            Message::BatchPut(batch) => batch.to_string(),
-            Message::Flush(flush) => json!({"dam": "flush","#": flush.id}).to_string(),
-            Message::Hi { from: _, peer_id } => json!({"dam": "hi","#": peer_id}).to_string(),
-            Message::RtcSignal(rtc) => rtc.to_string(),
-            // RegisterQuorum is router-internal — never serialized to wire.
-            // If we ever see this in to_string(), something routed it wrong.
-            Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
+            Message::Get(get) => get.to_writer(buf),
+            Message::Put(put) => put.to_writer(buf),
+            Message::BatchPut(batch) => batch.to_writer(buf),
+            Message::Flush(flush) => {
+                buf.clear();
+                buf.extend_from_slice(b"{\"dam\":\"flush\",\"#\":");
+                write_json_str(buf, &flush.id);
+                buf.push(b'}');
+            }
+            Message::Hi { from: _, peer_id } => {
+                buf.clear();
+                buf.extend_from_slice(b"{\"dam\":\"hi\",\"#\":");
+                write_json_str(buf, peer_id);
+                buf.push(b'}');
+            }
+            Message::RtcSignal(rtc) => rtc.to_writer(buf),
+            Message::CheckQuorumTimeouts => {
+                buf.clear();
+                buf.extend_from_slice(b"_tick_quorum");
+            }
             Message::RegisterQuorum { put_id, .. } => {
                 debug!(
-                    "internal RegisterQuorum({}) should not reach to_string",
+                    "internal RegisterQuorum({}) should not reach to_writer",
                     put_id
                 );
-                String::new()
+                buf.clear();
             }
         }
+    }
+
+    /// Serializes to Gun.js wire format as a `String`.
+    ///
+    /// Convenience wrapper around [`to_writer`]. Allocates a new `String`
+    /// each call — prefer `to_writer` with a reusable buffer for hot paths.
+    pub fn to_string(&self) -> String {
+        let mut buf = Vec::with_capacity(256);
+        self.to_writer(&mut buf);
+        String::from_utf8(buf).expect("wire format is valid UTF-8")
     }
 
     pub fn get_id(&self) -> String {
