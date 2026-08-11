@@ -70,16 +70,9 @@ where
             send_buf: Vec::with_capacity(512),
         }
     }
-}
 
-#[async_trait]
-impl<S> Actor for WsConn<S>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    async fn handle(&mut self, msg: Arc<Message>, ctx: &ActorContext) {
-        msg.to_writer(&mut self.send_buf);
-        ctx.metrics.record_serialization();
+    /// Send the current `send_buf` contents as a WS text frame.
+    async fn flush_ws(&mut self, ctx: &ActorContext) {
         debug!(
             "[WS→] SENDING {} bytes: {}",
             self.send_buf.len(),
@@ -93,6 +86,44 @@ where
                 .await;
         }
         ctx.metrics.record_ws_sent();
+    }
+}
+
+#[async_trait]
+impl<S> Actor for WsConn<S>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    async fn handle(&mut self, msg: Arc<Message>, ctx: &ActorContext) {
+        msg.to_writer(&mut self.send_buf);
+        ctx.metrics.record_serialization();
+        self.flush_ws(ctx).await;
+    }
+
+    /// Batch handler — serializes all messages, then flushes once.
+    ///
+    /// Each message is serialized into `send_buf` and immediately sent
+    /// as a separate WS text frame. While we could coalesce into a single
+    /// frame, Gun.js peers expect one message per frame. The win here is
+    /// amortizing scheduler overhead: we drain the full mailbox batch
+    /// without yielding between messages, then the sink's internal
+    /// buffer handles the actual I/O coalescing.
+    async fn handle_batch(&mut self, batch: &mut Vec<Arc<Message>>, ctx: &ActorContext) {
+        if let Some(sink) = &mut self.ws_sink {
+            for msg in batch.drain(..) {
+                msg.to_writer(&mut self.send_buf);
+                ctx.metrics.record_serialization();
+                let _ = sink
+                    .send(WsMessage::text(
+                        String::from_utf8(self.send_buf.clone())
+                            .expect("wire format is valid UTF-8"),
+                    ))
+                    .await;
+                ctx.metrics.record_ws_sent();
+            }
+        } else {
+            batch.clear();
+        }
     }
 
     async fn pre_start(&mut self, ctx: &ActorContext) {
