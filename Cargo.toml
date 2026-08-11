@@ -50,9 +50,9 @@ mimalloc = "0.1"
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 simd-json = "0.17"
 tokio-stream = "0.1.8"
-tokio-tungstenite = { version = "0.30", features=["native-tls"] }
+tokio-websockets = { version = "0.13", features = ["server", "client", "native-tls", "sha1_smol", "fastrand"] }
 tokio-native-tls = "0.3.0"
-warp = { version = "0.4.3", features = ["server"] }
+http = "1"
 oko-multicast-socket = { version = "0.5", features = ["tokio"] }
 redb = "4.1"
 persy = { version = "1.8", features = ["background_ops"], optional = true }

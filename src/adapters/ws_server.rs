@@ -28,12 +28,10 @@ use std::io::Read;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use futures_util::StreamExt;
 use log::{debug, info};
 use tokio::net::TcpListener;
 use tokio_native_tls::native_tls::Identity;
-
-use tokio_tungstenite::MaybeTlsStream;
+use tokio_websockets::ServerBuilder;
 
 /// Shared set of connected client addresses.
 type Clients = Arc<RwLock<HashSet<Addr>>>;
@@ -93,14 +91,21 @@ impl WsServer {
 
     /// Handles a single incoming WebSocket stream by upgrading it and
     /// spawning a [`WsConn`] actor.
-    async fn handle_stream(
-        stream: MaybeTlsStream<tokio::net::TcpStream>,
+    /// Accepts a WebSocket upgrade on an incoming stream (plain TCP or TLS).
+    ///
+    /// The stream can be either a raw `TcpStream` (plain WS) or a
+    /// `TlsStream<TcpStream>` (secure WSS). Both implement
+    /// `AsyncRead + AsyncWrite` which `ServerBuilder::accept` requires.
+    async fn handle_stream<S>(
+        stream: S,
         ctx: &ActorContext,
         clients: Clients,
         allow_public_space: bool,
-    ) {
-        let ws_stream = match tokio_tungstenite::accept_async(stream).await {
-            Ok(s) => s,
+    ) where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let ws_stream = match ServerBuilder::new().accept(stream).await {
+            Ok((_req, s)) => s,
             Err(_e) => {
                 // Suppress errors from receiving normal HTTP requests
                 // (e.g. browser preflight checks).
@@ -108,9 +113,7 @@ impl WsServer {
             }
         };
 
-        let (sender, receiver) = ws_stream.split();
-
-        let conn = WsConn::new(sender, receiver, allow_public_space);
+        let conn = WsConn::new(ws_stream, allow_public_space);
         let addr = ctx.start_actor(Box::new(conn));
         clients.write().await.insert(addr);
     }
@@ -166,20 +169,26 @@ impl WsServer {
             }
         }
 
-        // Plain HTTP — use warp (no TLS needed)
+        // Plain HTTP — manual handler (no warp dependency).
         let addr = format!("http://localhost:{}", port);
         eprintln!("Web UI:             {}", addr);
-        use warp::Filter;
-        let peer_id_route = warp::path("peer_id".to_string()).map(move || peer_id.to_string());
-        let metrics_clone = metrics.clone();
-        let metrics_route = warp::path("metrics".to_string()).map(move || {
-            let snap = metrics_clone.snapshot();
-            serde_json::to_string_pretty(&snap).unwrap_or_else(|_| "{}".to_string())
-        });
-        let routes = warp::get()
-            .and(peer_id_route)
-            .or(warp::get().and(metrics_route));
-        warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
+            .await
+            .expect("failed to bind web UI port");
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("web UI accept error: {}", e);
+                    continue;
+                }
+            };
+            let peer_id = peer_id.clone();
+            let metrics_clone = metrics.clone();
+            crate::tokio_spawn::spawn(async move {
+                Self::handle_http_request_plain(stream, &peer_id, &metrics_clone).await;
+            });
+        }
     }
 
     /// Handle a single HTTP request over a TLS stream.
@@ -189,6 +198,32 @@ impl WsServer {
     /// - `/metrics` — returns the current metrics snapshot as JSON
     ///
     /// Minimal handler — no routing framework needed for two endpoints.
+    /// Core HTTP request handler — shared between TLS and plain TCP paths.
+    ///
+    /// Routes: `/peer_id` → plain text, `/metrics` → JSON, else 404.
+    fn build_http_response(request: &str, peer_id: &str, metrics: &Metrics) -> Option<String> {
+        let request_line = request.lines().next().unwrap_or("");
+
+        if request_line.contains("GET /peer_id") {
+            Some(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                peer_id.len(),
+                peer_id
+            ))
+        } else if request_line.contains("GET /metrics") {
+            let body = serde_json::to_string_pretty(&metrics.snapshot())
+                .unwrap_or_else(|_| "{}".to_string());
+            Some(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Handle a single HTTP request over a TLS stream.
     async fn handle_http_request(
         mut stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
         peer_id: &str,
@@ -203,32 +238,36 @@ impl WsServer {
         };
 
         let request = String::from_utf8_lossy(&buf[..n]);
-        let request_line = request.lines().next().unwrap_or("");
-
-        let (body, content_type) = if request_line.contains("GET /peer_id") {
-            (peer_id.to_string(), "text/plain")
-        } else if request_line.contains("GET /metrics") {
-            let snap = metrics.snapshot();
-            (
-                serde_json::to_string_pretty(&snap).unwrap_or_else(|_| "{}".to_string()),
-                "application/json",
-            )
-        } else {
-            // 404 — empty body
-            let response =
-                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    .to_string();
-            let _ = stream.write_all(response.as_bytes()).await;
-            let _ = stream.shutdown().await;
-            return;
+        let response = match Self::build_http_response(&request, peer_id, metrics) {
+            Some(r) => r,
+            None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_string(),
         };
 
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            content_type,
-            body.len(),
-            body
-        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.shutdown().await;
+    }
+
+    /// Handle a single HTTP request over a plain TCP stream.
+    async fn handle_http_request_plain(
+        mut stream: tokio::net::TcpStream,
+        peer_id: &str,
+        metrics: &Metrics,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut buf = [0u8; 1024];
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+
+        let request = String::from_utf8_lossy(&buf[..n]);
+        let response = match Self::build_http_response(&request, peer_id, metrics) {
+            Some(r) => r,
+            None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_string(),
+        };
 
         let _ = stream.write_all(response.as_bytes()).await;
         let _ = stream.shutdown().await;
@@ -344,7 +383,7 @@ impl Actor for WsServer {
                                     let stream = acceptor.accept(stream).await;
                                     if let Ok(stream) = stream {
                                         Self::handle_stream(
-                                            MaybeTlsStream::NativeTls(stream),
+                                            stream,
                                             &ctx,
                                             clients.clone(),
                                             allow_public_space,
@@ -370,7 +409,7 @@ impl Actor for WsServer {
                         result = listener.accept() => {
                             if let Ok((stream, _)) = result {
                                 Self::handle_stream(
-                                    MaybeTlsStream::Plain(stream),
+                                    stream,
                                     &ctx,
                                     clients.clone(),
                                     allow_public_space,
