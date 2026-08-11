@@ -688,13 +688,31 @@ impl Message {
         }
     }
 
+    /// Parse a JSON string into `serde_json::Value` using the fastest
+    /// available parser for the target platform.
+    ///
+    /// On x86_64 native: uses `simd-json` (SSE4.2/AVX2 SIMD instructions)
+    /// for ~2-4x faster parsing. On WASM/ARM: falls back to `serde_json`.
+    ///
+    /// simd-json requires mutable access to the input buffer (it modifies
+    /// the string in-place for SIMD alignment), so we make one owned copy.
+    /// This allocation is negligible compared to the JSON tree that gets
+    /// built regardless.
+    #[cfg(target_arch = "x86_64")]
+    fn parse_json(s: &str) -> Result<JsonValue, &'static str> {
+        // simd-json requires mutable bytes (modifies buffer in-place for
+        // SIMD alignment). Use from_slice with a mutable byte buffer.
+        let mut bytes = s.as_bytes().to_vec();
+        simd_json::from_slice(&mut bytes).map_err(|_| "Failed to parse message as JSON")
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn parse_json(s: &str) -> Result<JsonValue, &'static str> {
+        serde_json::from_str(s).map_err(|_| "Failed to parse message as JSON")
+    }
+
     pub fn try_from(s: &str, from: Addr, allow_public_space: bool) -> Result<Vec<Self>, &str> {
-        let json: JsonValue = match serde_json::from_str(s) {
-            Ok(json) => json,
-            Err(_) => {
-                return Err("Failed to parse message as JSON");
-            }
-        };
+        let json: JsonValue = Self::parse_json(s)?;
 
         if let Some(arr) = json.as_array() {
             let mut vec = Vec::<Self>::new();

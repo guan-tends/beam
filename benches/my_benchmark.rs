@@ -655,9 +655,8 @@ fn wire_parse_serialize_benchmarks(c: &mut Criterion) {
         let msgs = Message::try_from(json, addr.clone(), true).unwrap();
         c.bench_function(&format!("wire_serialize_put_{}", label), |b| {
             b.iter(|| {
-                // to_string consumes self, so we clone each iteration
-                let msg = msgs[0].clone();
-                msg.to_string();
+                // to_string takes &self (Sprint 3) — no clone needed
+                msgs[0].to_string();
             });
         });
     }
