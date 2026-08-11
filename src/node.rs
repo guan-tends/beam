@@ -48,7 +48,7 @@ use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::watch;
 use tokio::sync::{broadcast, oneshot};
 #[cfg(not(target_arch = "wasm32"))]
@@ -127,8 +127,14 @@ pub struct Node {
     children: Arc<RwLock<BTreeMap<String, Node>>>,
     parent: Arc<RwLock<Option<(String, Node)>>>,
     broadcast_buffer_size: usize,
-    on_sender: broadcast::Sender<Value>,
-    map_sender: broadcast::Sender<(String, Value)>,
+    /// Lazily-initialized broadcast channel for `on()` subscribers.
+    ///
+    /// Created on first `subscribe()` or `send()` call, avoiding the
+    /// per-Node channel allocation (~5.4% flame graph self-time) for
+    /// nodes that never use callbacks.
+    on_sender: Arc<OnceLock<broadcast::Sender<Value>>>,
+    /// Lazily-initialized broadcast channel for `map()` subscribers.
+    map_sender: Arc<OnceLock<broadcast::Sender<(String, Value)>>>,
     actor_context: Box<ActorContext>,
     /// Shutdown signal sender — broadcasts `true` to all child tasks for graceful shutdown.
     shutdown_tx: watch::Sender<bool>,
@@ -219,8 +225,8 @@ impl Node {
             children: Arc::new(RwLock::new(BTreeMap::new())),
             parent: Arc::new(RwLock::new(None)),
             broadcast_buffer_size: config.broadcast_buffer_size,
-            on_sender: broadcast::channel::<Value>(config.broadcast_buffer_size).0,
-            map_sender: broadcast::channel::<(String, Value)>(config.broadcast_buffer_size).0,
+            on_sender: Arc::new(OnceLock::new()),
+            map_sender: Arc::new(OnceLock::new()),
             addr: Arc::new(RwLock::new(None)),
             router: Arc::new(RwLock::new(None)),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
@@ -315,15 +321,15 @@ impl Node {
                         continue;
                     }
                     if let Some(child) = self.children.read().get(&child) {
-                        let _ = child.on_sender.send(child_data.value.clone());
+                        let _ = child.on_sender().send(child_data.value.clone());
                     }
                     let _ = self
-                        .map_sender
+                        .map_sender()
                         .send((child.to_string(), child_data.value.clone()));
                 }
                 if is_replay {
                     let _ = self
-                        .map_sender
+                        .map_sender()
                         .send(("__beam_replay_complete__".to_string(), Value::Null));
                 }
             }
@@ -383,8 +389,8 @@ impl Node {
             children: Arc::new(RwLock::new(BTreeMap::new())),
             parent: Arc::new(RwLock::new(Some((self.uid.read().clone(), self.clone())))),
             broadcast_buffer_size: self.broadcast_buffer_size,
-            on_sender: broadcast::channel::<Value>(self.broadcast_buffer_size).0,
-            map_sender: broadcast::channel::<(String, Value)>(self.broadcast_buffer_size).0,
+            on_sender: Arc::new(OnceLock::new()),
+            map_sender: Arc::new(OnceLock::new()),
             uid: Arc::new(RwLock::new(new_child_uid)),
             router: self.router.clone(),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
@@ -403,6 +409,19 @@ impl Node {
         let mut guard = self.children.write();
         guard.insert(key, node.clone());
         node
+    }
+
+    /// Returns the `on()` broadcast sender, creating it lazily on first access.
+    /// Nodes that never subscribe to or send value updates pay zero channel cost.
+    fn on_sender(&self) -> &broadcast::Sender<Value> {
+        self.on_sender
+            .get_or_init(|| broadcast::channel::<Value>(self.broadcast_buffer_size).0)
+    }
+
+    /// Returns the `map()` broadcast sender, creating it lazily on first access.
+    fn map_sender(&self) -> &broadcast::Sender<(String, Value)> {
+        self.map_sender
+            .get_or_init(|| broadcast::channel::<(String, Value)>(self.broadcast_buffer_size).0)
     }
 
     /// Subscribes to this node's value updates.
@@ -427,7 +446,7 @@ impl Node {
         }
         let get = Get::new(node_id, key, addr);
         // subscribe before send so we don't miss the response
-        let subscriber = self.on_sender.subscribe();
+        let subscriber = self.on_sender().subscribe();
         if let Some(router) = self.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
@@ -572,7 +591,7 @@ impl Node {
         let addr = self.addr.read().clone().unwrap();
         let get = Get::new(node_id, None, addr);
         // subscribe before send so we don't miss the response
-        let subscriber = self.map_sender.subscribe();
+        let subscriber = self.map_sender().subscribe();
         if let Some(router) = self.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
@@ -699,7 +718,7 @@ impl Node {
             .unwrap()
             .as_millis() as f64;
         debug!("put_quorum (required: {} peers)", policy.quorum);
-        self.on_sender.send(value.clone()).ok();
+        self.on_sender().send(value.clone()).ok();
         let mut updated_nodes = BTreeMap::new();
         self.add_parent_nodes(&mut updated_nodes, value, updated_at);
         let my_addr = self.addr.read().clone().unwrap();
@@ -754,7 +773,7 @@ impl Node {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_millis() as f64;
-        self.on_sender.send(value.clone()).ok();
+        self.on_sender().send(value.clone()).ok();
         debug!("put {}", value.to_string());
         let mut updated_nodes = BTreeMap::new();
         // Store the value at self.uid under the "_" convention (Gun.js
@@ -848,7 +867,7 @@ impl Node {
             }
 
             // Notify local on() subscribers at the leaf (mirrors Node::put).
-            let _ = leaf.on_sender.send(value.clone());
+            let _ = leaf.on_sender().send(value.clone());
 
             let mut updated_nodes = BTreeMap::new();
             leaf.add_parent_nodes(&mut updated_nodes, value, updated_at);
