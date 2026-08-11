@@ -16,11 +16,11 @@
 //! nodes for discovering peers and relaying messages when direct
 //! connectivity is unavailable.
 
-use futures_util::StreamExt;
+use http::Uri;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio_tungstenite::connect_async;
+use tokio_websockets::ClientBuilder;
 
 use crate::Config;
 use crate::actor::{Actor, ActorContext, Addr};
@@ -113,11 +113,18 @@ impl Actor for OutgoingWebsocketManager {
                 }
 
                 debug!("attempting WebSocket connect to {}", url);
-                let result = connect_async(url).await;
+                let uri = match url.parse::<Uri>() {
+                    Ok(u) => u,
+                    Err(_) => {
+                        debug!("invalid URL: {}", url);
+                        sleep(Duration::from_millis(200)).await;
+                        continue;
+                    }
+                };
+                let result = ClientBuilder::from_uri(uri).connect().await;
 
                 if let Ok((socket, _)) = result {
-                    let (sender, receiver) = socket.split();
-                    let client = WsConn::new(sender, receiver, self.config.allow_public_space);
+                    let client = WsConn::new(socket, self.config.allow_public_space);
                     let addr = ctx.start_actor(Box::new(client));
                     self.clients.write().await.insert(url.clone(), addr);
                     debug!("connected to {}", url);

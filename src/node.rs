@@ -42,8 +42,6 @@ use crate::router::Router;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::random_string;
 use async_trait::async_trait;
-#[cfg(not(target_arch = "wasm32"))]
-use futures_util::StreamExt;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
@@ -52,7 +50,7 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::watch;
 use tokio::sync::{broadcast, oneshot};
 #[cfg(not(target_arch = "wasm32"))]
-use tokio_tungstenite::connect_async;
+use tokio_websockets::ClientBuilder;
 use web_time::{Duration, SystemTime};
 
 /// Configuration for a [`Node`] and its associated adapters.
@@ -494,11 +492,17 @@ impl Node {
             let mut backoff = Duration::from_secs(1);
             let max_backoff = Duration::from_secs(60);
             loop {
-                match connect_async(&url).await {
+                let uri = match url.parse::<http::Uri>() {
+                    Ok(u) => u,
+                    Err(_) => {
+                        warn!("invalid peer URL: {}", url);
+                        crate::tokio_time::sleep(backoff).await;
+                        continue;
+                    }
+                };
+                match ClientBuilder::from_uri(uri).connect().await {
                     Ok((socket, _)) => {
-                        let (sender, receiver) = socket.split();
-                        let conn =
-                            crate::adapters::WsConn::new(sender, receiver, allow_public_space);
+                        let conn = crate::adapters::WsConn::new(socket, allow_public_space);
                         let addr = ctx.start_actor(Box::new(conn));
                         info!("BEAM connected to peer {} (addr: {})", url, addr);
                         backoff = Duration::from_secs(1);
