@@ -119,10 +119,25 @@ where
     /// `pre_start`, which calls `flush()` on a timer. This decouples the
     /// actor's message processing from socket I/O — the actor never
     /// suspends waiting for the TCP buffer to drain.
+    ///
+    /// # Cooperative Scheduling
+    ///
+    /// On `current_thread` runtime, `feed()` with `flush_threshold(MAX)`
+    /// completes without suspending, so a full batch of 64 messages can
+    /// be processed without yielding to other tasks. We call
+    /// `yield_now()` every 16 messages to ensure the relay's router and
+    /// other actors get scheduled. Without this, on `current_thread`, a
+    /// sender's WsConn can starve the relay's receive loop, causing a
+    /// deadlock where the relay never processes incoming puts.
     async fn handle_batch(&mut self, batch: &mut Vec<Arc<Message>>, ctx: &ActorContext) {
         if self.ws_sink.is_some() {
+            let mut count = 0;
             for msg in batch.drain(..) {
                 self.send_msg(&msg, ctx).await;
+                count += 1;
+                if count % 16 == 0 {
+                    crate::tokio_spawn::yield_now().await;
+                }
             }
             // Single flush per batch — not per message. This is the key
             // difference from `sink.send()` (which flushes per message).

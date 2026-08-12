@@ -205,21 +205,27 @@ async fn run_bench(senders: usize, messages: usize, port: u16) {
 }
 
 /// Single sender, 10k messages — baseline throughput.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+///
+/// Uses `current_thread` runtime — the actor system's `yield_now()` in
+/// `handle_batch` prevents cooperative scheduling starvation. S4 used
+/// `current_thread` and achieved 3,221 puts/sec; S5's switch to
+/// `multi_thread(4)` added 3.2% scheduler overhead + Condvar parking
+/// with no throughput benefit for the sequential `put().await` pattern.
+#[tokio::test]
 #[ignore = "benchmark — run with --release --ignored --nocapture"]
 async fn relay_throughput_1_sender_10k() {
     run_bench(1, 10_000, 9970).await;
 }
 
 /// Single sender, 50k messages — sustained throughput.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test]
 #[ignore = "benchmark — run with --release --ignored --nocapture"]
 async fn relay_throughput_1_sender_50k() {
     run_bench(1, 50_000, 9972).await;
 }
 
 /// 10 senders × 5k messages each — concurrent throughput.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test]
 #[ignore = "benchmark — run with --release --ignored --nocapture"]
 async fn relay_throughput_10_senders_5k_each() {
     run_bench(10, 5_000, 9974).await;

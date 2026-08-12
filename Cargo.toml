@@ -119,8 +119,8 @@ required-features = ["native"]
 
 [profile.release]
 opt-level = 3
-strip = false
-lto = false
+strip = true
+lto = true
 codegen-units = 1
 
 # WASM-only extras for browser adapters
