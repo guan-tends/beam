@@ -651,11 +651,11 @@ impl Router {
     fn handle_put_relay(&mut self, put: &Put) {
         // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
 
-        // Build hops from incoming `><` plus the sender's peer ID.
-        // Resolve `put.from` (WsConn addr) to a stable peer ID via
-        // `addr_to_pid`. If unknown (e.g. storage adapter origin), fall
-        // back to the addr string — this is harmless because storage
-        // adapters are never in server_peers/known_peers.
+        // Gun.js mesh.raw(): build hops from incoming `><` plus ALL known
+        // peer IDs (up to 6), matching the reference implementation:
+        //   var to = []; for(var k in opt.peers){ to.push(p.url||p.pid||p.id);
+        //     if(++i > 6){ break } } if(i > 1){ msg['><'] = to.join() }
+        // The sender's pid is included via `from_pid` below.
         let mut hops = put.peer_hop_list.clone().unwrap_or_default();
         let from_pid = self
             .addr_to_pid
@@ -663,10 +663,6 @@ impl Router {
             .cloned()
             .unwrap_or_else(|| put.from.to_string());
         hops.insert(from_pid);
-
-        // Following Gun.js mesh.raw(): add ALL known peer IDs (up to 6)
-        // to the hops so the receiver can skip any peer already visited.
-        // Gun.js: `to.push(p.url || p.pid || p.id); if(++i > 6){ break }`
         for (i, pid) in self.peer_addrs.keys().enumerate() {
             if i >= 6 {
                 break;
@@ -681,31 +677,37 @@ impl Router {
 
         let mut already_sent_to = HashSet::new();
 
-        // Send to server peers — skip if the peer's pid is in hops.
-        // This is the Gun.js check: `tmp[peer.url] || tmp[peer.pid] || tmp[peer.id]`
-        for addr in self.server_peers.iter() {
-            if put.from == *addr {
-                continue;
+        // Relay to server peers (outgoing WebSocket adapters, relay servers).
+        //
+        // Gun.js `mesh.say` has two echo-back checks:
+        //   1. `if(peer === meta.via){ return false }` — don't send back to
+        //      the peer that sent us the message.
+        //   2. `if(meta.yo && meta.yo[peer.id]){ return false }` — don't
+        //      send to peers listed in `><` (already visited).
+        //
+        // BEAM's actor model separates the adapter (OutgoingWebsocketManager)
+        // from its child WsConn, so `put.from` (WsConn addr) ≠ server_peer
+        // adapter addr. The `put.from == *addr` check only covers the case
+        // where the adapter itself is the sender. For messages arriving
+        // from a remote peer via WsConn, `from_remote_peer` provides the
+        // `meta.via` check: if `put.from` is in `known_peers`, the message
+        // came from a remote peer — skip server_peers to prevent echo-back.
+        //
+        // The hops check (layer 2) is applied in the subscribers and
+        // known_peers sections below.
+        let from_remote_peer = self.known_peers.contains(&put.from);
+        if !from_remote_peer {
+            for addr in self.server_peers.iter() {
+                if put.from == *addr {
+                    continue;
+                }
+                let _ = addr.send(Arc::clone(&relay_msg));
+                already_sent_to.insert(addr.clone());
             }
-            // Resolve adapter's child WsConn addr to peer ID for hops check.
-            // The server_peer addr is the adapter (OutgoingWebsocketManager/WsServer),
-            // not the WsConn. But messages arriving from the relay set
-            // `from` to the WsConn addr, and the WsConn's pid is in `addr_to_pid`.
-            // We check hops against the pid of any WsConn that this adapter
-            // might own. Since we added ALL known pids to hops, and the
-            // sender's pid is in hops, the receiving adapter's WsConn pid
-            // will also be in hops (because the relay added all its pids).
-            //
-            // For server_peers specifically: we skip if `put.from == *addr`
-            // (same adapter) — that covers the echo case for the adapter
-            // that sent us the message. The hops check covers the case
-            // where a different adapter on our node connects back to a
-            // peer already visited by the message.
-            let _ = addr.send(Arc::clone(&relay_msg));
-            already_sent_to.insert(addr.clone());
         }
 
-        // Relay to subscribers — Arc::clone per subscriber
+        // Relay to subscribers — skip if the subscriber's pid is in hops
+        // (Gun.js: `tmp[peer.url] || tmp[peer.pid] || tmp[peer.id]`).
         let mut sent_to = 0;
         for node_id in put.updated_nodes.keys() {
             let topic = node_id.split("/").next().unwrap_or("");
@@ -714,7 +716,6 @@ impl Router {
                     if put.from == *addr {
                         return true;
                     }
-                    // Check if this subscriber's pid is in hops
                     if let Some(pid) = self.addr_to_pid.get(addr) {
                         if hops.contains(pid) {
                             return true;
@@ -734,17 +735,9 @@ impl Router {
                 })
             }
         }
-        debug!("sent put to {} subscribers", already_sent_to.len());
+
+        // Random sampling from known_peers (Gun.js mesh fallback path).
         if already_sent_to.len() < 4 {
-            #[cfg(target_arch = "wasm32")]
-            web_sys::console::log_1(
-                &format!(
-                    "router: entering random sampling, known_peers={}, sent_to={}",
-                    self.known_peers.len(),
-                    sent_to
-                )
-                .into(),
-            );
             let mut rng = rng();
             let mut errored = HashSet::new();
             while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
@@ -759,25 +752,14 @@ impl Router {
                 if put.from == *addr {
                     continue;
                 }
-                // Check if this known peer's pid is in hops
                 if let Some(pid) = self.addr_to_pid.get(addr) {
                     if hops.contains(pid) {
                         continue;
                     }
                 }
                 match addr.send(Arc::clone(&relay_msg)) {
-                    Ok(_) => {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(
-                            &format!("router: sent put to known_peer {}", addr).into(),
-                        );
-                        debug!("sent put to random peer");
-                    }
+                    Ok(_) => debug!("sent put to random peer"),
                     _ => {
-                        #[cfg(target_arch = "wasm32")]
-                        web_sys::console::log_1(
-                            &format!("router: FAILED to send put to known_peer {}", addr).into(),
-                        );
                         errored.insert(addr.clone());
                     }
                 }
