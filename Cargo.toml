@@ -39,6 +39,7 @@ aes-gcm = "0.10"
 pbkdf2 = "0.13"
 sha2 = "0.11"
 parking_lot = "0.12"
+fastbloom = "0.17"
 
 # ─── Native-only deps (gated out on WASM) ───
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
