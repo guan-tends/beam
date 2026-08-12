@@ -47,13 +47,13 @@ use web_time::{Duration, Instant};
 /// eviction but more memory.
 const GENS: usize = 4;
 
-/// Bits per generation. 8192 bits = 128 u64 words = 1 KiB.
-/// Sized for <1% false-positive rate at ~250 entries per generation
-/// (999 max / 4 generations ≈ 250).
-const BITS: usize = 8192;
+/// Bits per generation. 262144 bits = 4096 u64 words = 32 KiB.
+/// Sized for <1% false-positive rate at ~25000 entries per generation
+/// (100000 max / 4 generations = 25000).
+const BITS: usize = 262_144;
 
-/// Number of hash functions (k). With 8192 bits and 250 entries,
-/// k=7 gives FPR ≈ 0.8% — well under the 1% target.
+/// Number of hash functions (k). With 262144 bits and 25000 entries,
+/// k=7 gives FPR ≈ 0.3% — well under the 1% target.
 const K: usize = 7;
 
 /// Words in the bitset (BITS / 64).
@@ -97,8 +97,9 @@ fn bit_index(h1: u64, h2: u64, k: usize) -> usize {
 
 /// A single generation: a fixed bitset and an entry count.
 struct Gen {
-    /// Bitset: `WORDS` × 64 bits.
-    bits: [u64; WORDS],
+    /// Bitset: `WORDS` × 64 bits. Boxed to avoid stack overflow on WASM
+    /// (262144 bits = 32 KiB per generation × 4 generations = 128 KiB).
+    bits: Box<[u64; WORDS]>,
     /// Number of IDs tracked in this generation (for approximate len()).
     count: usize,
     /// When this generation became active.
@@ -108,7 +109,7 @@ struct Gen {
 impl Gen {
     fn empty() -> Self {
         Self {
-            bits: [0; WORDS],
+            bits: Box::new([0; WORDS]),
             count: 0,
             since: Instant::now(),
         }
@@ -181,9 +182,13 @@ impl Dup {
         }
     }
 
-    /// Creates a new dedup tracker with Gun.js defaults: 999 entries, 9s TTL.
+    /// Creates a new dedup tracker with Gun.js defaults.
+    ///
+    /// Capacity is 100000 (100K) — the original Gun.js default of 999 was
+    /// suitable for low-volume P2P traffic but caused false-positive drops
+    /// under high throughput. TTL remains 9s (Gun.js compatible).
     pub fn default_gun() -> Self {
-        Self::new(999, 9)
+        Self::new(100_000, 9)
     }
 
     /// Advances the generation ring if the current generation's window
@@ -330,14 +335,14 @@ mod tests {
     #[test]
     fn test_gun_default() {
         let dup = Dup::default_gun();
-        assert_eq!(dup.max(), 999);
+        assert_eq!(dup.max(), 100_000);
         assert_eq!(dup.age(), Duration::from_secs(9));
     }
 
     #[test]
     fn test_dup_default_trait() {
         let dup = Dup::default();
-        assert_eq!(dup.max(), 999);
+        assert_eq!(dup.max(), 100_000);
         assert_eq!(dup.age(), Duration::from_secs(9));
     }
 

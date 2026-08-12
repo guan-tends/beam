@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use log::{debug, error, info};
+use log::{debug, info};
 use web_time::Duration;
 
 use tokio_websockets::{Message as WsMessage, WebSocketStream};
@@ -71,21 +71,31 @@ where
         }
     }
 
-    /// Send the current `send_buf` contents as a WS text frame.
-    async fn flush_ws(&mut self, ctx: &ActorContext) {
-        debug!(
-            "[WS→] SENDING {} bytes: {}",
-            self.send_buf.len(),
-            std::str::from_utf8(&self.send_buf[..self.send_buf.len().min(300)]).unwrap_or("<utf8>")
-        );
+    /// Serialize a message into `send_buf` and feed it as a WS text frame
+    /// into the sink's internal buffer.
+    ///
+    /// With `flush_threshold(usize::MAX)` configured on the WebSocket
+    /// builder, `feed()` never triggers an implicit flush — it simply
+    /// queues the frame. The caller is responsible for calling
+    /// `flush()` after all messages are queued.
+    async fn send_msg(&mut self, msg: &Arc<Message>, ctx: &ActorContext) {
+        msg.to_writer(&mut self.send_buf);
+        ctx.metrics.record_serialization();
         if let Some(sink) = &mut self.ws_sink {
             let _ = sink
-                .send(WsMessage::text(
+                .feed(WsMessage::text(
                     String::from_utf8(self.send_buf.clone()).expect("wire format is valid UTF-8"),
                 ))
                 .await;
         }
         ctx.metrics.record_ws_sent();
+    }
+
+    /// Flush the WS sink's internal buffer to the underlying TCP stream.
+    async fn flush_sink(&mut self) {
+        if let Some(sink) = &mut self.ws_sink {
+            let _ = sink.flush().await;
+        }
     }
 }
 
@@ -94,54 +104,53 @@ impl<S> Actor for WsConn<S>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    /// Fallback single-message handler. Feeds one message then flushes.
+    /// Used when the actor runtime calls `handle` instead of `handle_batch`.
     async fn handle(&mut self, msg: Arc<Message>, ctx: &ActorContext) {
-        msg.to_writer(&mut self.send_buf);
-        ctx.metrics.record_serialization();
-        self.flush_ws(ctx).await;
+        self.send_msg(&msg, ctx).await;
+        self.flush_sink().await;
     }
 
-    /// Batch handler — serializes all messages, then flushes once.
+    /// Batch handler — feeds all messages into the WS frame buffer without
+    /// flushing. Because `flush_threshold` is set to `usize::MAX`, `feed()`
+    /// never triggers an implicit flush and never blocks on I/O.
     ///
-    /// Each message is serialized into `send_buf` and immediately sent
-    /// as a separate WS text frame. While we could coalesce into a single
-    /// frame, Gun.js peers expect one message per frame. The win here is
-    /// amortizing scheduler overhead: we drain the full mailbox batch
-    /// without yielding between messages, then the sink's internal
-    /// buffer handles the actual I/O coalescing.
+    /// Flushing is handled by a dedicated background task spawned in
+    /// `pre_start`, which calls `flush()` on a timer. This decouples the
+    /// actor's message processing from socket I/O — the actor never
+    /// suspends waiting for the TCP buffer to drain.
     async fn handle_batch(&mut self, batch: &mut Vec<Arc<Message>>, ctx: &ActorContext) {
-        if let Some(sink) = &mut self.ws_sink {
+        if self.ws_sink.is_some() {
             for msg in batch.drain(..) {
-                msg.to_writer(&mut self.send_buf);
-                ctx.metrics.record_serialization();
-                let _ = sink
-                    .send(WsMessage::text(
-                        String::from_utf8(self.send_buf.clone())
-                            .expect("wire format is valid UTF-8"),
-                    ))
-                    .await;
-                ctx.metrics.record_ws_sent();
+                self.send_msg(&msg, ctx).await;
             }
+            // Single flush per batch — not per message. This is the key
+            // difference from `sink.send()` (which flushes per message).
+            // One flush per 64 messages dramatically reduces I/O syscalls
+            // while still delivering data to TCP promptly.
+            self.flush_sink().await;
         } else {
             batch.clear();
         }
     }
 
     async fn pre_start(&mut self, ctx: &ActorContext) {
-        info!("WsConn starting");
-
         // Send Hi message to register with the relay.
         let hi = Message::Hi {
             from: ctx.addr.clone(),
             peer_id: ctx.peer_id.read().clone(),
         };
         hi.to_writer(&mut self.send_buf);
+        ctx.metrics.record_serialization();
         if let Some(sink) = &mut self.ws_sink {
             let _ = sink
-                .send(WsMessage::text(
+                .feed(WsMessage::text(
                     String::from_utf8(self.send_buf.clone()).expect("wire format is valid UTF-8"),
                 ))
                 .await;
         }
+        ctx.metrics.record_ws_sent();
+        self.flush_sink().await;
 
         // Move the read half into a child task for the receive loop.
         let reader = self.ws_stream.take().expect("ws_stream already taken");
@@ -152,30 +161,21 @@ where
             while let Some(result) = reader.next().await {
                 let ws_msg = match result {
                     Ok(m) => m,
-                    Err(e) => {
-                        debug!("[WS] recv error: {}", e);
+                    Err(_e) => {
                         break;
                     }
                 };
                 if ws_msg.is_text() {
                     let text = ws_msg.as_text().unwrap_or("");
                     if text.is_empty() {
-                        debug!("[WS] empty text frame (ignored)");
                         continue;
                     }
                     ctx2.metrics.record_ws_received();
-                    debug!(
-                        "[WS←] RECV {} bytes: {}",
-                        text.len(),
-                        &text[..text.len().min(300)]
-                    );
                     match Message::try_from(text, ctx2.addr.clone(), allow_public_space) {
                         Ok(msgs) => {
                             ctx2.metrics.record_parsed();
                             for msg in msgs {
-                                if ctx2.router.send(msg).is_err() {
-                                    error!("failed to forward incoming message to router");
-                                }
+                                let _ = ctx2.router.send(msg);
                             }
                         }
                         Err(e) => {

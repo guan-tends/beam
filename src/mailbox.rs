@@ -347,7 +347,7 @@ mod tests {
         });
 
         // Give the consumer time to park on Notify.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        crate::tokio_time::sleep(web_time::Duration::from_millis(50)).await;
 
         // Send a message — should wake the consumer.
         tx.send(make_hi()).unwrap();

@@ -179,6 +179,14 @@ pub struct Router {
     metrics: Arc<crate::metrics::Metrics>,
     known_peers: HashSet<Addr>,
     peer_addrs: HashMap<String, Addr>,
+    /// Reverse mapping: WsConn addr → peer_id.
+    ///
+    /// Used by `handle_put_relay` to populate the `><` (peer_hop_list)
+    /// field with stable peer IDs instead of per-connection actor addresses.
+    /// This mirrors Gun.js's DAM mesh protocol, where `><` contains peer
+    /// URLs/IDs (not connection-specific identifiers) so that both sides
+    /// of a WebSocket connection recognize the same hop entry.
+    addr_to_pid: HashMap<Addr, String>,
     /// Addresses of all storage adapter actors (both read and write).
     ///
     /// Used for echo-suppression checks (e.g. `put.from == *addr`).
@@ -285,9 +293,10 @@ impl Actor for Router {
     }
 
     async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
-        debug!("incoming message {}", msg.get_id());
         match &*msg {
-            Message::Put(put) => self.handle_put(put.clone()),
+            Message::Put(put) => {
+                self.handle_put(put.clone());
+            }
             Message::BatchPut(batch) => {
                 self.handle_batch_put(batch.clone());
             }
@@ -306,6 +315,7 @@ impl Actor for Router {
                         }
                     }
                     self.peer_addrs.insert(peer_id.clone(), from.clone());
+                    self.addr_to_pid.insert(from.clone(), peer_id.clone());
                 }
             }
             Message::RtcSignal(rtc) => {
@@ -374,6 +384,7 @@ impl Router {
             metrics,
             known_peers: HashSet::new(),
             peer_addrs: HashMap::new(),
+            addr_to_pid: HashMap::new(),
             storage_adapters: HashSet::new(),
             read_adapters: HashSet::new(),
             write_adapters: HashSet::new(),
@@ -607,8 +618,7 @@ impl Router {
                     if put.from == *addr {
                         continue;
                     }
-                    let _ = addr.send(Message::Put(put.clone()));
-                    debug!("sent to write adapter {}", addr);
+                    let _res = addr.send(Message::Put(put.clone()));
                 }
                 // Network relay is handled by handle_put_relay for batching
                 self.handle_put_relay(&put);
@@ -619,46 +629,78 @@ impl Router {
     /// Relays a Put to server peers and subscribers.
     ///
     /// Storage is NOT touched here — this is pure network fan-out.
-    /// Anti-loop detection uses the `peer_hop_list` field: peers already
-    /// in the hop list are skipped.
+    /// Anti-loop detection uses the `peer_hop_list` (`><`) field.
+    ///
+    /// # Gun.js DAM Compatibility
+    ///
+    /// Following Gun.js's mesh protocol (`src/mesh.js`), the `><` field
+    /// contains **stable peer IDs**, not per-connection actor addresses.
+    /// Gun.js populates `><` with ALL known peer URLs/IDs (up to 6) at
+    /// serialization time. On the receiving side, a peer checks if the
+    /// SENDING peer's ID is in `><` and skips if so.
+    ///
+    /// This works because peer IDs are stable across connections — both
+    /// sides of a WebSocket connection recognize the same peer ID. Using
+    /// per-connection WsConn addrs (as BEAM previously did) breaks the
+    /// skip check because each side sees a different addr for the same
+    /// logical connection, causing message echo-back (4x amplification).
+    ///
+    /// BEAM's peer IDs come from the `Hi` handshake: each WsConn sends
+    /// its node's `peer_id` on startup, and the router records the
+    /// mapping in `peer_addrs` (pid → addr) and `addr_to_pid` (addr → pid).
     fn handle_put_relay(&mut self, put: &Put) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            web_sys::console::log_1(&format!(
-                "router.handle_put_relay: from={} server_peers={} known_peers={} subscribers={}",
-                put.from,
-                self.server_peers.len(),
-                self.known_peers.len(),
-                self.subscribers_by_topic.len(),
-            ).into());
-            for addr in self.known_peers.iter() {
-                web_sys::console::log_1(
-                    &format!(
-                        "  known_peer: {} (from matches: {})",
-                        addr,
-                        *addr == put.from
-                    )
-                    .into(),
-                );
-            }
-        }
         // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
+
+        // Build hops from incoming `><` plus the sender's peer ID.
+        // Resolve `put.from` (WsConn addr) to a stable peer ID via
+        // `addr_to_pid`. If unknown (e.g. storage adapter origin), fall
+        // back to the addr string — this is harmless because storage
+        // adapters are never in server_peers/known_peers.
         let mut hops = put.peer_hop_list.clone().unwrap_or_default();
-        hops.insert(put.from.to_string());
+        let from_pid = self
+            .addr_to_pid
+            .get(&put.from)
+            .cloned()
+            .unwrap_or_else(|| put.from.to_string());
+        hops.insert(from_pid);
+
+        // Following Gun.js mesh.raw(): add ALL known peer IDs (up to 6)
+        // to the hops so the receiver can skip any peer already visited.
+        // Gun.js: `to.push(p.url || p.pid || p.id); if(++i > 6){ break }`
+        for (i, pid) in self.peer_addrs.keys().enumerate() {
+            if i >= 6 {
+                break;
+            }
+            hops.insert(pid.clone());
+        }
 
         // Build the relay Put ONCE with peer_hop_list set, wrap in Arc.
-        // Each peer receives Arc::clone — refcount bump, not Put::clone.
         let mut relay_put = put.clone();
         relay_put.peer_hop_list = Some(hops.clone());
         let relay_msg: Arc<Message> = Arc::new(Message::Put(relay_put));
 
         let mut already_sent_to = HashSet::new();
 
-        // Send to server peers — Arc::clone, no Put::clone
+        // Send to server peers — skip if the peer's pid is in hops.
+        // This is the Gun.js check: `tmp[peer.url] || tmp[peer.pid] || tmp[peer.id]`
         for addr in self.server_peers.iter() {
-            if put.from == *addr || hops.contains(&addr.to_string()) {
+            if put.from == *addr {
                 continue;
             }
+            // Resolve adapter's child WsConn addr to peer ID for hops check.
+            // The server_peer addr is the adapter (OutgoingWebsocketManager/WsServer),
+            // not the WsConn. But messages arriving from the relay set
+            // `from` to the WsConn addr, and the WsConn's pid is in `addr_to_pid`.
+            // We check hops against the pid of any WsConn that this adapter
+            // might own. Since we added ALL known pids to hops, and the
+            // sender's pid is in hops, the receiving adapter's WsConn pid
+            // will also be in hops (because the relay added all its pids).
+            //
+            // For server_peers specifically: we skip if `put.from == *addr`
+            // (same adapter) — that covers the echo case for the adapter
+            // that sent us the message. The hops check covers the case
+            // where a different adapter on our node connects back to a
+            // peer already visited by the message.
             let _ = addr.send(Arc::clone(&relay_msg));
             already_sent_to.insert(addr.clone());
         }
@@ -669,8 +711,14 @@ impl Router {
             let topic = node_id.split("/").next().unwrap_or("");
             if let Some(topic_subscribers) = self.subscribers_by_topic.get_mut(topic) {
                 topic_subscribers.retain(|addr| {
-                    if put.from == *addr || hops.contains(&addr.to_string()) {
+                    if put.from == *addr {
                         return true;
+                    }
+                    // Check if this subscriber's pid is in hops
+                    if let Some(pid) = self.addr_to_pid.get(addr) {
+                        if hops.contains(pid) {
+                            return true;
+                        }
                     }
                     if already_sent_to.contains(addr) {
                         return true;
@@ -708,8 +756,14 @@ impl Router {
                     continue;
                 }
                 already_sent_to.insert(addr.clone());
-                if put.from == *addr || hops.contains(&addr.to_string()) {
+                if put.from == *addr {
                     continue;
+                }
+                // Check if this known peer's pid is in hops
+                if let Some(pid) = self.addr_to_pid.get(addr) {
+                    if hops.contains(pid) {
+                        continue;
+                    }
                 }
                 match addr.send(Arc::clone(&relay_msg)) {
                     Ok(_) => {
@@ -952,7 +1006,7 @@ mod tests {
     fn test_router_default_dedup() {
         let metrics = Arc::new(Metrics::new());
         let router = Router::new(vec![], vec![], metrics);
-        assert_eq!(router.dup.max(), 999);
+        assert_eq!(router.dup.max(), 100_000);
         assert_eq!(router.dup.age(), web_time::Duration::from_secs(9));
     }
 

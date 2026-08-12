@@ -132,7 +132,7 @@ impl Actor for WasmWsConn {
             let _ = self.ws.send_with_str(text);
         } else {
             // Buffer until onopen flushes.
-            self.outbox.lock().unwrap().push(text);
+            self.outbox.lock().unwrap().push(text.to_string());
         }
     }
 
