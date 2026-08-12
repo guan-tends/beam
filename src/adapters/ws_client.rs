@@ -121,7 +121,36 @@ impl Actor for OutgoingWebsocketManager {
                         continue;
                     }
                 };
-                let result = ClientBuilder::from_uri(uri).connect().await;
+
+                // Resolve and connect TCP ourselves (async, non-blocking).
+                // tokio-websockets' default resolver uses blocking getaddrinfo
+                // which deadlocks current_thread runtimes (e.g. #[tokio::test]).
+                let host = uri.host().unwrap_or("127.0.0.1");
+                let port = uri
+                    .port_u16()
+                    .unwrap_or(if uri.scheme_str() == Some("wss") {
+                        443
+                    } else {
+                        80
+                    });
+                let tcp = tokio::net::TcpStream::connect((host, port)).await;
+
+                let result = match tcp {
+                    Ok(stream) => {
+                        // See ws_server.rs for rationale on flush_threshold.
+                        let ws_config =
+                            tokio_websockets::Config::default().flush_threshold(usize::MAX);
+                        ClientBuilder::from_uri(uri)
+                            .config(ws_config)
+                            .connect_on(stream)
+                            .await
+                    }
+                    Err(e) => {
+                        debug!("TCP connect to {}:{} failed: {}", host, port, e);
+                        sleep(Duration::from_millis(200)).await;
+                        continue;
+                    }
+                };
 
                 if let Ok((socket, _)) = result {
                     let client = WsConn::new(socket, self.config.allow_public_space);

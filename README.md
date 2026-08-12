@@ -804,6 +804,7 @@ let config = Config {
     my_pub: Some("x.y".into()),
     broadcast_buffer_size: 4096,
     ice_servers: vec!["stun:stun.l.google.com:19302".into()],
+    dedup_capacity: 100_000,
 };
 # }
 ```

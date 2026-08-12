@@ -205,21 +205,21 @@ async fn run_bench(senders: usize, messages: usize, port: u16) {
 }
 
 /// Single sender, 10k messages — baseline throughput.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "benchmark — run with --release --ignored --nocapture"]
 async fn relay_throughput_1_sender_10k() {
     run_bench(1, 10_000, 9970).await;
 }
 
 /// Single sender, 50k messages — sustained throughput.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "benchmark — run with --release --ignored --nocapture"]
 async fn relay_throughput_1_sender_50k() {
     run_bench(1, 50_000, 9972).await;
 }
 
 /// 10 senders × 5k messages each — concurrent throughput.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "benchmark — run with --release --ignored --nocapture"]
 async fn relay_throughput_10_senders_5k_each() {
     run_bench(10, 5_000, 9974).await;

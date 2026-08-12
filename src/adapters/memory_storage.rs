@@ -244,7 +244,9 @@ impl Actor for MemoryStorage {
     async fn handle(&mut self, message: Arc<Message>, ctx: &ActorContext) {
         match &*message {
             Message::Get(get) => self.handle_get(get.clone(), ctx),
-            Message::Put(put) => self.handle_put(put.clone(), ctx),
+            Message::Put(put) => {
+                self.handle_put(put.clone(), ctx);
+            }
             Message::Flush(flush) => {
                 // Memory storage has no disk state; flush is a no-op.
                 // Ack the barrier so callers never hang.

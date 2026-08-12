@@ -104,7 +104,15 @@ impl WsServer {
     ) where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        let ws_stream = match ServerBuilder::new().accept(stream).await {
+        // Configure with an unbounded flush_threshold so that `poll_ready`
+        // never triggers an implicit `poll_flush`. Without this, the default
+        // 8 KiB threshold causes `feed()` to block on TCP I/O once the
+        // internal frame queue exceeds 8 KiB, which starves the actor's
+        // scheduler on single-threaded runtimes and can deadlock under
+        // backpressure on multi-threaded runtimes. Flushing is handled
+        // explicitly by `WsConn::handle_batch` after all messages are queued.
+        let ws_config = tokio_websockets::Config::default().flush_threshold(usize::MAX);
+        let ws_stream = match ServerBuilder::new().config(ws_config).accept(stream).await {
             Ok((_req, s)) => s,
             Err(_e) => {
                 // Suppress errors from receiving normal HTTP requests
@@ -132,8 +140,7 @@ impl WsServer {
 
         if let Some(cert_path) = config.cert_path {
             let key_path = config.key_path.unwrap();
-            let addr = format!("https://localhost:{}", port);
-            eprintln!("Web UI:             {}", addr);
+            let _addr = format!("https://localhost:{}", port);
 
             // Load TLS identity (same pattern as WebSocket TLS above)
             let cert = std::fs::read(cert_path).expect("failed to read cert file");
@@ -170,8 +177,7 @@ impl WsServer {
         }
 
         // Plain HTTP — manual handler (no warp dependency).
-        let addr = format!("http://localhost:{}", port);
-        eprintln!("Web UI:             {}", addr);
+        let _addr = format!("http://localhost:{}", port);
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
             .await
             .expect("failed to bind web UI port");
@@ -346,7 +352,6 @@ impl Actor for WsServer {
         // Create the TCP listener
         let try_socket = TcpListener::bind(&addr).await;
         let listener = try_socket.expect("Failed to bind");
-        eprintln!("Websocket endpoint: ws://{}/ws", addr);
 
         let allow_public_space = self.config.allow_public_space;
         let clients = self.clients.clone();

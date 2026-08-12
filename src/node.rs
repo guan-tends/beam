@@ -80,6 +80,14 @@ pub struct Config {
     /// Defaults to Google's public STUN server. Only used when the
     /// `webrtc` feature is enabled.
     pub ice_servers: Vec<String>,
+    /// Maximum entries for the router's dedup bloom filter.
+    ///
+    /// Defaults to 100000 (100K) — handles high-throughput relay scenarios
+    /// without false positives. The original Gun.js default (999) is
+    /// suitable for low-volume P2P traffic but causes false-positive drops
+    /// under benchmark loads. Each entry uses ~1 bit of memory in the
+    /// bloom filter, so 100K entries ≈ 12.5 KiB per generation.
+    pub dedup_capacity: usize,
 }
 
 impl Default for Config {
@@ -89,6 +97,7 @@ impl Default for Config {
             my_pub: None,
             broadcast_buffer_size: 4096,
             ice_servers: vec!["stun:stun.l.google.com:19302".to_string()],
+            dedup_capacity: 100_000,
         }
     }
 }
@@ -500,20 +509,41 @@ impl Node {
                         continue;
                     }
                 };
-                match ClientBuilder::from_uri(uri).connect().await {
-                    Ok((socket, _)) => {
-                        let conn = crate::adapters::WsConn::new(socket, allow_public_space);
-                        let addr = ctx.start_actor(Box::new(conn));
-                        info!("BEAM connected to peer {} (addr: {})", url, addr);
-                        backoff = Duration::from_secs(1);
-                        // Stay alive; WsConn runs until disconnect.
-                        // TODO: detect disconnect for faster reconnect loop.
-                        crate::tokio_time::sleep(Duration::from_secs(3600)).await;
-                    }
+                // Resolve and connect TCP ourselves (async, non-blocking).
+                // tokio-websockets' default resolver uses blocking getaddrinfo
+                // which deadlocks current_thread runtimes (e.g. #[tokio::test]).
+                let host = uri.host().unwrap_or("127.0.0.1");
+                let port = uri
+                    .port_u16()
+                    .unwrap_or(if uri.scheme_str() == Some("wss") {
+                        443
+                    } else {
+                        80
+                    });
+                match tokio::net::TcpStream::connect((host, port)).await {
+                    Ok(stream) => match ClientBuilder::from_uri(uri).connect_on(stream).await {
+                        Ok((socket, _)) => {
+                            let conn = crate::adapters::WsConn::new(socket, allow_public_space);
+                            let addr = ctx.start_actor(Box::new(conn));
+                            info!("BEAM connected to peer {} (addr: {})", url, addr);
+                            backoff = Duration::from_secs(1);
+                            // Stay alive; WsConn runs until disconnect.
+                            // TODO: detect disconnect for faster reconnect loop.
+                            crate::tokio_time::sleep(Duration::from_secs(3600)).await;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "BEAM WS upgrade to {} failed: {}. retry in {:?}",
+                                url, e, backoff
+                            );
+                            crate::tokio_time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(max_backoff);
+                        }
+                    },
                     Err(e) => {
                         warn!(
-                            "BEAM connect to {} failed: {}. retry in {:?}",
-                            url, e, backoff
+                            "BEAM TCP connect to {}:{} failed: {}. retry in {:?}",
+                            host, port, e, backoff
                         );
                         crate::tokio_time::sleep(backoff).await;
                         backoff = (backoff * 2).min(max_backoff);
@@ -821,7 +851,7 @@ impl Node {
 
         let dur = Duration::from_secs(30); // TODO: accept timeout as parameter when API stabilizes
         match crate::tokio_time::timeout(dur, rx).await {
-            Ok(Ok(_status)) => Ok(()), // discard ReplicationStatus for local put
+            Ok(Ok(_status)) => Ok(()),
             Ok(Err(_)) => Err("put ack channel closed".to_string()),
             Err(_) => {
                 self.pending_puts.write().remove(&put_id);
@@ -1266,6 +1296,7 @@ mod tests {
             my_pub: Some("test.pub".to_string()),
             broadcast_buffer_size: 1024,
             ice_servers: vec![],
+            dedup_capacity: 100_000,
         };
         assert!(!config.allow_public_space);
         assert_eq!(config.broadcast_buffer_size, 1024);
