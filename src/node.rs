@@ -134,17 +134,26 @@ pub struct Node {
     children: Arc<RwLock<BTreeMap<String, Node>>>,
     parent: Arc<RwLock<Option<(String, Node)>>>,
     broadcast_buffer_size: usize,
-    /// Broadcast channel for `on()` subscribers.
+    /// Lazy broadcast channel for `on()` subscribers.
     ///
-    /// Eagerly allocated at construction. The previous `OnceLock` lazy
-    /// design intended to save allocation for nodes that never subscribe,
-    /// but `new_child()` creates a fresh `Arc<OnceLock<…>>` per child —
-    /// so the first `on_sender` use on each unique-key child allocates
-    /// a new channel anyway, adding ~15% flame-graph overhead (the
-    /// `get_or_init` atomic CAS plus channel construction) on every put.
-    on_sender: broadcast::Sender<Value>,
-    /// Broadcast channel for `map()` subscribers.
-    map_sender: broadcast::Sender<(String, Value)>,
+    /// `None` until the first call to [`Node::on`]. Wrapped in
+    /// `Arc<RwLock<Option<…>>>` so that all clones of this `Node`
+    /// share the same lazy state — when one clone creates the
+    /// channel, all clones can send on it.
+    ///
+    /// # Why not `OnceLock`?
+    ///
+    /// `OnceLock::get_or_init` constructs the channel on the *first*
+    /// access, which for the hot path (`handle_put → send`) means
+    /// every unique child node allocates a channel it will never use.
+    /// `RwLock<Option>` lets the send path cheaply observe `None` and
+    /// skip — zero allocation for nodes that never have subscribers.
+    on_sender: Arc<RwLock<Option<broadcast::Sender<Value>>>>,
+    /// Lazy broadcast channel for `map()` subscribers.
+    ///
+    /// Same lazy semantics as [`Node::on_sender`]. `None` until the
+    /// first call to [`Node::map`].
+    map_sender: Arc<RwLock<Option<broadcast::Sender<(String, Value)>>>>,
     actor_context: Box<ActorContext>,
     /// Shutdown signal sender — broadcasts `true` to all child tasks for graceful shutdown.
     shutdown_tx: watch::Sender<bool>,
@@ -235,8 +244,8 @@ impl Node {
             children: Arc::new(RwLock::new(BTreeMap::new())),
             parent: Arc::new(RwLock::new(None)),
             broadcast_buffer_size: config.broadcast_buffer_size,
-            on_sender: broadcast::channel::<Value>(config.broadcast_buffer_size).0,
-            map_sender: broadcast::channel::<(String, Value)>(config.broadcast_buffer_size).0,
+            on_sender: Arc::new(RwLock::new(None)),
+            map_sender: Arc::new(RwLock::new(None)),
             addr: Arc::new(RwLock::new(None)),
             router: Arc::new(RwLock::new(None)),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
@@ -331,16 +340,21 @@ impl Node {
                         continue;
                     }
                     if let Some(child) = self.children.read().get(&child) {
-                        let _ = child.on_sender.send(child_data.value.clone());
+                        if let Some(sender) = child.on_sender.read().as_ref() {
+                            let _ = sender.send(child_data.value.clone());
+                        }
                     }
-                    let _ = self
-                        .map_sender
-                        .send((child.to_string(), child_data.value.clone()));
+                    if let Some(sender) = self.map_sender.read().as_ref() {
+                        let _ = sender.send((child.to_string(), child_data.value.clone()));
+                    }
                 }
                 if is_replay {
-                    let _ = self
-                        .map_sender
-                        .send(("__beam_replay_complete__".to_string(), Value::Null));
+                    if let Some(sender) = self.map_sender.read().as_ref() {
+                        let _ = sender.send((
+                            "__beam_replay_complete__".to_string(),
+                            Value::Null,
+                        ));
+                    }
                 }
             }
         }
@@ -399,8 +413,8 @@ impl Node {
             children: Arc::new(RwLock::new(BTreeMap::new())),
             parent: Arc::new(RwLock::new(Some((self.uid.read().clone(), self.clone())))),
             broadcast_buffer_size: self.broadcast_buffer_size,
-            on_sender: broadcast::channel::<Value>(self.broadcast_buffer_size).0,
-            map_sender: broadcast::channel::<(String, Value)>(self.broadcast_buffer_size).0,
+            on_sender: Arc::new(RwLock::new(None)),
+            map_sender: Arc::new(RwLock::new(None)),
             uid: Arc::new(RwLock::new(new_child_uid)),
             router: self.router.clone(),
             pending_flushes: Arc::new(RwLock::new(HashMap::new())),
@@ -442,8 +456,16 @@ impl Node {
             addr = self.addr.read().clone().unwrap();
         }
         let get = Get::new(node_id, key, addr);
-        // subscribe before send so we don't miss the response
-        let subscriber = self.on_sender.subscribe();
+        // Lazily create the broadcast channel on first subscription.
+        // All clones share the same Arc<RwLock<Option<...>>>, so the
+        // channel created here is visible to the actor's handle_put.
+        let subscriber = {
+            let mut guard = self.on_sender.write();
+            let sender = guard.get_or_insert_with(|| {
+                broadcast::channel::<Value>(self.broadcast_buffer_size).0
+            });
+            sender.subscribe()
+        };
         if let Some(router) = self.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
@@ -614,8 +636,15 @@ impl Node {
         let node_id = self.uid.read().to_string();
         let addr = self.addr.read().clone().unwrap();
         let get = Get::new(node_id, None, addr);
-        // subscribe before send so we don't miss the response
-        let subscriber = self.map_sender.subscribe();
+        // Lazily create the broadcast channel on first subscription.
+        // See [`Node::on`] for rationale on the lazy RwLock design.
+        let subscriber = {
+            let mut guard = self.map_sender.write();
+            let sender = guard.get_or_insert_with(|| {
+                broadcast::channel::<(String, Value)>(self.broadcast_buffer_size).0
+            });
+            sender.subscribe()
+        };
         if let Some(router) = self.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
@@ -742,7 +771,9 @@ impl Node {
             .unwrap()
             .as_millis() as f64;
         debug!("put_quorum (required: {} peers)", policy.quorum);
-        self.on_sender.send(value.clone()).ok();
+        if let Some(sender) = self.on_sender.read().as_ref() {
+            sender.send(value.clone()).ok();
+        }
         let mut updated_nodes = BTreeMap::new();
         self.add_parent_nodes(&mut updated_nodes, value, updated_at);
         let my_addr = self.addr.read().clone().unwrap();
@@ -797,7 +828,9 @@ impl Node {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_millis() as f64;
-        self.on_sender.send(value.clone()).ok();
+        if let Some(sender) = self.on_sender.read().as_ref() {
+            sender.send(value.clone()).ok();
+        }
         debug!("put {}", value.to_string());
         let mut updated_nodes = BTreeMap::new();
         // Store the value at self.uid under the "_" convention (Gun.js
@@ -891,7 +924,9 @@ impl Node {
             }
 
             // Notify local on() subscribers at the leaf (mirrors Node::put).
-            let _ = leaf.on_sender.send(value.clone());
+            if let Some(sender) = leaf.on_sender.read().as_ref() {
+                let _ = sender.send(value.clone());
+            }
 
             let mut updated_nodes = BTreeMap::new();
             leaf.add_parent_nodes(&mut updated_nodes, value, updated_at);
