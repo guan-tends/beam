@@ -295,13 +295,13 @@ impl Actor for Router {
     async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
         match &*msg {
             Message::Put(put) => {
-                self.handle_put(put.clone());
+                self.handle_put(put);
             }
             Message::BatchPut(batch) => {
-                self.handle_batch_put(batch.clone());
+                self.handle_batch_put(batch);
             }
-            Message::Get(get) => self.handle_get(get.clone()),
-            Message::Flush(flush) => self.handle_flush(flush.clone()),
+            Message::Get(get) => self.handle_get(get),
+            Message::Flush(flush) => self.handle_flush(flush),
             Message::Hi { from, peer_id } => {
                 self.known_peers.insert(from.clone());
                 if !peer_id.is_empty() {
@@ -420,7 +420,7 @@ impl Router {
     /// a subscriber for the topic (the first path segment of the node_id).
     /// Storage adapters are queried first, then server peers, then a random
     /// sample of up to 4 known subscribers/peers (MANET-style).
-    fn handle_get(&mut self, get: Get) {
+    fn handle_get(&mut self, get: &Get) {
         if !get.id.chars().all(char::is_alphanumeric) {
             error!("id {}", get.id);
         }
@@ -539,7 +539,7 @@ impl Router {
     /// 1. Message ID dedup (via [`Dup`])
     /// 2. Response checksum dedup — if the same response (same `@` + `##`) has
     ///    been seen, it's suppressed
-    fn handle_put(&mut self, put: Put) {
+    fn handle_put(&mut self, put: &Put) {
         if self.is_message_seen(&put.id) {
             self.metrics.record_dropped_dup();
             return;
@@ -606,7 +606,7 @@ impl Router {
                     seen_get_message.last_reply_checksum = put.checksum;
                     try_send_or_log(
                         &seen_get_message.from,
-                        Message::Put(put),
+                        Message::Put(put.clone()),
                         &self.metrics,
                         "router:get-reply",
                     );
@@ -889,7 +889,7 @@ impl Router {
     ///
     /// This preserves atomic multi-write semantics for storage adapters while
     /// still doing per-message dedup and network relay.
-    fn handle_batch_put(&mut self, batch: BatchPut) {
+    fn handle_batch_put(&mut self, batch: &BatchPut) {
         // Forward BatchPut to storage write adapters — preserves single-transaction semantics
         for addr in self.write_adapters.iter() {
             if batch.from == *addr {
@@ -899,7 +899,7 @@ impl Router {
         }
 
         // Relay each constituent put individually (with deduplication)
-        for put in batch.puts {
+        for put in &batch.puts {
             if self.is_message_seen(&put.id) {
                 continue;
             }
@@ -921,7 +921,7 @@ impl Router {
                     seen_get_message.last_reply_checksum = put.checksum;
                     try_send_or_log(
                         &seen_get_message.from,
-                        Message::Put(put),
+                        Message::Put(put.clone()),
                         &self.metrics,
                         "router:get-reply",
                     );
@@ -936,7 +936,7 @@ impl Router {
     ///
     /// Storage adapters can use this to trigger `fsync` or other durable
     /// persistence. The flush is not relayed to network peers.
-    fn handle_flush(&mut self, flush: Flush) {
+    fn handle_flush(&mut self, flush: &Flush) {
         let mut sent = HashSet::new();
         for addr in self.write_adapters.iter() {
             if flush.from == *addr {
