@@ -125,41 +125,48 @@ impl Default for Config {
 ///
 /// Each entry is a oneshot sender that resolves when storage adapters
 /// acknowledge a put operation. The key is the put's `id`.
-type PendingPuts = Arc<RwLock<HashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>>;
 
+/// Handle to a graph node — cheaply cloneable (single `Arc` refcount bump).
+///
+/// All state lives inside [`NodeInner`], shared across clones via a single
+/// `Arc`. This reduces clone cost from ~12 atomic operations + 3 heap
+/// allocations to a single atomic increment.
+///
+/// See [module docs](self) for the full architecture overview.
 #[derive(Clone)]
 pub struct Node {
-    uid: Arc<RwLock<String>>,
+    inner: Arc<NodeInner>,
+}
+
+/// Interior state of a [`Node`], shared across all clones via `Arc`.
+///
+/// Fields that were `Arc<RwLock<…>>` on the old flat `Node` become plain
+/// `RwLock<…>` here — the outer `Arc<NodeInner>` provides the sharing that
+/// the per-field `Arc`s used to provide. Fields shared across *different*
+/// nodes (not just clones of the same node) keep their `Arc` wrapper.
+struct NodeInner {
+    uid: RwLock<String>,
     path: Vec<String>,
-    children: Arc<RwLock<BTreeMap<String, Node>>>,
-    parent: Arc<RwLock<Option<(String, Node)>>>,
+    children: RwLock<BTreeMap<String, Node>>,
+    parent: RwLock<Option<(String, Node)>>,
     broadcast_buffer_size: usize,
     /// Lazy broadcast channel for `on()` subscribers.
     ///
-    /// `None` until the first call to [`Node::on`]. Wrapped in
-    /// `Arc<RwLock<Option<…>>>` so that all clones of this `Node`
-    /// share the same lazy state — when one clone creates the
-    /// channel, all clones can send on it.
-    ///
-    /// # Why not `OnceLock`?
-    ///
-    /// `OnceLock::get_or_init` constructs the channel on the *first*
-    /// access, which for the hot path (`handle_put → send`) means
-    /// every unique child node allocates a channel it will never use.
-    /// `RwLock<Option>` lets the send path cheaply observe `None` and
-    /// skip — zero allocation for nodes that never have subscribers.
-    on_sender: Arc<RwLock<Option<broadcast::Sender<Value>>>>,
+    /// `None` until the first call to [`Node::on`]. `RwLock<Option>`
+    /// lets the send path cheaply observe `None` and skip — zero
+    /// allocation for nodes that never have subscribers.
+    on_sender: RwLock<Option<broadcast::Sender<Value>>>,
     /// Lazy broadcast channel for `map()` subscribers.
     ///
-    /// Same lazy semantics as [`Node::on_sender`]. `None` until the
-    /// first call to [`Node::map`].
-    map_sender: Arc<RwLock<Option<broadcast::Sender<(String, Value)>>>>,
-    actor_context: Box<ActorContext>,
+    /// Same lazy semantics as [`NodeInner::on_sender`].
+    map_sender: RwLock<Option<broadcast::Sender<(String, Value)>>>,
+    actor_context: ActorContext,
     /// Shutdown signal sender — broadcasts `true` to all child tasks for graceful shutdown.
     shutdown_tx: watch::Sender<bool>,
-    addr: Arc<RwLock<Option<Addr>>>,
+    addr: RwLock<Option<Addr>>,
+    /// Router address — `Arc` because parent and child nodes share the same router.
     router: Arc<RwLock<Option<Addr>>>,
-    pending_flushes: Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
+    pending_flushes: RwLock<HashMap<String, oneshot::Sender<()>>>,
     /// Pending `put` acknowledgements keyed by `Put.id`.
     ///
     /// When `Node::put` (or `Node::batch_put`) is called, a oneshot sender
@@ -167,18 +174,13 @@ pub struct Node {
     /// the put by sending a `Put` message with `in_response_to: Some(id)`
     /// back to this node's `addr`. `Node::handle_put` intercepts the ack
     /// and completes the oneshot, resolving the awaited future.
-    ///
-    /// The sender's payload carries `Result<(), String>` so commit failures
-    /// propagate to the caller instead of being silently swallowed.
-    pending_puts: PendingPuts,
+    pending_puts: RwLock<HashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>,
     allow_public_space: bool,
     ice_servers: Vec<String>,
     /// Shared lock-free observability counters.
     ///
-    /// Cloned via `Arc` to the [`Router`] at construction time so the
-    /// Router's internal `try_send_or_log` calls and any external
-    /// observer (e.g. e2e tests, telemetry exporter) share the same
-    /// underlying atomic counters. See [`crate::metrics::Metrics`].
+    /// `Arc` because parent and child nodes share the same metrics handle
+    /// with the [`Router`].
     metrics: Arc<Metrics>,
 }
 
@@ -206,7 +208,7 @@ impl Node {
     /// The root node has an empty `uid`. Child nodes have uids like
     /// `"parent_key/child_key"`.
     pub fn id(&self) -> String {
-        self.uid.read().clone()
+        self.inner.uid.read().clone()
     }
 
     /// Returns the peer ID of this node's actor context.
@@ -214,7 +216,7 @@ impl Node {
     /// The peer ID is a random string generated at node creation time.
     /// It identifies this node instance in the P2P mesh.
     pub fn peer_id(&self) -> String {
-        self.actor_context.peer_id.read().clone()
+        self.inner.actor_context.peer_id.read().clone()
     }
 
     /// Creates a new root-level node with custom configuration, storage, and network adapters.
@@ -238,33 +240,42 @@ impl Node {
         let mut actor_context = ActorContext::new(random_string(16));
         actor_context.shutdown_rx = shutdown_rx;
         actor_context.metrics = metrics.clone();
-        let mut node = Self {
+        let inner = NodeInner {
             path: vec![],
-            uid: Arc::new(RwLock::new("".to_string())),
-            children: Arc::new(RwLock::new(BTreeMap::new())),
-            parent: Arc::new(RwLock::new(None)),
+            uid: RwLock::new("".to_string()),
+            children: RwLock::new(BTreeMap::new()),
+            parent: RwLock::new(None),
             broadcast_buffer_size: config.broadcast_buffer_size,
-            on_sender: Arc::new(RwLock::new(None)),
-            map_sender: Arc::new(RwLock::new(None)),
-            addr: Arc::new(RwLock::new(None)),
+            on_sender: RwLock::new(None),
+            map_sender: RwLock::new(None),
+            addr: RwLock::new(None),
             router: Arc::new(RwLock::new(None)),
-            pending_flushes: Arc::new(RwLock::new(HashMap::new())),
-            pending_puts: Arc::new(RwLock::new(HashMap::new())),
+            pending_flushes: RwLock::new(HashMap::new()),
+            pending_puts: RwLock::new(HashMap::new()),
             allow_public_space: config.allow_public_space,
             ice_servers: config.ice_servers.clone(),
-            actor_context: Box::new(actor_context),
+            actor_context,
             shutdown_tx,
             metrics: metrics.clone(),
         };
 
-        node.actor_context.node = Some(node.clone());
-        let addr = node.actor_context.start_actor(Box::new(node.clone()));
-        *node.addr.write() = Some(addr);
+        // Construct the Arc, then use get_mut to set initialization fields.
+        // get_mut succeeds because this Arc has exactly one reference.
+        // We temporarily move the Arc out to avoid borrowing `node` while
+        // also cloning it.
+        let node = Node { inner: Arc::new(inner) };
+        // actor_context.node and actor_context.router are now interior-mutable
+        // (Arc<RwLock<...>>), so we can set them through &Arc<NodeInner> without
+        // needing get_mut. The addr and router fields on NodeInner are also
+        // RwLock, so they're set through .write() too.
+        *node.inner.actor_context.node.write() = Some(node.clone());
+        let addr = node.inner.actor_context.start_actor(Box::new(node.clone()));
+        *node.inner.addr.write() = Some(addr);
 
-        let router = Box::new(Router::new(storage_adapters, network_adapters, metrics));
-        let router_addr = node.actor_context.start_router(router);
-        node.actor_context.router = router_addr.clone();
-        *node.router.write() = Some(router_addr);
+        let router = Box::new(Router::new(storage_adapters, network_adapters, node.inner.metrics.clone()));
+        let router_addr = node.inner.actor_context.start_router(router);
+        *node.inner.actor_context.router.write() = router_addr.clone();
+        *node.inner.router.write() = Some(router_addr);
 
         node
     }
@@ -279,7 +290,7 @@ impl Node {
     /// Cloning the Arc is cheap (refcount bump); the atomic counters
     /// are shared across all clones.
     pub fn metrics(&self) -> Arc<Metrics> {
-        self.metrics.clone()
+        self.inner.metrics.clone()
     }
 
     /// Handles incoming [`Put`] messages by dispatching values to subscribers.
@@ -308,12 +319,12 @@ impl Node {
         // additive extension.
         if let Some(response_id) = &put.in_response_to {
             // Flush acks — any payload, presence is success
-            if let Some(sender) = self.pending_flushes.write().remove(response_id) {
+            if let Some(sender) = self.inner.pending_flushes.write().remove(response_id) {
                 let _ = sender.send(());
                 return;
             }
             // Put/BatchPut acks — try quorum sentinel first, fall back to _ack/_err
-            if let Some(sender) = self.pending_puts.write().remove(response_id) {
+            if let Some(sender) = self.inner.pending_puts.write().remove(response_id) {
                 let result = if let Some(quorum_result) = Node::decode_quorum_payload(&put) {
                     // Router fired __quorum_met__ — either peer-ack quorum
                     // satisfied (Ok) or cleanup reaper timed us out (Err).
@@ -333,23 +344,23 @@ impl Node {
         }
         let is_replay = put.in_response_to.is_some();
         for (node_id, node_data) in put.updated_nodes {
-            if node_id == *self.uid.read() {
+            if node_id == *self.inner.uid.read() {
                 for (child, child_data) in node_data {
                     // Skip internal control keys
                     if child.starts_with("__beam_") {
                         continue;
                     }
-                    if let Some(child) = self.children.read().get(&child) {
-                        if let Some(sender) = child.on_sender.read().as_ref() {
+                    if let Some(child) = self.inner.children.read().get(&child) {
+                        if let Some(sender) = child.inner.on_sender.read().as_ref() {
                             let _ = sender.send(child_data.value.clone());
                         }
                     }
-                    if let Some(sender) = self.map_sender.read().as_ref() {
+                    if let Some(sender) = self.inner.map_sender.read().as_ref() {
                         let _ = sender.send((child.to_string(), child_data.value.clone()));
                     }
                 }
                 if is_replay {
-                    if let Some(sender) = self.map_sender.read().as_ref() {
+                    if let Some(sender) = self.inner.map_sender.read().as_ref() {
                         let _ = sender.send((
                             "__beam_replay_complete__".to_string(),
                             Value::Null,
@@ -377,17 +388,17 @@ impl Node {
     /// - `"flush ack channel closed"` — oneshot sender was dropped
     /// - `"flush timed out"` — no acknowledgement within timeout
     pub async fn flush_storage(&self, timeout: Option<Duration>) -> Result<(), String> {
-        let router_addr = match &*self.router.read() {
+        let router_addr = match &*self.inner.router.read() {
             Some(addr) => addr.clone(),
             None => return Err("router not initialized".to_string()),
         };
-        let flush = Flush::new(self.addr.read().clone().unwrap(), None);
+        let flush = Flush::new(self.inner.addr.read().clone().unwrap(), None);
         let id = flush.id.clone();
         let (tx, rx) = oneshot::channel();
-        self.pending_flushes.write().insert(id.clone(), tx);
+        self.inner.pending_flushes.write().insert(id.clone(), tx);
 
         if let Err(_e) = router_addr.send(Message::Flush(flush)) {
-            self.pending_flushes.write().remove(&id);
+            self.inner.pending_flushes.write().remove(&id);
             return Err("failed to send flush to router".to_string());
         }
 
@@ -396,7 +407,7 @@ impl Node {
             Ok(Ok(())) => Ok(()),
             Ok(Err(_)) => Err("flush ack channel closed".to_string()),
             Err(_) => {
-                self.pending_flushes.write().remove(&id);
+                self.inner.pending_flushes.write().remove(&id);
                 Err("flush timed out".to_string())
             }
         }
@@ -404,33 +415,35 @@ impl Node {
 
     fn new_child(&self, key: String) -> Node {
         assert!(!key.is_empty(), "Key length must be greater than zero");
-        let mut path = self.path.clone();
+        let mut path = self.inner.path.clone();
         path.push(key.clone());
         let new_child_uid = path.join("/");
         debug!("new_child_uid {}", new_child_uid);
         let node = Self {
-            path,
-            children: Arc::new(RwLock::new(BTreeMap::new())),
-            parent: Arc::new(RwLock::new(Some((self.uid.read().clone(), self.clone())))),
-            broadcast_buffer_size: self.broadcast_buffer_size,
-            on_sender: Arc::new(RwLock::new(None)),
-            map_sender: Arc::new(RwLock::new(None)),
-            uid: Arc::new(RwLock::new(new_child_uid)),
-            router: self.router.clone(),
-            pending_flushes: Arc::new(RwLock::new(HashMap::new())),
-            pending_puts: Arc::new(RwLock::new(HashMap::new())),
-            addr: Arc::new(RwLock::new(None)),
-            actor_context: self.actor_context.clone(),
-            allow_public_space: self.allow_public_space,
-            ice_servers: self.ice_servers.clone(),
-            // Children share the parent's metrics Arc so all nodes in a
-            // tree aggregate drops into the same counters.
-            metrics: self.metrics.clone(),
-            shutdown_tx: self.shutdown_tx.clone(),
+            inner: Arc::new(NodeInner {
+                path,
+                children: RwLock::new(BTreeMap::new()),
+                parent: RwLock::new(Some((self.inner.uid.read().clone(), self.clone()))),
+                broadcast_buffer_size: self.inner.broadcast_buffer_size,
+                on_sender: RwLock::new(None),
+                map_sender: RwLock::new(None),
+                uid: RwLock::new(new_child_uid),
+                router: self.inner.router.clone(),
+                pending_flushes: RwLock::new(HashMap::new()),
+                pending_puts: RwLock::new(HashMap::new()),
+                addr: RwLock::new(None),
+                actor_context: self.inner.actor_context.clone(),
+                allow_public_space: self.inner.allow_public_space,
+                ice_servers: self.inner.ice_servers.clone(),
+                // Children share the parent's metrics Arc so all nodes in a
+                // tree aggregate drops into the same counters.
+                metrics: self.inner.metrics.clone(),
+                shutdown_tx: self.inner.shutdown_tx.clone(),
+            }),
         };
-        let addr = self.actor_context.start_actor(Box::new(node.clone()));
-        *node.addr.write() = Some(addr);
-        let mut guard = self.children.write();
+        let addr = self.inner.actor_context.start_actor(Box::new(node.clone()));
+        *node.inner.addr.write() = Some(addr);
+        let mut guard = self.inner.children.write();
         guard.insert(key, node.clone());
         node
     }
@@ -441,32 +454,32 @@ impl Node {
     /// whenever the node's value changes. The current value (if any) is
     /// requested from storage via a `Get` message — it arrives asynchronously.
     pub fn on(&mut self) -> broadcast::Receiver<Value> {
-        let key = if self.path.len() > 1 {
-            self.path.last().cloned()
+        let key = if self.inner.path.len() > 1 {
+            self.inner.path.last().cloned()
         } else {
             None
         };
         let addr;
         let node_id;
-        if let Some((parent_id, parent)) = &*self.parent.read() {
+        if let Some((parent_id, parent)) = &*self.inner.parent.read() {
             node_id = parent_id.clone();
-            addr = parent.addr.read().clone().unwrap();
+            addr = parent.inner.addr.read().clone().unwrap();
         } else {
-            node_id = self.uid.read().to_string();
-            addr = self.addr.read().clone().unwrap();
+            node_id = self.inner.uid.read().to_string();
+            addr = self.inner.addr.read().clone().unwrap();
         }
         let get = Get::new(node_id, key, addr);
         // Lazily create the broadcast channel on first subscription.
         // All clones share the same Arc<RwLock<Option<...>>>, so the
         // channel created here is visible to the actor's handle_put.
         let subscriber = {
-            let mut guard = self.on_sender.write();
+            let mut guard = self.inner.on_sender.write();
             let sender = guard.get_or_insert_with(|| {
-                broadcast::channel::<Value>(self.broadcast_buffer_size).0
+                broadcast::channel::<Value>(self.inner.broadcast_buffer_size).0
             });
             sender.subscribe()
         };
-        if let Some(router) = self.router.read().clone() {
+        if let Some(router) = self.inner.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
         subscriber
@@ -504,10 +517,10 @@ impl Node {
     ///
     /// Panics if the URL is invalid (should not happen with well-formed URLs).
     pub fn connect_peer(&self, url: &str) {
-        let ctx = self.actor_context.clone();
+        let ctx = self.inner.actor_context.clone();
         let ctx_for_actor = ctx.clone();
         let url = url.to_string();
-        let allow_public_space = self.allow_public_space;
+        let allow_public_space = self.inner.allow_public_space;
         ctx.child_task(async move {
             let ctx = ctx_for_actor;
             let mut backoff = Duration::from_secs(1);
@@ -582,9 +595,9 @@ impl Node {
     ) {
         let peer_id = peer_id.to_string();
         let target_peer_id = target_peer_id.to_string();
-        let ice_servers = self.ice_servers.clone();
-        let allow_public_space = self.allow_public_space;
-        let ctx = self.actor_context.clone();
+        let ice_servers = self.inner.ice_servers.clone();
+        let allow_public_space = self.inner.allow_public_space;
+        let ctx = self.inner.actor_context.clone();
         let ctx_for_actor = ctx.clone();
         ctx.child_task(async move {
             let peer = crate::adapters::WebRtcPeer::new(
@@ -614,11 +627,11 @@ impl Node {
         }
         debug!("get key {}", key);
         // Explicit scope to drop read guard BEFORE entering else branch.
-        // The temporary from `self.children.read()` would otherwise live
+        // The temporary from `self.inner.children.read()` would otherwise live
         // until the end of the `if let` statement, including the else block,
         // causing a deadlock when new_child() tries to write().
         let existing = {
-            let guard = self.children.read();
+            let guard = self.inner.children.read();
             guard.get(key).cloned()
         };
         match existing {
@@ -633,19 +646,19 @@ impl Node {
     /// for each child. The current children (if any) are requested from storage
     /// via a `Get` message.
     pub fn map(&self) -> broadcast::Receiver<(String, Value)> {
-        let node_id = self.uid.read().to_string();
-        let addr = self.addr.read().clone().unwrap();
+        let node_id = self.inner.uid.read().to_string();
+        let addr = self.inner.addr.read().clone().unwrap();
         let get = Get::new(node_id, None, addr);
         // Lazily create the broadcast channel on first subscription.
         // See [`Node::on`] for rationale on the lazy RwLock design.
         let subscriber = {
-            let mut guard = self.map_sender.write();
+            let mut guard = self.inner.map_sender.write();
             let sender = guard.get_or_insert_with(|| {
-                broadcast::channel::<(String, Value)>(self.broadcast_buffer_size).0
+                broadcast::channel::<(String, Value)>(self.inner.broadcast_buffer_size).0
             });
             sender.subscribe()
         };
-        if let Some(router) = self.router.read().clone() {
+        if let Some(router) = self.inner.router.read().clone() {
             let _ = router.send(Message::Get(get));
         }
         subscriber
@@ -662,12 +675,12 @@ impl Node {
         value: Value,
         updated_at: f64,
     ) {
-        let parent = &*self.parent.read();
+        let parent = &*self.inner.parent.read();
         if let Some((parent_id, parent)) = parent {
             let mut parent = parent.clone();
             let mut children = Children::default();
             children.insert(
-                self.path.last().unwrap().clone(),
+                self.inner.path.last().unwrap().clone(),
                 NodeData {
                     value: value.clone(),
                     updated_at,
@@ -771,21 +784,21 @@ impl Node {
             .unwrap()
             .as_millis() as f64;
         debug!("put_quorum (required: {} peers)", policy.quorum);
-        if let Some(sender) = self.on_sender.read().as_ref() {
+        if let Some(sender) = self.inner.on_sender.read().as_ref() {
             sender.send(value.clone()).ok();
         }
         let mut updated_nodes = BTreeMap::new();
         self.add_parent_nodes(&mut updated_nodes, value, updated_at);
-        let my_addr = self.addr.read().clone().unwrap();
+        let my_addr = self.inner.addr.read().clone().unwrap();
         let put = Put::new(updated_nodes, None, my_addr.clone());
         let put_id = put.id.clone();
         let (tx, rx) = oneshot::channel();
-        self.pending_puts.write().insert(put_id.clone(), tx);
+        self.inner.pending_puts.write().insert(put_id.clone(), tx);
 
-        let router_addr = match &*self.router.read() {
+        let router_addr = match &*self.inner.router.read() {
             Some(addr) => addr.clone(),
             None => {
-                self.pending_puts.write().remove(&put_id);
+                self.inner.pending_puts.write().remove(&put_id);
                 return Err("router not initialized".to_string());
             }
         };
@@ -801,12 +814,12 @@ impl Node {
             })
             .is_err()
         {
-            self.pending_puts.write().remove(&put_id);
+            self.inner.pending_puts.write().remove(&put_id);
             return Err("failed to send RegisterQuorum to router".to_string());
         }
 
         if router_addr.send(Message::Put(put)).is_err() {
-            self.pending_puts.write().remove(&put_id);
+            self.inner.pending_puts.write().remove(&put_id);
             return Err("failed to send put to router".to_string());
         }
 
@@ -814,7 +827,7 @@ impl Node {
             Ok(Ok(status)) => status,
             Ok(Err(_)) => Err("put_quorum ack channel closed".to_string()),
             Err(_) => {
-                self.pending_puts.write().remove(&put_id);
+                self.inner.pending_puts.write().remove(&put_id);
                 Err(format!(
                     "put_quorum timed out after {:?} (required {} peers)",
                     policy.timeout, policy.quorum
@@ -828,18 +841,18 @@ impl Node {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_millis() as f64;
-        if let Some(sender) = self.on_sender.read().as_ref() {
+        if let Some(sender) = self.inner.on_sender.read().as_ref() {
             sender.send(value.clone()).ok();
         }
         debug!("put {}", value.to_string());
         let mut updated_nodes = BTreeMap::new();
-        // Store the value at self.uid under the "_" convention (Gun.js
+        // Store the value at self.inner.uid under the "_" convention (Gun.js
         // soul-value encoding) so that map() on self returns the value
         // as a synthetic child. This is what Gun.js semantics expect for
         // a node's own value vs its children. Previously put only wrote
         // under parent_id via add_parent_nodes, so map() on the leaf
         // never saw the put value.
-        let self_uid = self.uid.read().clone();
+        let self_uid = self.inner.uid.read().clone();
         let mut self_children = Children::default();
         self_children.insert(
             "_".to_string(),
@@ -853,22 +866,22 @@ impl Node {
         // parents' child entries remain the actual value (this is what
         // node.get("key").put(...) → node.get("key").once(...) expects).
         self.add_parent_nodes(&mut updated_nodes, value, updated_at);
-        let my_addr = self.addr.read().clone().unwrap();
+        let my_addr = self.inner.addr.read().clone().unwrap();
         let put = Put::new(updated_nodes, None, my_addr);
         let put_id = put.id.clone();
         let (tx, rx) = oneshot::channel();
-        self.pending_puts.write().insert(put_id.clone(), tx);
+        self.inner.pending_puts.write().insert(put_id.clone(), tx);
 
-        let router_addr = match &*self.router.read() {
+        let router_addr = match &*self.inner.router.read() {
             Some(addr) => addr.clone(),
             None => {
-                self.pending_puts.write().remove(&put_id);
+                self.inner.pending_puts.write().remove(&put_id);
                 return Err("router not initialized".to_string());
             }
         };
 
         if router_addr.send(Message::Put(put)).is_err() {
-            self.pending_puts.write().remove(&put_id);
+            self.inner.pending_puts.write().remove(&put_id);
             return Err("failed to send put to router".to_string());
         }
 
@@ -877,7 +890,7 @@ impl Node {
             Ok(Ok(_status)) => Ok(()),
             Ok(Err(_)) => Err("put ack channel closed".to_string()),
             Err(_) => {
-                self.pending_puts.write().remove(&put_id);
+                self.inner.pending_puts.write().remove(&put_id);
                 Err("put timed out".to_string())
             }
         }
@@ -924,35 +937,35 @@ impl Node {
             }
 
             // Notify local on() subscribers at the leaf (mirrors Node::put).
-            if let Some(sender) = leaf.on_sender.read().as_ref() {
+            if let Some(sender) = leaf.inner.on_sender.read().as_ref() {
                 let _ = sender.send(value.clone());
             }
 
             let mut updated_nodes = BTreeMap::new();
             leaf.add_parent_nodes(&mut updated_nodes, value, updated_at);
 
-            let my_addr = self.addr.read().clone().unwrap();
+            let my_addr = self.inner.addr.read().clone().unwrap();
             let put = Put::new(updated_nodes, None, my_addr);
             puts.push(put);
         }
 
-        let my_addr = self.addr.read().clone().unwrap();
+        let my_addr = self.inner.addr.read().clone().unwrap();
         let batch = BatchPut::new(puts, my_addr);
         let batch_id = batch.id.clone();
         let (tx, rx) = oneshot::channel();
         // Register under batch id; storage adapter will ack via `in_response_to: Some(batch.id)`.
-        self.pending_puts.write().insert(batch_id.clone(), tx);
+        self.inner.pending_puts.write().insert(batch_id.clone(), tx);
 
-        let router_addr = match &*self.router.read() {
+        let router_addr = match &*self.inner.router.read() {
             Some(addr) => addr.clone(),
             None => {
-                self.pending_puts.write().remove(&batch_id);
+                self.inner.pending_puts.write().remove(&batch_id);
                 return Err("router not initialized".to_string());
             }
         };
 
         if router_addr.send(Message::BatchPut(batch)).is_err() {
-            self.pending_puts.write().remove(&batch_id);
+            self.inner.pending_puts.write().remove(&batch_id);
             return Err("failed to send batch_put to router".to_string());
         }
 
@@ -961,7 +974,7 @@ impl Node {
             Ok(Ok(_status)) => Ok(()), // discard ReplicationStatus for batch_put
             Ok(Err(_)) => Err("batch_put ack channel closed".to_string()),
             Err(_) => {
-                self.pending_puts.write().remove(&batch_id);
+                self.inner.pending_puts.write().remove(&batch_id);
                 Err("batch_put timed out".to_string())
             }
         }
@@ -973,7 +986,7 @@ impl Node {
     /// aborts all child tasks and sends stop signals to all child actors.
     pub fn stop(&mut self) {
         info!("Node stopping");
-        self.actor_context.stop();
+        self.inner.actor_context.stop();
     }
 
     /// Gracefully shuts down the node, ensuring data integrity.
@@ -1052,7 +1065,7 @@ impl Node {
         // Phase 2: Signal shutdown to all long-running child tasks.
         // This causes accept loops, retry loops, and signal processors
         // to break and stop accepting new work.
-        if self.shutdown_tx.send(true).is_err() {
+        if self.inner.shutdown_tx.send(true).is_err() {
             warn!("Shutdown signal already sent — all receivers may be dropped");
         }
         info!("Shutdown signal broadcast to child tasks");
@@ -1184,8 +1197,8 @@ impl Node {
     #[cfg(target_arch = "wasm32")]
     pub fn connect_peer_wasm(&self, url: &str) {
         use crate::adapters::WasmWsConn;
-        let ctx = self.actor_context.clone();
-        let conn = WasmWsConn::new(url, &ctx, self.allow_public_space);
+        let ctx = self.inner.actor_context.clone();
+        let conn = WasmWsConn::new(url, &ctx, self.inner.allow_public_space);
         ctx.start_actor(Box::new(conn));
         info!("BEAM browser node connecting to relay: {}", url);
     }
@@ -1436,7 +1449,7 @@ mod tests {
         let mut node = Node::new();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let put_id = "test-pending-1".to_string();
-        node.pending_puts.write().insert(put_id.clone(), tx);
+        node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
         // Build ack message
         let ack = make_ack_put(&put_id, "_ack");
@@ -1452,7 +1465,7 @@ mod tests {
             .expect("ack channel closed unexpectedly");
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
         assert!(
-            !node.pending_puts.read().contains_key(&put_id),
+            !node.inner.pending_puts.read().contains_key(&put_id),
             "pending_puts should be drained after ack"
         );
     }
@@ -1464,7 +1477,7 @@ mod tests {
         let mut node = Node::new();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let put_id = "test-pending-err".to_string();
-        node.pending_puts.write().insert(put_id.clone(), tx);
+        node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
         let ack = make_ack_put(&put_id, "_err");
 
@@ -1477,7 +1490,7 @@ mod tests {
             .expect("ack channel closed unexpectedly");
         assert!(result.is_err(), "expected Err, got {:?}", result);
         assert!(result.unwrap_err().contains("test error"));
-        assert!(!node.pending_puts.read().contains_key(&put_id));
+        assert!(!node.inner.pending_puts.read().contains_key(&put_id));
     }
 
     #[tokio::test]
@@ -1487,7 +1500,7 @@ mod tests {
         let mut node = Node::new();
         let (tx, _rx) = tokio::sync::oneshot::channel();
         let put_id = "registered-id".to_string();
-        node.pending_puts.write().insert(put_id.clone(), tx);
+        node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
         // Different ack id
         let ack = make_ack_put("different-id", "_ack");
@@ -1497,7 +1510,7 @@ mod tests {
 
         // The original pending_put should still be registered (not drained)
         assert!(
-            node.pending_puts.read().contains_key(&put_id),
+            node.inner.pending_puts.read().contains_key(&put_id),
             "unrelated ack should NOT drain unrelated pending_put"
         );
     }
@@ -1586,12 +1599,12 @@ mod tests {
             .await
             .expect("first put ok");
         // Now corrupt the router addr to force the error path.
-        *node.router.write() = None;
+        *node.inner.router.write() = None;
         let result = node.get("broken_key").put("x".into()).await;
         assert!(result.is_err(), "expected Err when router is None");
         // Pending puts should be empty — the failed put should have cleaned up.
         assert!(
-            node.pending_puts.read().is_empty(),
+            node.inner.pending_puts.read().is_empty(),
             "pending_puts should be empty after router-send failure"
         );
     }

@@ -449,13 +449,13 @@ impl Multicast {
         match msg {
             Message::Put(put) => {
                 let put = put.clone();
-                if let Err(e) = ctx.router.send(Message::Put(put)) {
+                if let Err(e) = ctx.router.read().send(Message::Put(put)) {
                     error!("failed to send message to node: {:?}", e);
                 }
             }
             Message::Get(get) => {
                 let get = get.clone();
-                if let Err(e) = ctx.router.send(Message::Get(get)) {
+                if let Err(e) = ctx.router.read().send(Message::Get(get)) {
                     error!("failed to send message to node: {:?}", e);
                 }
             }
