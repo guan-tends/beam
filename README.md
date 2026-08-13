@@ -944,10 +944,10 @@ microseconds — the bottleneck is client-side `put().await`, not the relay.
 
 | Operation | Time |
 |-----------|------|
-| Parse small Put JSON | 851 ns |
+| Parse small Put JSON | 1,067 ns |
 | Parse medium Put JSON | 2.00 µs |
-| Serialize small Put JSON | 152 ns |
-| Parse Get | 425 ns |
+| Serialize small Put JSON | 69 ns |
+| Parse Get | 677 ns |
 | Dedup check (fresh) | 274 µs |
 | Dedup check (duplicate) | 41.8 µs |
 | Actor mailbox send+recv | 309 µs |
@@ -956,23 +956,25 @@ microseconds — the bottleneck is client-side `put().await`, not the relay.
 
 | Operation | WASM | Native | Ratio |
 |-----------|------|--------|-------|
-| Parse small Put | 8.1 µs | 851 ns | ~9.5× |
-| Serialize small Put | 18.1 µs | 152 ns | ~119× |
-| Parse Get | 4.6 µs | 425 ns | ~11× |
+| Parse small Put | 7.9 µs | 1,067 ns | ~7.4× |
+| Serialize small Put | 8.6 µs | 69 ns | ~125× |
+| Parse Get | 4.5 µs | 677 ns | ~6.7× |
 
 Run with: `wasm-pack test --node --no-default-features -- --nocapture`
 
-### WASM Relay Throughput
+### WASM Relay Throughput (Browser-only)
 
-End-to-end relay TPS measured from a WASM client (Node.js):
+`web_sys::WebSocket` callbacks don't fire in Node.js `wasm-bindgen-test-runner`
+([known limitation](https://github.com/wasm-bindgen/wasm-bindgen/issues/4921)).
+Use the browser benchmark page to measure WASM relay throughput:
 
-| Scenario | Messages | Throughput |
-|----------|----------|------------|
-| 1k burst | 1,000 | ~115 msgs/sec |
-| 5k sustained | 5,000 | ~651 msgs/sec |
+```bash
+cargo run -- start --port 4944 --memory-storage true --redb-storage false
+python3 -m http.server 8080 -d examples/
+# Open http://localhost:8080/bench.html in a browser
+```
 
-Ground truth from relay `/metrics` HTTP endpoint. See `benches/RESULTS.md`
-for full hot-path counter breakdown.
+Previous v0.11.0 browser results: ~115–651 msgs/sec depending on batch size.
 
 ### Browser Benchmark
 

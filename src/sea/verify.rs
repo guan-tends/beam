@@ -13,13 +13,14 @@
 //! ```no_run
 //! use beam::sea::{generate_pair, sign, verify_sync};
 //!
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() {
 //! let pair = generate_pair().await.unwrap();
 //! let data = serde_json::json!({"hello": "world"});
 //! let signed = sign(&data, &pair).await.unwrap();
 //! let verified = verify_sync(&signed, &pair.pub_key).unwrap();
 //! assert_eq!(verified, data);
-//! # });
+//! # }
 //! ```
 
 use super::SeaError;

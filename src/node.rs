@@ -1041,7 +1041,7 @@ impl Node {
     /// use web_time::Duration;
     /// use beam::Node;
     ///
-    /// # #[tokio::main]
+    /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() {
     /// let mut node = Node::new();
     /// // ... use node ...
