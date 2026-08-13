@@ -18,10 +18,11 @@
 //! ```no_run
 //! use beam::sea::{work, WorkOptions};
 //!
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() {
 //! let hash = work(b"password", None, WorkOptions::default()).await.unwrap();
 //! assert!(!hash.is_empty());
-//! # });
+//! # }
 //! ```
 
 use super::{SeaError, WorkOptions};

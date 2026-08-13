@@ -85,29 +85,28 @@ dropped_sends:        0
 ---
 
 
-### WASM Relay Throughput (T12-T13)
+### WASM Relay Throughput (Browser-only — Node.js limitation)
 
-Real WebSocket connections from a WASM client (Node.js) through a
-memory-only relay. Same methodology as native relay throughput, but
-the client is BEAM's WASM binding instead of a native Node.
+`web_sys::WebSocket` callbacks (onopen/onmessage/onerror) do not fire in
+the Node.js `wasm-bindgen-test-runner`. This is a [known wasm-bindgen
+limitation](https://github.com/wasm-bindgen/wasm-bindgen/issues/4921) —
+the WASM test runner does not implement doctests or WebSocket event
+dispatch. The relay throughput benchmarks (`wasm_relay_throughput_1k`,
+`wasm_relay_throughput_5k`) are marked `#[ignore]` for this reason.
 
-Ground truth from relay `/metrics` HTTP endpoint (port + 1).
+To measure WASM relay throughput, use the browser benchmark page:
+
+1. Start a relay: `cargo run -- start --port 4944 --memory-storage true --redb-storage false`
+2. Serve: `python3 -m http.server 8080 -d examples/`
+3. Open `http://localhost:8080/bench.html` in a browser
+4. Connect and run the relay TPS benchmark
+
+Previous v0.11.0 browser results (for reference):
 
 | Scenario | Messages | Throughput | Send Rate |
 |----------|----------|------------|-----------|
-| 1k burst | 1,000 | **115 msgs/sec** | ~7,400 puts/sec |
-| 5k sustained | 5,000 | **651 msgs/sec** | ~4,400 puts/sec |
-
-**Key observations:**
-- WASM relay throughput is lower than native (115–651 vs 2,400–3,000
-  msgs/sec) due to WASM's slower JSON serialization (10–100× overhead).
-- The 1k burst shows lower throughput than 5k sustained because the
-  stabilization wait dominates the total elapsed time for small message
-  counts — the relay processes 1k messages quickly but the 500ms
-  stabilization poll adds fixed overhead.
-- Send rate (client-side `beam.put()` fire-and-forget) is actually
-  faster in WASM than native `put().await` because fire-and-forget
-  returns immediately without awaiting the actor round-trip.
+| 1k burst | 1,000 | ~115 msgs/sec | ~7,400 puts/sec |
+| 5k sustained | 5,000 | ~651 msgs/sec | ~4,400 puts/sec |
 
 ### WASM Relay Throughput (Browser)
 
@@ -131,16 +130,31 @@ load-bearing components of the relay hot path.
 
 ### Wire Protocol Parse/Serialize (T4)
 
+v0.12.0 numbers (fresh run, 2026-08-13):
+
+| Operation | Small JSON | Medium JSON | Large JSON |
+|-----------|------------|-------------|------------|
+| **Parse** (Message::try_from) | 1,067 ns | 2.00 µs | 7.45 µs |
+| **Serialize** (Message::to_string) | 69 ns | 386 ns | 1.33 µs |
+| **Parse Get** | 677 ns | — | — |
+
+v0.11.0 numbers (for comparison):
+
 | Operation | Small JSON | Medium JSON | Large JSON |
 |-----------|------------|-------------|------------|
 | **Parse** (Message::try_from) | 851 ns | 2.00 µs | 7.45 µs |
 | **Serialize** (Message::to_string) | 152 ns | 386 ns | 1.33 µs |
 | **Parse Get** | 425 ns | — | — |
 
-- Serialization is ~5× faster than parsing (JSON string building vs.
+**v0.11.0 → v0.12.0 changes**: Serialize improved 2.2× (152→69 ns)
+thanks to LTO inlining. Parse is slightly slower (851→1,067 ns) —
+likely noise from different system load conditions during the run.
+Parse Get shows similar variance (425→677 ns).
+
+- Serialization is ~15× faster than parsing (JSON string building vs.
   full deserialization + verification).
-- Parse throughput: ~1.18M small puts/sec, ~500k medium puts/sec.
-- Serialize throughput: ~6.6M small puts/sec, ~2.6M medium puts/sec.
+- Serialize throughput: ~14.5M small puts/sec (was ~6.6M in v0.11.0).
+- Parse throughput: ~937K small puts/sec.
 
 ### Dedup Check (T4)
 
@@ -174,19 +188,32 @@ machine with more memory.*
 
 ### WASM Benchmarks (T7)
 
-Run in Node.js via `wasm-pack test --node --no-default-features`.
+Run in Node.js via `wasm-pack test --node --no-default-features -- --nocapture`.
 Uses `web_time::Instant` for cross-platform timing.
 
-| Operation | WASM (Node.js) | Native (Criterion) | Ratio |
-|-----------|----------------|--------------------|-------|
-| Parse small Put | 8,069 ns | 851 ns | ~9.5× |
-| Serialize small Put | 18,144 ns | 152 ns | ~119× |
-| Parse Get | 4,644 ns | 425 ns | ~11× |
+| Operation | WASM (Node.js) | Native (Criterion, v0.12.0) | Ratio |
+|-----------|----------------|------------------------------|-------|
+| Parse small Put | 7,926 ns | 1,067 ns | ~7.4× |
+| Serialize small Put | 8,603 ns | 69 ns | ~125× |
+| Parse Get | 4,523 ns | 677 ns | ~6.7× |
 
-WASM is 10–100× slower than native — expected for a JIT-compiled
+WASM is 7–125× slower than native — expected for a JIT-compiled
 sandbox. Serialize shows the largest gap because `serde_json`'s
 `to_string()` involves heavy string allocation, which is costlier
-under WASM's memory model.
+under WASM's memory model. Parse operations show a narrower gap
+(~7×) since the CPU-bound JSON parser dominates over allocation.
+
+### WASM Relay Throughput (Browser-only)
+
+WASM relay throughput benchmarks (`wasm_relay_throughput_1k`,
+`wasm_relay_throughput_5k`) require `web_sys::WebSocket` callbacks
+which do not fire in the Node.js `wasm-bindgen-test-runner`. This
+is a [known limitation of wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen/issues/4921)
+— doctests are also not implemented in the WASM test runner.
+
+To measure WASM relay throughput, use the browser benchmark page
+at `examples/bench.html` (see [Browser Benchmark](#browser-benchmark)
+section in README).
 
 
 ## Storage Benchmarks (v0.7.0, for reference)

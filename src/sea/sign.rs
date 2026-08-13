@@ -16,13 +16,14 @@
 //! ```no_run
 //! use beam::sea::{generate_pair, sign};
 //!
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() {
 //! let pair = generate_pair().await.unwrap();
 //! let data = serde_json::json!({"hello": "world"});
 //! let signed = sign(&data, &pair).await.unwrap();
 //! assert!(signed.get("m").is_some());
 //! assert!(signed.get("s").is_some());
-//! # });
+//! # }
 //! ```
 
 use super::{KeyPair, SeaError};
