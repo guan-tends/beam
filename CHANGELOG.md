@@ -8,6 +8,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+## [0.12.0] — 2026-08-13 — Performance Overhaul + HAM Pre-Filter
+
+**17.5× throughput improvement** (3,050 → 53,300 puts/sec on clean machine)
+with zero functional regressions. Adds Gun.js-compatible HAM stale-data
+pre-filter for "avoid work" optimization.
+
+### Added
+
+- **HAM (Historical Acknowledged Memory) pre-filter** (`src/router.rs`):
+  Router-maintained timestamp index that checks incoming Put timestamps
+  against cached state before any storage/relay work. Mirrors Gun.js
+  `ham()` function — eliminates redundant processing for stale data.
+  Third deduplication layer (after msg-ID and checksum dedup).
+  - `BoundedHashMap<String, HashMap<String, f64>>` — soul → key → timestamp
+  - Ack messages bypass HAM (control messages, not data writes)
+  - Empty `updated_nodes` → pass (matches Gun.js key-loop semantics)
+  - Same timestamp → skip (incumbent wins, last-write-wins)
+  - `messages_dropped_ham` metric counter
+  - 2 E2E tests (`tests/ham_stale_relay.rs`)
+- **Mailbox module** (`src/mailbox.rs`): Custom SPSC ring buffer with
+  batch drain and `tokio::sync::Notify` wakeup. Replaces tokio mpsc.
+- **`echo_back_regression` test suite** (`tests/echo_back_regression.rs`):
+  3 tests verifying relay forwarding and no echo-back to sender.
+- **`local_put_bench` benchmark** (`tests/local_put_bench.rs`): 10,000
+  local puts with memory storage for throughput measurement.
+
+### Changed
+
+- **`Arc<Message>` in Actor trait**: Messages are `Arc`'d for zero-copy
+  fanout. `Addr::send()` takes `impl Into<Arc<Message>>` — zero call-site
+  changes for baseline, opt-in `Arc::clone` for hot paths.
+- **Lazy broadcast channels**: `Arc<RwLock<Option<broadcast::Sender>>>`
+  pattern — channels created on first subscriber, not on node creation.
+  Eliminates 37% allocation hotspot (9.7× improvement alone).
+- **`Arc<NodeInner>` consolidation**: Node is now a thin handle wrapping
+  `Arc<NodeInner>`. Clone cost reduced from ~12 atomics + 3 heap allocs
+  to a single atomic increment.
+- **`&Put` signatures**: `handle_put` across router, node, and storage
+  takes `&Put` instead of owned `Put` — eliminates unconditional deep
+  clone of `BTreeMap` on every message (the 17.5× win).
+- **Zero-copy WebSocket serialization**: `to_writer` + `std::mem::take`
+  replaces `send_buf.clone()` + `String::from_utf8`.
+
+### Removed
+
+- **Bloom filter dedup**: Replaced by `HashMap` — bloom filters performed
+  terribly (64-157 msgs/sec vs HashMap's 1,977+). 7 cache-missing hash
+  probes > 1 HashMap lookup + String alloc. Suckless philosophy holds.
+- **`json_str` cache**: Removed — `to_string(&self)` replaces
+  `to_string(&mut self)` with internal caching.
+- **mimalloc**: Removed — zero benefit on single-threaded benchmark.
+
+### Performance
+
+| Metric | v0.11.0 | v0.12.0 | Improvement |
+|--------|---------|---------|------------|
+| Local put throughput (clean) | 3,050/sec | ~53,300/sec | 17.5× |
+| Local put throughput (loaded) | — | ~26,800/sec | — |
+| + HAM pre-filter (loaded, 100°F) | — | ~22,600/sec | minimal overhead |
+| Relay 1×10k | 3,041/sec | 6,952/sec | 2.3× |
+| Relay 1×50k | 2,410/sec | 16,005/sec | 6.6× |
+| Relay 10×5k | 2,014/sec | 11,604/sec | 5.8× |
+
+Flame graph confirms flat profile — no dominant hotspot above 4.74%.
+
 
 ## [0.11.1] — 2026-08-10 — WASM Relay TPS + Browser Benchmark
 
