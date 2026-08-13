@@ -188,7 +188,7 @@ struct NodeInner {
 impl Actor for Node {
     async fn handle(&mut self, msg: Arc<Message>, _context: &ActorContext) {
         if let Message::Put(put) = &*msg {
-            self.handle_put(put.clone())
+            self.handle_put(put)
         }
     }
 }
@@ -300,7 +300,17 @@ impl Node {
     ///
     /// For replay puts (have `in_response_to`), a `__beam_replay_complete__`
     /// marker is sent on the map channel after all child values are dispatched.
-    fn handle_put(&mut self, put: Put) {
+    /// Processes an incoming `Put` message by reference — no cloning.
+    ///
+    /// Checks for ack intercepts first (flush acks, put acks), then iterates
+    /// `updated_nodes` by reference to dispatch value updates to child-node
+    /// `on()` subscribers and `map()` subscribers. Individual `Value`s are
+    /// cloned only when sent into broadcast channels, which is unavoidable.
+    ///
+    /// Takes `&Put` (not owned `Put`) to avoid a deep clone of the entire
+    /// `updated_nodes: BTreeMap<String, Children>` tree on every message —
+    /// the same pattern used by `Router::handle_put`.
+    fn handle_put(&mut self, put: &Put) {
         // Intercept acks BEFORE processing the message as data. Two ack
         // channels share the `in_response_to` field:
         //
@@ -343,15 +353,15 @@ impl Node {
             }
         }
         let is_replay = put.in_response_to.is_some();
-        for (node_id, node_data) in put.updated_nodes {
-            if node_id == *self.inner.uid.read() {
+        for (node_id, node_data) in &put.updated_nodes {
+            if *node_id == *self.inner.uid.read() {
                 for (child, child_data) in node_data {
                     // Skip internal control keys
                     if child.starts_with("__beam_") {
                         continue;
                     }
-                    if let Some(child) = self.inner.children.read().get(&child) {
-                        if let Some(sender) = child.inner.on_sender.read().as_ref() {
+                    if let Some(child_node) = self.inner.children.read().get(child) {
+                        if let Some(sender) = child_node.inner.on_sender.read().as_ref() {
                             let _ = sender.send(child_data.value.clone());
                         }
                     }
