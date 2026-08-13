@@ -87,7 +87,7 @@ async fn ham_newer_data_passes_ham() {
         .get("ham_test/key1")
         .put(Value::Text("v1".to_string()))
         .await;
-    sleep(Duration::from_millis(1100)); // >1s for strictly newer timestamp
+    sleep(Duration::from_millis(1100)).await; // >1s for strictly newer timestamp
 
     // Second put — newer timestamp, different value.
     let _ = sender
@@ -139,10 +139,7 @@ async fn ham_no_false_positives_on_unique_data() {
 
     println!("ham_drops={}", ham_drops);
 
-    assert_eq!(
-        ham_drops, 0,
-        "unique data should never be dropped by HAM"
-    );
+    assert_eq!(ham_drops, 0, "unique data should never be dropped by HAM");
 
     sender.stop();
     relay.stop();

@@ -125,7 +125,7 @@ impl Default for Config {
 ///
 /// Each entry is a oneshot sender that resolves when storage adapters
 /// acknowledge a put operation. The key is the put's `id`.
-
+//
 /// Handle to a graph node — cheaply cloneable (single `Arc` refcount bump).
 ///
 /// All state lives inside [`NodeInner`], shared across clones via a single
@@ -263,7 +263,9 @@ impl Node {
         // get_mut succeeds because this Arc has exactly one reference.
         // We temporarily move the Arc out to avoid borrowing `node` while
         // also cloning it.
-        let node = Node { inner: Arc::new(inner) };
+        let node = Node {
+            inner: Arc::new(inner),
+        };
         // actor_context.node and actor_context.router are now interior-mutable
         // (Arc<RwLock<...>>), so we can set them through &Arc<NodeInner> without
         // needing get_mut. The addr and router fields on NodeInner are also
@@ -272,7 +274,11 @@ impl Node {
         let addr = node.inner.actor_context.start_actor(Box::new(node.clone()));
         *node.inner.addr.write() = Some(addr);
 
-        let router = Box::new(Router::new(storage_adapters, network_adapters, node.inner.metrics.clone()));
+        let router = Box::new(Router::new(
+            storage_adapters,
+            network_adapters,
+            node.inner.metrics.clone(),
+        ));
         let router_addr = node.inner.actor_context.start_router(router);
         *node.inner.actor_context.router.write() = router_addr.clone();
         *node.inner.router.write() = Some(router_addr);
@@ -335,13 +341,13 @@ impl Node {
             }
             // Put/BatchPut acks — try quorum sentinel first, fall back to _ack/_err
             if let Some(sender) = self.inner.pending_puts.write().remove(response_id) {
-                let result = if let Some(quorum_result) = Node::decode_quorum_payload(&put) {
+                let result = if let Some(quorum_result) = Node::decode_quorum_payload(put) {
                     // Router fired __quorum_met__ — either peer-ack quorum
                     // satisfied (Ok) or cleanup reaper timed us out (Err).
                     quorum_result
                 } else {
                     // Local storage _ack/_err reply — wrap as minimal status
-                    Self::decode_put_ack_payload(&put).map(|()| ReplicationStatus {
+                    Self::decode_put_ack_payload(put).map(|()| ReplicationStatus {
                         put_id: response_id.clone(),
                         acked_by: 1,
                         quorum_met: true,
@@ -371,10 +377,7 @@ impl Node {
                 }
                 if is_replay {
                     if let Some(sender) = self.inner.map_sender.read().as_ref() {
-                        let _ = sender.send((
-                            "__beam_replay_complete__".to_string(),
-                            Value::Null,
-                        ));
+                        let _ = sender.send(("__beam_replay_complete__".to_string(), Value::Null));
                     }
                 }
             }

@@ -660,7 +660,7 @@ impl Router {
                     let _res = addr.send(Message::Put(put.clone()));
                 }
                 // Network relay is handled by handle_put_relay for batching
-                self.handle_put_relay(&put);
+                self.handle_put_relay(put);
             }
         };
     }
@@ -974,7 +974,7 @@ impl Router {
                 debug!("ham: dropped stale batch put {}", put.id);
                 continue;
             }
-            self.handle_put_relay(&put);
+            self.handle_put_relay(put);
         }
     }
 
@@ -1285,8 +1285,6 @@ mod tests {
         let put2 = make_put("soul1", "key1", "v2", 9999999999.0);
         assert!(router.ham_filter(&put2));
     }
-
-
 
     /// Helper: build a QuorumEntry with custom required/timeout values.
     fn _make_quorum_entry(required: usize, timeout_ms: u64) -> QuorumEntry {
