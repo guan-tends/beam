@@ -82,9 +82,12 @@ where
         msg.to_writer(&mut self.send_buf);
         ctx.metrics.record_serialization();
         if let Some(sink) = &mut self.ws_sink {
+            // Transfer ownership of send_buf into the WS frame — zero copy.
+            // Replace with a fresh buffer for the next message.
+            let buf = std::mem::take(&mut self.send_buf);
             let _ = sink
                 .feed(WsMessage::text(
-                    String::from_utf8(self.send_buf.clone()).expect("wire format is valid UTF-8"),
+                    String::from_utf8(buf).expect("wire format is valid UTF-8"),
                 ))
                 .await;
         }
@@ -158,9 +161,10 @@ where
         hi.to_writer(&mut self.send_buf);
         ctx.metrics.record_serialization();
         if let Some(sink) = &mut self.ws_sink {
+            let buf = std::mem::take(&mut self.send_buf);
             let _ = sink
                 .feed(WsMessage::text(
-                    String::from_utf8(self.send_buf.clone()).expect("wire format is valid UTF-8"),
+                    String::from_utf8(buf).expect("wire format is valid UTF-8"),
                 ))
                 .await;
         }
