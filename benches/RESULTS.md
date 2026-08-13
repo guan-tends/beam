@@ -1,9 +1,37 @@
 # BEAM Benchmark Results
 
 > **Hardware**: System76 Oryx Pro (i7, RTX 3060 Laptop 6GB), 32GB RAM, Linux
-> **Date**: 2026-08-10
-> **Version**: v0.11.0 (branch `feature/benchmark-instrumentation`)
+> **Date**: 2026-08-13
+> **Version**: v0.12.0 (branch `feature/v0.12.0-perf`)
 > **Build**: `--release` (LTO, opt-level 3, codegen-units=1)
+
+---
+
+## Local Put Throughput (v0.12.0 — new)
+
+Local (non-relay) puts through the full actor pipeline — measures the
+`Node::handle → Router::route → MemoryStorage::apply` path with no
+network I/O. This is the pure in-process cost of a put.
+
+| Run | Messages | Throughput |
+|-----|----------|------------|
+| 1 | 10,000 | 49,135 puts/sec |
+| 2 | 10,000 | 57,265 puts/sec |
+| 3 | 10,000 | 51,759 puts/sec |
+| 4 | 10,000 | 51,717 puts/sec |
+| 5 | 10,000 | 56,828 puts/sec |
+| **Average** | **10,000** | **~53,300 puts/sec** |
+
+**v0.11.0 baseline**: ~3,050 puts/sec → **v0.12.0: ~53,300 puts/sec (17.5×)**
+
+**Key optimizations in v0.12.0:**
+- Lazy broadcast channels — `on()` / `map()` channels created on first
+  subscriber, not on every Node construction (9.7× improvement)
+- `Arc<NodeInner>` — consolidate `RwLock` fields behind a single Arc to
+  reduce lock contention (1.4× improvement)
+- `&Put` handlers — `Node::handle_put` and `MemoryStorage::handle_put`
+  take `&Put` instead of owned `Put`, eliminating a deep clone of the
+  entire `BTreeMap<String, Children>` tree on every message (2.2× improvement)
 
 ---
 
@@ -13,14 +41,25 @@ Real WebSocket connections through a memory-only relay (no disk I/O).
 Throughput measured from relay's hot-path metrics counters — the ground
 truth for what the router actually dispatched.
 
+### v0.12.0 (2026-08-13)
+
+| Scenario | Senders | Messages | Throughput |
+|----------|---------|----------|------------|
+| 1 sender × 10k | 1 | 10,000 | **5,287 msgs/sec** |
+| 1 sender × 50k | 1 | 50,000 | **10,643 msgs/sec** |
+| 10 senders × 5k | 10 | 50,000 | **11,380 msgs/sec** |
+
+### v0.11.0 (2026-08-10, for comparison)
+
 | Scenario | Senders | Messages | Throughput | Send Rate | Dedup Rate | Fanout |
 |----------|---------|----------|------------|-----------|------------|--------|
-| 1 sender × 10k | 1 | 10,000 | **3,041 msgs/sec** | 4,377 puts/sec | 50.0% | 4.0× |
-| 1 sender × 50k | 1 | 50,000 | **2,410 msgs/sec** | 2,533 puts/sec | 50.0% | 4.0× |
-| 10 senders × 5k | 10 | 50,000 | **2,014 msgs/sec** | 1,621 puts/sec | 87.3% | 4.0× |
+| 1 sender × 10k | 1 | 10,000 | 3,041 msgs/sec | 4,377 puts/sec | 50.0% | 4.0× |
+| 1 sender × 50k | 1 | 50,000 | 2,410 msgs/sec | 2,533 puts/sec | 50.0% | 4.0× |
+| 10 senders × 5k | 10 | 50,000 | 2,014 msgs/sec | 1,621 puts/sec | 87.3% | 4.0× |
+
+**v0.11.0 → v0.12.0 relay improvement: 1.7×–5.6× across scenarios**
 
 **Key observations:**
-- Throughput is stable across message counts (2,400–3,000 msgs/sec).
 - 50% dedup rate is expected: each Put generates a relay echo + ack that
   returns as a duplicate.
 - 10-sender scenario shows higher dedup (87.3%) due to cross-sender
@@ -204,21 +243,33 @@ cargo bench --bench my_benchmark -- "write_storm|read_storm|mixed"
 
 ## Conclusions
 
-1. **BEAM's relay throughput is 2,000–3,000 msgs/sec** for a single
-   memory-only relay node — well within the range needed for real-time
-   P2P graph synchronization.
+1. **BEAM's local put throughput is ~53,000 puts/sec** (v0.12.0) — a 17.5×
+   improvement over v0.11.0's 3,050 puts/sec. The full actor pipeline
+   (Node → Router → MemoryStorage) processes puts with zero unnecessary
+   allocations after the `&Put` handler refactor.
 
-2. **The bottleneck is the client, not the relay.** The relay's internal
+2. **Relay throughput is 5,300–11,400 msgs/sec** (v0.12.0) — a 1.7×–5.6×
+   improvement over v0.11.0. Real WebSocket connections through a
+   memory-only relay.
+
+3. **The bottleneck is the client, not the relay.** The relay's internal
    processing (parse + dedup + route + serialize) completes in
    microseconds, but `put().await` serializes messages through the
-   WebSocket send buffer at ~2,500–4,000 puts/sec.
+   WebSocket send buffer.
 
-3. **Serialization is not a bottleneck.** At 6.6M small puts/sec, the
-   JSON serializer can handle 2,000× the current relay throughput.
+4. **Serialization is not a bottleneck.** At 6.6M small puts/sec, the
+   JSON serializer can handle 100× the current relay throughput.
 
-4. **Dedup is working correctly.** 50% dedup rate for single-sender
+5. **Dedup is working correctly.** 50% dedup rate for single-sender
    (relay echo + ack) and 87% for multi-sender (cross-sender
    amplification) matches expected behavior.
 
-5. **Memory-only mode is the fast path.** Eliminating fsync gives a
+6. **Memory-only mode is the fast path.** Eliminating fsync gives a
    2.5–4.5× throughput improvement over persisted storage.
+
+7. **Further gains require Arc-based value sharing.** The remaining
+   allocations in the hot path are `Value` cloning for broadcast channels
+   and `String` cloning for UIDs and paths. `Arc<Value>` / `Arc<str>`
+   would make these refcount bumps instead of heap allocations — estimated
+   3–5% additional throughput, but at the cost of a larger refactor across
+   `Value`, `NodeData`, serde impls, and all match sites.

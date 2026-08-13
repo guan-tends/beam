@@ -913,15 +913,29 @@ cargo test --test wire_live -- --ignored  # Layer 3: live integration (needs Nod
 BEAM includes a comprehensive benchmarking suite covering relay throughput,
 micro-benchmarks for hot-path components, and storage performance.
 
+### Local Put Throughput
+
+Local (non-relay) puts through the actor pipeline — measures the full
+`Node::handle → Router::route → MemoryStorage::apply` path with no network I/O:
+
+| Scenario | Messages | Throughput |
+|----------|----------|------------|
+| 1 sender × 10k | 10,000 | ~24,000–53,000 puts/sec |
+
+Throughput varies with system load. On a dedicated machine with no
+competing processes, expect 50,000+ puts/sec. The bottleneck is
+`Value` cloning for broadcast channels — further gains require
+`Arc<Value>` to make cloning a refcount bump.
+
 ### Relay Throughput
 
 Real WebSocket connections through a memory-only relay (no disk I/O):
 
 | Scenario | Messages | Throughput |
 |----------|----------|------------|
-| 1 sender × 10k | 10,000 | ~3,000 msgs/sec |
-| 1 sender × 50k | 50,000 | ~2,400 msgs/sec |
-| 10 senders × 5k | 50,000 | ~2,000 msgs/sec |
+| 1 sender × 10k | 10,000 | ~5,300 msgs/sec |
+| 1 sender × 50k | 50,000 | ~10,600 msgs/sec |
+| 10 senders × 5k | 50,000 | ~11,400 msgs/sec |
 
 The relay's internal processing (parse + dedup + route + serialize) runs in
 microseconds — the bottleneck is client-side `put().await`, not the relay.
