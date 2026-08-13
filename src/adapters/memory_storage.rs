@@ -61,7 +61,10 @@ impl MemoryStorage {
     /// If `child_key` is specified in the `Get`, only that specific child is
     /// returned. If the child doesn't exist, no reply is sent (the requester
     /// simply doesn't receive data).
-    fn handle_get(&self, get: Get, ctx: &ActorContext) {
+    /// Handles a `Get` by reading from the in-memory store and replying with
+    /// a `Put` containing the requested node data. Takes `&Get` to avoid
+    /// cloning the request — the reply is constructed from borrows.
+    fn handle_get(&self, get: &Get, ctx: &ActorContext) {
         if let Some(children) = self.store.read().get(&get.node_id).cloned() {
             debug!("have {}: {:?}", get.node_id, children);
             let reply_with_children = match &get.child_key {
@@ -108,9 +111,12 @@ impl MemoryStorage {
     /// `seen_get_messages` and be silently dropped). The ack payload uses
     /// the same `_ack`/`_err` sentinel children as `Flush`, so the originating
     /// `Node::handle_put` can drain `pending_puts` and resolve the awaiter.
-    fn handle_put(&self, put: Put, ctx: &ActorContext) {
-        let put_result = self.apply_put(&put);
-        self.send_put_ack(&put, &put_result, ctx);
+    /// Handles a `Put` by merging `updated_nodes` into the store, then sending
+    /// an ack back to the originating node. Takes `&Put` — the data is read
+    /// for merging and ack construction, never consumed for ownership.
+    fn handle_put(&self, put: &Put, ctx: &ActorContext) {
+        let put_result = self.apply_put(put);
+        self.send_put_ack(put, &put_result, ctx);
     }
 
     /// Applies a put to the in-memory store, returning Ok or an error string.
@@ -176,7 +182,9 @@ impl MemoryStorage {
 
     /// Handles a `BatchPut` by applying each constituent Put and sending
     /// a single batch ack back to the originating node.
-    fn handle_batch_put(&self, batch: BatchPut, ctx: &ActorContext) {
+    /// Handles a `BatchPut` by applying each constituent `Put` and sending
+    /// a single batch ack. Takes `&BatchPut` — puts are iterated by reference.
+    fn handle_batch_put(&self, batch: &BatchPut, ctx: &ActorContext) {
         let mut last_err: Option<String> = None;
         for put in batch.puts.iter() {
             if let Err(e) = self.apply_put(put) {
@@ -184,7 +192,7 @@ impl MemoryStorage {
             }
         }
         let result = last_err.map(Err).unwrap_or(Ok(()));
-        self.send_batch_put_ack(&batch, &result, ctx);
+        self.send_batch_put_ack(batch, &result, ctx);
     }
 
     /// Sends a `BatchPut` ack back to the originating node.
@@ -243,9 +251,9 @@ impl Actor for MemoryStorage {
 
     async fn handle(&mut self, message: Arc<Message>, ctx: &ActorContext) {
         match &*message {
-            Message::Get(get) => self.handle_get(get.clone(), ctx),
+            Message::Get(get) => self.handle_get(get, ctx),
             Message::Put(put) => {
-                self.handle_put(put.clone(), ctx);
+                self.handle_put(put, ctx);
             }
             Message::Flush(flush) => {
                 // Memory storage has no disk state; flush is a no-op.
@@ -267,7 +275,7 @@ impl Actor for MemoryStorage {
                 put.to_string(); // compute checksum
                 let _ = flush.from.send(Message::Put(put));
             }
-            Message::BatchPut(batch) => self.handle_batch_put(batch.clone(), ctx),
+            Message::BatchPut(batch) => self.handle_batch_put(batch, ctx),
             _ => {}
         }
     }
