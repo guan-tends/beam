@@ -44,7 +44,7 @@ impl WasmWsConn {
     pub fn new(url: &str, ctx: &ActorContext, allow_public_space: bool) -> Self {
         let ws = WebSocket::new(url).expect("Failed to create WebSocket");
         let peer_id = ctx.peer_id.read().clone();
-        let router = ctx.router.clone();
+        let router = ctx.router.read().clone();
         let addr = ctx.addr.clone();
         let mut stop_ctx = ctx.clone();
 
@@ -117,7 +117,7 @@ impl WasmWsConn {
 impl Actor for WasmWsConn {
     async fn pre_start(&mut self, ctx: &ActorContext) {
         // Register with local router so Puts get forwarded to this actor.
-        let _ = ctx.router.send(Message::Hi {
+        let _ = ctx.router.read().send(Message::Hi {
             from: ctx.addr.clone(),
             peer_id: ctx.peer_id.read().clone(),
         });

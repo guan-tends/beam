@@ -173,7 +173,7 @@ where
 
         // Move the read half into a child task for the receive loop.
         let reader = self.ws_stream.take().expect("ws_stream already taken");
-        let mut ctx2 = ctx.clone();
+        let ctx2 = ctx.clone();
         let allow_public_space = self.allow_public_space;
         ctx.child_task(async move {
             let mut reader = reader;
@@ -194,7 +194,7 @@ where
                         Ok(msgs) => {
                             ctx2.metrics.record_parsed();
                             for msg in msgs {
-                                let _ = ctx2.router.send(msg);
+                                let _ = ctx2.router.read().send(msg);
                             }
                         }
                         Err(e) => {

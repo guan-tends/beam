@@ -202,7 +202,7 @@ impl Actor for WebRtcPeer {
             from: ctx.addr.clone(),
             peer_id: self.peer_id.clone(),
         };
-        let _ = ctx.router.send(hi);
+        let _ = ctx.router.read().send(hi);
 
         let (mut rtc, socket, local_addr) = match Self::setup_rtc(&self.ice_servers).await {
             Some(v) => v,
@@ -224,7 +224,7 @@ impl Actor for WebRtcPeer {
             }
         };
 
-        let router = ctx.router.clone();
+        let router = ctx.router.read().clone();
         let own_addr = ctx.addr.clone();
         let peer_id = self.peer_id.clone();
         let router_target = self.target_peer_id.clone();
@@ -507,7 +507,7 @@ impl WebRtcPeer {
             local_addr: Some(local_addr.to_string()),
             json_str: None,
         });
-        let _ = ctx.router.send(signal);
+        let _ = ctx.router.read().send(signal);
         Some(pending)
     }
 }

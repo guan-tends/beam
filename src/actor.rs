@@ -173,7 +173,7 @@ impl dyn Actor {
         &mut self,
         mut receiver: MailboxReceiver,
         mut stop_receiver: Receiver<()>,
-        mut context: ActorContext,
+        context: ActorContext,
     ) {
         self.pre_start(&context).await;
         let mut batch: Vec<Arc<Message>> = Vec::with_capacity(64);
@@ -213,7 +213,9 @@ pub struct ActorContext {
     /// This node's peer ID, shared across all actors.
     pub peer_id: Arc<RwLock<String>>,
     /// The router actor's address for message forwarding.
-    pub router: Addr,
+    /// `Arc<RwLock<…>>` so it can be set after construction (the root node's
+    /// router is created after the node itself).
+    pub router: Arc<RwLock<Addr>>,
     /// Stop signals for child actors (keyed by child Addr).
     stop_signals: Arc<RwLock<HashMap<Addr, Sender<()>>>>,
     /// Join handles for spawned child tasks.
@@ -226,7 +228,7 @@ pub struct ActorContext {
     /// Long-running child tasks select on this to break their loops.
     pub shutdown_rx: watch::Receiver<bool>,
     /// Optional owned Node (set for the root actor).
-    pub node: Option<Node>,
+    pub node: Arc<RwLock<Option<Node>>>,
     /// Shared metrics handle — lock-free counters for the relay hot path.
     ///
     /// Cloned from the root Node's `Metrics` so all actors in the tree
@@ -246,10 +248,10 @@ impl ActorContext {
             stop_signals: Arc::new(RwLock::new(HashMap::new())),
             task_handles: Arc::new(RwLock::new(Vec::new())),
             peer_id: Arc::new(RwLock::new(peer_id)),
-            router: Addr::noop(),
+            router: Arc::new(RwLock::new(Addr::noop())),
             is_stopped: Arc::new(RwLock::new(false)),
             shutdown_rx: watch::channel(false).1,
-            node: None,
+            node: Arc::new(RwLock::new(None)),
             metrics: Arc::new(Metrics::new()),
         }
     }
@@ -333,9 +335,9 @@ impl ActorContext {
         let (sender, receiver) = mailbox::mailbox(capacity);
         let addr = Addr::new(sender);
         let (stop_sender, stop_receiver) = channel(1);
-        let mut new_context = self.child_context(addr.clone(), stop_sender.clone());
+        let new_context = self.child_context(addr.clone(), stop_sender.clone());
         if is_router {
-            new_context.router = addr.clone();
+            *new_context.router.write() = addr.clone();
         }
         self.stop_signals.write().insert(addr.clone(), stop_sender);
         let stop_signals = self.stop_signals.clone();
@@ -351,14 +353,14 @@ impl ActorContext {
     ///
     /// Aborts all child tasks and sends stop signals to all child actors.
     /// Sets `is_stopped` to `true`.
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
         for handle in self.task_handles.read().iter() {
             handle.abort();
         }
         for signal in self.stop_signals.read().values() {
             let _ = signal.try_send(());
         }
-        self.node = None;
+        *self.node.write() = None;
         *self.is_stopped.write() = true;
     }
 }
