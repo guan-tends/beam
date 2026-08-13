@@ -43,7 +43,6 @@ parking_lot = "0.12"
 # ─── Native-only deps (gated out on WASM) ───
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.17.0", features = ["full"] }
-mimalloc = "0.1"
 
 # SIMD-accelerated JSON parser (x86_64 only — uses SSE4.2/AVX2).
 # On non-x86_64 (WASM, ARM), falls back to serde_json.

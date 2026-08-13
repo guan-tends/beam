@@ -60,17 +60,6 @@
 //! If a second signal is received during shutdown, the process exits
 //! immediately with exit code 1.
 
-// ─── Global Allocator ──────────────────────────────────────────────
-// mimalloc provides per-thread heaps, eliminating cross-thread malloc
-// contention. This is the #1 fix from the v0.12.0-s5 flame graph:
-// heap allocation was ~20% of self-time under the system glibc allocator.
-// mimalloc typically delivers 20-50% allocation speedup on multi-threaded
-// workloads with small-object churn — exactly our message-routing pattern.
-//
-// Native only — WASM uses its own allocator (browser-provided).
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 mod cli;
 
 use beam::actor::Actor;
