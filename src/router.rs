@@ -223,6 +223,29 @@ pub struct Router {
     /// cleanup reaper in `pre_start` removes expired entries on a 1-second
     /// interval.
     quorum_entries: BoundedHashMap<String, QuorumEntry>,
+
+    /// HAM (Hypothetical Amalgamation Model) timestamp index for
+    /// stale-data pre-filtering.
+    ///
+    /// Maps `soul → (key → latest known updated_at)`. Used by
+    /// [`ham_filter`](Router::ham_filter) to skip Puts whose data is
+    /// older than or equal to what the router has already seen —
+    /// mirroring Gun.js's `ham()` function in `src/root.js` (line 120),
+    /// which checks `state < was` (old → skip) and
+    /// `state === was && val === known` (same → skip) before any
+    /// storage or relay work.
+    ///
+    /// This is the third deduplication layer, after message-ID dedup
+    /// ([`Dup`]) and checksum dedup. Dedup catches "same message";
+    /// HAM catches "same data with a different message ID" — the
+    /// common case in P2P mesh relay where data arrives from
+    /// multiple paths.
+    ///
+    /// Bounded to [`SEEN_MSGS_MAX_SIZE`] entries (FIFO eviction).
+    /// When full, the oldest soul entry is evicted along with all
+    /// its key timestamps — acceptable because stale-data detection
+    /// only needs recent entries.
+    ham_cache: BoundedHashMap<String, HashMap<String, f64>>,
 }
 
 #[async_trait]
@@ -397,6 +420,7 @@ impl Router {
             subscribers_by_topic: HashMap::new(),
             msg_counter: AtomicUsize::new(0),
             quorum_entries: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
+            ham_cache: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
         }
     }
 
@@ -527,7 +551,8 @@ impl Router {
         }
     }
 
-    /// Handles a `Put` message: deduplicates, routes to storage or back to requester.
+    /// Handles a `Put` message: deduplicates, filters stale data,
+    /// routes to storage or back to requester.
     ///
     /// If the Put is a response to a Get (has `in_response_to`), it's routed
     /// directly back to the original requester. Otherwise, it's forwarded to
@@ -535,10 +560,15 @@ impl Router {
     ///
     /// # Deduplication
     ///
-    /// Two layers:
-    /// 1. Message ID dedup (via [`Dup`])
-    /// 2. Response checksum dedup — if the same response (same `@` + `##`) has
-    ///    been seen, it's suppressed
+    /// Three layers:
+    /// 1. Message ID dedup (via [`Dup`]) — prevents re-processing the
+    ///    same message.
+    /// 2. Response checksum dedup — if the same response (same `@` + `##`)
+    ///    has been seen, it's suppressed.
+    /// 3. HAM stale-data pre-filter ([`ham_filter`]) — if all data in the
+    ///    Put is older than or equal to what the router has already seen,
+    ///    the Put is dropped before storage/relay. Mirrors Gun.js's
+    ///    `ham()` function. Only applies to non-ack Puts.
     fn handle_put(&mut self, put: &Put) {
         if self.is_message_seen(&put.id) {
             self.metrics.record_dropped_dup();
@@ -613,6 +643,15 @@ impl Router {
                 }
             }
             _ => {
+                // HAM pre-filter: skip stale data before storage/relay.
+                // Only applies to non-ack Puts — acks and get-responses
+                // bypass HAM (they are control messages, not data writes).
+                if !self.ham_filter(put) {
+                    self.metrics.record_dropped_ham();
+                    debug!("ham: dropped stale put {}", put.id);
+                    return;
+                }
+
                 // Forward to storage write adapter(s)
                 for addr in self.write_adapters.iter() {
                     if put.from == *addr {
@@ -885,10 +924,11 @@ impl Router {
     }
 
     /// Handles a `BatchPut`: forwards to storage (single transaction), then
-    /// relays each constituent Put individually with deduplication.
+    /// relays each constituent Put individually with deduplication and
+    /// HAM stale-data filtering.
     ///
     /// This preserves atomic multi-write semantics for storage adapters while
-    /// still doing per-message dedup and network relay.
+    /// still doing per-message dedup, HAM filtering, and network relay.
     fn handle_batch_put(&mut self, batch: &BatchPut) {
         // Forward BatchPut to storage write adapters — preserves single-transaction semantics
         for addr in self.write_adapters.iter() {
@@ -898,7 +938,7 @@ impl Router {
             let _ = addr.send(Message::BatchPut(batch.clone()));
         }
 
-        // Relay each constituent put individually (with deduplication)
+        // Relay each constituent put individually (with deduplication + HAM)
         for put in &batch.puts {
             if self.is_message_seen(&put.id) {
                 continue;
@@ -928,6 +968,12 @@ impl Router {
                 }
                 continue;
             }
+            // HAM pre-filter: skip stale constituent puts before relay.
+            if !self.ham_filter(put) {
+                self.metrics.record_dropped_ham();
+                debug!("ham: dropped stale batch put {}", put.id);
+                continue;
+            }
             self.handle_put_relay(&put);
         }
     }
@@ -951,6 +997,83 @@ impl Router {
         debug!("forwarded flush to {} storage write adapters", sent.len());
     }
 
+    /// HAM (Hypothetical Amalgamation Model) stale-data pre-filter.
+    ///
+    /// Compares each `(soul, key)` pair in `put` against the router's
+    /// timestamp index ([`ham_cache`](Self::ham_cache)). If every pair
+    /// is stale (`updated_at <= cached`), returns `false` — the caller
+    /// should skip the Put entirely, avoiding storage writes and
+    /// network relay. If any pair is newer (or unseen), updates the
+    /// index for all pairs and returns `true`.
+    ///
+    /// This mirrors Gun.js's `ham()` function (`src/root.js` line 120):
+    ///
+    /// - `state < was` → old, skip *(our `updated_at < cached_at`)*
+    /// - `state === was && val === known` → same, skip *(our
+    ///   `updated_at == cached_at` — existing wins the tie)*
+    /// - otherwise → new, proceed
+    ///
+    /// BEAM simplifies to `updated_at <= cached_at → skip`. Same-timestamp
+    /// conflicts resolve to "existing wins" (last-write-wins with the
+    /// incumbent keeping the tie), matching Gun.js's primary path.
+    ///
+    /// # Performance
+    ///
+    /// One `HashMap` lookup per key on the stale path (fast rejection).
+    /// Two lookups on the update path (check + insert) — only for
+    /// genuinely newer data. No allocations on lookups (soul and key
+    /// are borrowed from the Put). Clones occur only on the update
+    /// path (`soul.clone()`, `key.clone()`).
+    ///
+    /// # Edge Cases
+    ///
+    /// - Empty `updated_nodes` → `true` (no data to filter — mirrors
+    ///   Gun.js where the key loop doesn't execute).
+    /// - First-seen soul/key → `true` (cache miss = proceed).
+    /// - Future timestamps → accepted (not deferred — the router is
+    ///   synchronous; Gun.js defers via `setTimeout`, which is a
+    ///   timing optimization, not a correctness requirement).
+    /// - Same timestamp, different value → `false` (existing wins).
+    fn ham_filter(&mut self, put: &Put) -> bool {
+        // Gun.js iterates keys in a `while` loop, calling `ham()` per key.
+        // If there are no keys, the loop doesn't execute and the message
+        // proceeds normally. Empty `updated_nodes` → no data to filter →
+        // allow through.
+        if put.updated_nodes.is_empty() {
+            return true;
+        }
+
+        let mut has_newer = false;
+
+        for (soul, children) in &put.updated_nodes {
+            for (key, node_data) in children {
+                // Check if this (soul, key) is stale.
+                let is_stale = self
+                    .ham_cache
+                    .get(soul)
+                    .and_then(|inner| inner.get(key))
+                    .is_some_and(|&cached_at| node_data.updated_at <= cached_at);
+
+                if is_stale {
+                    continue;
+                }
+
+                // This key is newer (or unseen) — the Put should proceed.
+                has_newer = true;
+
+                // Ensure the inner map exists for this soul, then update.
+                if self.ham_cache.get(soul).is_none() {
+                    self.ham_cache.insert(soul.clone(), HashMap::new());
+                }
+                if let Some(inner) = self.ham_cache.get_mut(soul) {
+                    inner.insert(key.clone(), node_data.updated_at);
+                }
+            }
+        }
+
+        has_newer
+    }
+
     /// Checks if a message ID has been seen, and tracks it if not.
     ///
     /// Returns `true` if the message was already seen (and should be
@@ -971,6 +1094,7 @@ mod tests {
     use super::*;
     use crate::adapters::MemoryStorage;
     use crate::metrics::Metrics;
+    use std::collections::BTreeMap;
     use web_time::Duration;
 
     #[test]
@@ -1007,9 +1131,162 @@ mod tests {
         let router = Router::new(vec![], vec![], metrics);
         assert_eq!(router.msg_counter.load(Ordering::Relaxed), 0);
     }
+
     // ========================================================================
-    // Phase 5b: QuorumEntry Tests (Network Fanout Ack)
+    // HAM Pre-Filter Tests (Tier 0)
     // ========================================================================
+
+    /// Helper: build a Put with a single (soul, key, value, timestamp).
+    fn make_put(soul: &str, key: &str, value: &str, ts: f64) -> Put {
+        let mut children: Children = BTreeMap::new();
+        children.insert(
+            key.to_string(),
+            NodeData {
+                value: Value::Text(value.to_string()),
+                updated_at: ts,
+            },
+        );
+        let mut nodes = BTreeMap::new();
+        nodes.insert(soul.to_string(), children);
+        Put::new(nodes, None, Addr::noop())
+    }
+
+    /// Helper: build a Put with multiple keys under one soul.
+    fn make_multi_put(soul: &str, pairs: &[(&str, &str, f64)]) -> Put {
+        let mut children: Children = BTreeMap::new();
+        for (key, val, ts) in pairs {
+            children.insert(
+                key.to_string(),
+                NodeData {
+                    value: Value::Text(val.to_string()),
+                    updated_at: *ts,
+                },
+            );
+        }
+        let mut nodes = BTreeMap::new();
+        nodes.insert(soul.to_string(), children);
+        Put::new(nodes, None, Addr::noop())
+    }
+
+    #[test]
+    fn ham_filter_first_seen_returns_true() {
+        // No cache entry → cache miss = proceed.
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let put = make_put("soul1", "key1", "hello", 100.0);
+        assert!(router.ham_filter(&put));
+    }
+
+    #[test]
+    fn ham_filter_newer_returns_true_and_updates_cache() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+
+        // First put — populates cache with ts=100.
+        let put1 = make_put("soul1", "key1", "v1", 100.0);
+        assert!(router.ham_filter(&put1));
+
+        // Second put — newer timestamp.
+        let put2 = make_put("soul1", "key1", "v2", 200.0);
+        assert!(router.ham_filter(&put2));
+
+        // Cache should now have ts=200.
+        let cached = router
+            .ham_cache
+            .get(&"soul1".to_string())
+            .and_then(|m| m.get(&"key1".to_string()));
+        assert_eq!(cached, Some(&200.0));
+    }
+
+    #[test]
+    fn ham_filter_stale_returns_false() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+
+        // Populate cache with ts=200.
+        let put1 = make_put("soul1", "key1", "v1", 200.0);
+        assert!(router.ham_filter(&put1));
+
+        // Stale put — older timestamp → should be filtered.
+        let put2 = make_put("soul1", "key1", "v0", 100.0);
+        assert!(!router.ham_filter(&put2));
+    }
+
+    #[test]
+    fn ham_filter_same_timestamp_returns_false() {
+        // Same timestamp = existing wins the tie.
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+
+        let put1 = make_put("soul1", "key1", "v1", 150.0);
+        assert!(router.ham_filter(&put1));
+
+        // Same ts, different value → stale (existing wins).
+        let put2 = make_put("soul1", "key1", "v2", 150.0);
+        assert!(!router.ham_filter(&put2));
+    }
+
+    #[test]
+    fn ham_filter_mixed_stale_and_newer_returns_true() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+
+        // Populate cache: key1@100, key2@100.
+        let put1 = make_multi_put("soul1", &[("key1", "v1", 100.0), ("key2", "v2", 100.0)]);
+        assert!(router.ham_filter(&put1));
+
+        // Mixed: key1 stale (50), key2 newer (200) → should proceed.
+        let put2 = make_multi_put("soul1", &[("key1", "old", 50.0), ("key2", "new", 200.0)]);
+        assert!(router.ham_filter(&put2));
+
+        // Cache should reflect the newer key2 timestamp.
+        let cached_k2 = router
+            .ham_cache
+            .get(&"soul1".to_string())
+            .and_then(|m| m.get(&"key2".to_string()));
+        assert_eq!(cached_k2, Some(&200.0));
+    }
+
+    #[test]
+    fn ham_filter_empty_put_returns_true() {
+        // No updated_nodes → no data to filter → allow through.
+        // Gun.js: the `while` loop over keys doesn't execute, so `ham()`
+        // is never called and the message proceeds normally.
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let put = Put::new(BTreeMap::new(), None, Addr::noop());
+        assert!(router.ham_filter(&put));
+    }
+
+    #[test]
+    fn ham_filter_different_soul_is_newer() {
+        // Same key under a different soul is a cache miss → proceed.
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+
+        let put1 = make_put("soulA", "key1", "v1", 100.0);
+        assert!(router.ham_filter(&put1));
+
+        // soulB/key1 — different soul, no cache → proceed.
+        let put2 = make_put("soulB", "key1", "v2", 50.0);
+        assert!(router.ham_filter(&put2));
+    }
+
+    #[test]
+    fn ham_filter_future_timestamp_accepted() {
+        // Future timestamps are accepted, not deferred.
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+
+        let put1 = make_put("soul1", "key1", "v1", 100.0);
+        assert!(router.ham_filter(&put1));
+
+        // Future ts (much larger) → newer → proceed.
+        let put2 = make_put("soul1", "key1", "v2", 9999999999.0);
+        assert!(router.ham_filter(&put2));
+    }
+
+
 
     /// Helper: build a QuorumEntry with custom required/timeout values.
     fn _make_quorum_entry(required: usize, timeout_ms: u64) -> QuorumEntry {

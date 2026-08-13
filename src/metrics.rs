@@ -170,6 +170,22 @@ pub struct Metrics {
     /// state with no dedup, this should be approximately
     /// `messages_relayed * subscriber_fanout_ratio`.
     ws_messages_sent: AtomicU64,
+
+    // ── HAM pre-filter counter (v0.12.0) ───────────────────────────
+    /// Times a Put was dropped by the HAM stale-data pre-filter.
+    ///
+    /// Incremented in `Router::handle_put` when `ham_filter` returns
+    /// `false` — all (soul, key) pairs in the Put had timestamps
+    /// older than or equal to what the router has already seen. A
+    /// high ratio of `messages_dropped_ham / messages_parsed` means
+    /// peers are redundantly relaying stale data that the router
+    /// already knows about.
+    ///
+    /// This counter measures work *avoided* — each increment
+    /// represents a Put that was not forwarded to storage or
+    /// relayed to network peers, saving mailbox sends, allocations,
+    /// and serialization.
+    messages_dropped_ham: AtomicU64,
 }
 
 /// Plain-old-data snapshot of `Metrics` for safe export across threads.
@@ -195,6 +211,8 @@ pub struct MetricsSnapshot {
     pub subscriber_fanout_total: u64,
     pub ws_messages_received: u64,
     pub ws_messages_sent: u64,
+    // HAM pre-filter counter (v0.12.0)
+    pub messages_dropped_ham: u64,
 }
 
 impl Metrics {
@@ -295,6 +313,16 @@ impl Metrics {
         self.ws_messages_sent.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record that a Put was dropped by the HAM stale-data pre-filter.
+    ///
+    /// Called in `Router::handle_put` when `ham_filter` returns `false`.
+    /// Each increment represents a Put that was not forwarded to storage
+    /// or relayed — work avoided, not just work made cheaper.
+    #[inline]
+    pub fn record_dropped_ham(&self) {
+        self.messages_dropped_ham.fetch_add(1, Ordering::Relaxed);
+    }
+
     // ── Snapshot ────────────────────────────────────────────────────
 
     /// Read all counters as a plain struct.
@@ -314,6 +342,7 @@ impl Metrics {
             subscriber_fanout_total: self.subscriber_fanout_total.load(Ordering::Relaxed),
             ws_messages_received: self.ws_messages_received.load(Ordering::Relaxed),
             ws_messages_sent: self.ws_messages_sent.load(Ordering::Relaxed),
+            messages_dropped_ham: self.messages_dropped_ham.load(Ordering::Relaxed),
         }
     }
 }
@@ -338,6 +367,7 @@ mod tests {
         assert_eq!(snap.subscriber_fanout_total, 0);
         assert_eq!(snap.ws_messages_received, 0);
         assert_eq!(snap.ws_messages_sent, 0);
+        assert_eq!(snap.messages_dropped_ham, 0);
     }
 
     // ── Original counter tests ──────────────────────────────────────
@@ -400,6 +430,14 @@ mod tests {
     }
 
     #[test]
+    fn record_dropped_ham_increments_counter() {
+        let m = Metrics::new();
+        m.record_dropped_ham();
+        m.record_dropped_ham();
+        assert_eq!(m.snapshot().messages_dropped_ham, 2);
+    }
+
+    #[test]
     fn record_serialization_increments_counter() {
         let m = Metrics::new();
         m.record_serialization();
@@ -443,6 +481,7 @@ mod tests {
         m.record_parsed();
         m.record_relayed();
         m.record_serialization();
+        m.record_dropped_ham();
         let snap = m.snapshot();
         assert_eq!(snap.dropped_sends, 1);
         assert_eq!(snap.put_acks_seen, 1);
@@ -452,6 +491,7 @@ mod tests {
         assert_eq!(snap.messages_relayed, 1);
         assert_eq!(snap.messages_dropped_dup, 0);
         assert_eq!(snap.serialization_calls, 1);
+        assert_eq!(snap.messages_dropped_ham, 1);
     }
 
     #[test]
