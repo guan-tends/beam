@@ -118,9 +118,9 @@ required-features = ["native"]
 
 [profile.release]
 opt-level = 3
-strip = false
-lto = false
-codegen-units = 256
+strip = true
+lto = true
+codegen-units = 1
 
 # WASM-only extras for browser adapters
 [target.wasm32-unknown-unknown.dependencies.web-sys]
