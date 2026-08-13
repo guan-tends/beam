@@ -127,7 +127,7 @@ async fn no_echo_back_single_sender() {
 
     // The relay should relay ~100 messages (one per put).
     assert!(
-        relayed >= 90 && relayed <= 110,
+        (90..=110).contains(&relayed),
         "relay relayed {} messages for 100 puts — expected ~100",
         relayed
     );

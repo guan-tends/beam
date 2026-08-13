@@ -515,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_start_and_send() {
-        let mut ctx = ActorContext::new("test".to_string());
+        let ctx = ActorContext::new("test".to_string());
         let received = Arc::new(RwLock::new(Vec::new()));
         let actor = TestActor {
             received: received.clone(),
