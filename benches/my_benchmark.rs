@@ -55,6 +55,44 @@
 //! cargo bench --bench my_benchmark --features persy -- --save-baseline my
 //! ```
 //!
+//! ## Profiling
+//!
+//! A dedicated `[profile.profiling]` (inherits `release`, adds `debug = true`,
+//! `strip = false`) enables all three profiling tools against the actual
+//! benchmark workload — no mock binary, no separate example needed.
+//!
+//! ### Build
+//!
+//! ```sh
+//! cargo bench --bench my_benchmark --profile profiling --no-run
+//! # Binary: target/profiling/deps/my_benchmark-<hash>
+//! ```
+//!
+//! ### CPU Flame Graph (perf + inferno)
+//!
+//! `--profile-time N` runs the benchmark in a tight loop for N seconds with
+//! no warmup or analysis — designed for attaching profilers.
+//!
+//! ```sh
+//! BENCH=target/profiling/deps/my_benchmark-*
+//! perf record -F 99 -g -- $BENCH --bench router_dispatch_throughput --profile-time 5
+//! perf script | inferno-collapse-perf | inferno-flamegraph > /tmp/flamegraph.svg
+//! ```
+//!
+//! ### Heap Allocation Profile (heaptrack)
+//!
+//! ```sh
+//! heaptrack target/profiling/deps/my_benchmark-* --bench router_dispatch_throughput --profile-time 5
+//! heaptrack_print heaptrack.*.gz > /tmp/heaptrack.txt
+//! ```
+//!
+//! ### Allocation Lifetime Analysis (DHAT via valgrind)
+//!
+//! ```sh
+//! valgrind --tool=dhat target/profiling/deps/my_benchmark-* --bench router_dispatch_throughput --profile-time 5
+//! cat dhat.out.*
+//! ```
+//!
 //! ## Persistent state
 //!
 //! Benchmarks that touch real on-disk storage use `benches/_data/<group>/<backend>/`
@@ -750,7 +788,7 @@ fn actor_mailbox_benchmarks(c: &mut Criterion) {
             rt.block_on(async {
                 let start = std::time::Instant::now();
                 for _ in 0..iters {
-                    let mut ctx = ActorContext::new("bench".to_string());
+                    let ctx = ActorContext::new("bench".to_string());
                     let addr = ctx.start_actor(Box::new(EchoActor));
                     // Send 1000 messages and drain
                     for _ in 0..1000 {

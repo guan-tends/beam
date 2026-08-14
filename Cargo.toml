@@ -122,6 +122,14 @@ strip = true
 lto = true
 codegen-units = 1
 
+# Profiling build — release optimizations with debug symbols and no stripping.
+# Usage: cargo build --profile profiling --example profile_workload
+# Binary lands at target/profiling/examples/profile_workload
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
 # WASM-only extras for browser adapters
 [target.wasm32-unknown-unknown.dependencies.web-sys]
 version = "0.3"
