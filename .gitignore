@@ -11,3 +11,9 @@ pkg/
 beam.redb
 browser-test/_beam_test.html
 browser-test/_gun_test.html
+
+# Profiling artifacts
+perf.data
+perf.data.*
+heaptrack.*.gz
+dhat.out.*
