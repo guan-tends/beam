@@ -1,6 +1,6 @@
 //! HAM stale-data pre-filter E2E test.
 //!
-//! Verifies that the router's HAM (Hypothetical Amalgamation Model)
+//! Verifies that the router's HAM (Hypothetical Amnesia Machine)
 //! timestamp filter drops stale data before storage or relay —
 //! mirroring Gun.js's `ham()` function (`src/root.js` line 120).
 //!
