@@ -38,3 +38,25 @@ async fn local_put_10k() {
         10000.0 / elapsed.as_secs_f64()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "benchmark"]
+async fn local_put_100k() {
+    let mut node = Node::new_with_config(
+        Config::default(),
+        vec![Box::new(beam::adapters::MemoryStorage::new())],
+        vec![],
+    );
+
+    let start = Instant::now();
+    for i in 0..100_000 {
+        let key = format!("bench/{}", i);
+        let _ = node.get(&key).put(Value::Text(format!("msg_{}", i))).await;
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "[LOCAL] 100k puts done in {:.3}s ({:.0} puts/sec)",
+        elapsed.as_secs_f64(),
+        100000.0 / elapsed.as_secs_f64()
+    );
+}
