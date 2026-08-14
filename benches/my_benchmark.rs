@@ -89,8 +89,9 @@
 //! ### Allocation Lifetime Analysis (DHAT via valgrind)
 //!
 //! ```sh
-//! valgrind --tool=dhat target/profiling/deps/my_benchmark-* --bench router_dispatch_throughput --profile-time 5
-//! cat dhat.out.*
+//! valgrind --tool=dhat --dhat-out-file=bench/results/dhat.txt \
+//!     target/profiling/deps/my_benchmark-* --bench router_dispatch_throughput --profile-time 3
+//! # View in browser: file:///usr/libexec/valgrind/dh_view.html → Load → dhat.txt
 //! ```
 //!
 //! ## Persistent state

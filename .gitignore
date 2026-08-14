@@ -17,3 +17,4 @@ perf.data
 perf.data.*
 heaptrack.*.gz
 dhat.out.*
+bench/results/
