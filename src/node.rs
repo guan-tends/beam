@@ -359,7 +359,7 @@ impl Node {
             }
         }
         let is_replay = put.in_response_to.is_some();
-        for (node_id, node_data) in &put.updated_nodes {
+        for (node_id, node_data) in put.updated_nodes.iter() {
             if *node_id == *self.inner.uid.read() {
                 for (child, child_data) in node_data {
                     // Skip internal control keys
