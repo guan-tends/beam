@@ -11,6 +11,7 @@ use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
 use std::io::Write;
+use std::sync::Arc;
 
 // ─── JSON writing helpers ──────────────────────────────────────────
 // These helpers write JSON directly into a reusable `Vec<u8>` buffer,
@@ -136,7 +137,7 @@ pub struct Put {
     pub from: Addr,
     pub recipients: Option<HashSet<String>>,
     pub in_response_to: Option<String>,
-    pub updated_nodes: BTreeMap<String, Children>,
+    pub updated_nodes: Arc<BTreeMap<String, Children>>,
     pub checksum: Option<i32>,
     /// DAM peer-hop list
     pub peer_hop_list: Option<HashSet<String>>,
@@ -152,7 +153,7 @@ impl Put {
             from,
             recipients: None,
             in_response_to,
-            updated_nodes,
+            updated_nodes: Arc::new(updated_nodes),
             checksum: None,
             peer_hop_list: None,
         }
@@ -784,7 +785,7 @@ impl Message {
             from,
             recipients: None,
             in_response_to,
-            updated_nodes,
+            updated_nodes: Arc::new(updated_nodes),
             checksum,
             peer_hop_list,
         };

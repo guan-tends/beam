@@ -206,14 +206,14 @@ impl RedbStorage {
         let mut node_table = wtxn.open_table(BEAM_NODES)?;
         let mut meta_table = wtxn.open_table(BEAM_META)?;
 
-        for (node_id, update_data) in put.updated_nodes.into_iter().rev() {
+        for (node_id, update_data) in put.updated_nodes.iter().rev() {
             // Skip internal control keys (e.g. _flushed, _ack)
             if !node_id.is_empty() && node_id.starts_with('_') {
                 continue;
             }
 
             let mut children_for_node: BTreeMap<String, NodeData> =
-                match node_table.get(&*node_id)? {
+                match node_table.get(&**node_id)? {
                     Some(access_guard) => {
                         let bytes = access_guard.value();
                         postcard::from_bytes(bytes).unwrap_or_default()
@@ -223,17 +223,17 @@ impl RedbStorage {
 
             for (child_id, child_data) in update_data {
                 let should_write = !matches!(
-                    children_for_node.get(&child_id),
+                    children_for_node.get(child_id),
                     Some(existing) if existing.updated_at > child_data.updated_at
                 );
 
                 if should_write {
-                    children_for_node.insert(child_id, child_data);
+                    children_for_node.insert(child_id.clone(), child_data.clone());
                 }
             }
 
             if children_for_node.is_empty() {
-                node_table.remove(&*node_id)?;
+                node_table.remove(&**node_id)?;
             } else {
                 let bytes = postcard::to_allocvec(&children_for_node).map_err(|e| {
                     redb::Error::Io(std::io::Error::other(format!(
@@ -241,7 +241,7 @@ impl RedbStorage {
                         e
                     )))
                 })?;
-                node_table.insert(&*node_id, bytes.as_slice())?;
+                node_table.insert(&**node_id, bytes.as_slice())?;
             }
         }
 

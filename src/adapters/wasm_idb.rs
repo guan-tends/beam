@@ -367,7 +367,7 @@ impl WasmIdbStorage {
 
         // Write through to IndexedDB (async, fire-and-forget)
         if let Some(db) = &self.db {
-            for (node_id, update_data) in &put.updated_nodes {
+            for (node_id, update_data) in put.updated_nodes.iter() {
                 let serialized = WasmIdbStorage::serialize_children(update_data);
                 let tx = match db
                     .transaction_with_str_and_mode(&self.store_name, IdbTransactionMode::Readwrite)
@@ -438,7 +438,7 @@ impl WasmIdbStorage {
         // Write through to IndexedDB
         if let Some(db) = &self.db {
             for put in batch.puts.iter() {
-                for (node_id, update_data) in &put.updated_nodes {
+                for (node_id, update_data) in put.updated_nodes.iter() {
                     let serialized = WasmIdbStorage::serialize_children(update_data);
                     let tx = match db.transaction_with_str_and_mode(
                         &self.store_name,

@@ -415,6 +415,14 @@ impl Addr {
         self.sender.send(msg.into())
     }
 
+    /// Returns the unique identifier of this actor address.
+    ///
+    /// The id is a random 32-character alphanumeric string, generated at
+    /// address creation. Two `Addr`s are equal iff their ids match.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// Returns a no-op address that silently drops all messages.
     ///
     /// Useful as a placeholder before a real address is set.
@@ -480,6 +488,17 @@ mod tests {
     fn test_addr_noop_sends_silently() {
         let addr = Addr::noop();
         assert_eq!(addr.id.len(), 32);
+    }
+
+    #[test]
+    fn test_addr_id_accessor() {
+        let (s, _r) = crate::mailbox::mailbox(16);
+        let addr = Addr::new(s);
+        assert_eq!(addr.id().len(), 32);
+        assert!(addr.id().chars().all(|c| c.is_ascii_alphanumeric()));
+        // Display format is "actor:{id}" — id() should return the raw id without prefix
+        assert_ne!(addr.id(), format!("{}", addr));
+        assert!(format!("{}", addr).ends_with(addr.id()));
     }
 
     #[test]

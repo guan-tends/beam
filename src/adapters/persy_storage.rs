@@ -236,7 +236,7 @@ impl PersyStorage {
         segment_id: persy::SegmentId,
         put: Put,
     ) -> Result<(), String> {
-        for (node_id, update_data) in put.updated_nodes.into_iter().rev() {
+        for (node_id, update_data) in put.updated_nodes.iter().rev() {
             // Skip internal control keys (e.g. _flushed, _ack). Same
             // convention as redb_storage — internal sentinels must not
             // end up in the segment as if they were real graph nodes.
@@ -280,10 +280,10 @@ impl PersyStorage {
 
             // Merge new children (new wins per child unless existing is newer).
             for (k, v) in update_data {
-                match existing_children.get(&k) {
+                match existing_children.get(k) {
                     Some(existing) if existing.updated_at >= v.updated_at => {}
                     _ => {
-                        existing_children.insert(k, v);
+                        existing_children.insert(k.clone(), v.clone());
                     }
                 }
             }
