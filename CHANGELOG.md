@@ -16,7 +16,7 @@ pre-filter for "avoid work" optimization.
 
 ### Added
 
-- **HAM (Historical Acknowledged Memory) pre-filter** (`src/router.rs`):
+- **HAM (Hypothetical Amnesia Machine) pre-filter** (`src/router.rs`):
   Router-maintained timestamp index that checks incoming Put timestamps
   against cached state before any storage/relay work. Mirrors Gun.js
   `ham()` function — eliminates redundant processing for stale data.

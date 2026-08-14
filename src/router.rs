@@ -224,7 +224,7 @@ pub struct Router {
     /// interval.
     quorum_entries: BoundedHashMap<String, QuorumEntry>,
 
-    /// HAM (Hypothetical Amalgamation Model) timestamp index for
+    /// HAM (Hypothetical Amnesia Machine) timestamp index for
     /// stale-data pre-filtering.
     ///
     /// Maps `soul → (key → latest known updated_at)`. Used by
@@ -997,7 +997,7 @@ impl Router {
         debug!("forwarded flush to {} storage write adapters", sent.len());
     }
 
-    /// HAM (Hypothetical Amalgamation Model) stale-data pre-filter.
+    /// HAM (Hypothetical Amnesia Machine) stale-data pre-filter.
     ///
     /// Compares each `(soul, key)` pair in `put` against the router's
     /// timestamp index ([`ham_cache`](Self::ham_cache)). If every pair
