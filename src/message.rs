@@ -11,7 +11,8 @@ use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryFrom;
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use bytes::Bytes;
 
 // ─── JSON writing helpers ──────────────────────────────────────────
 // These helpers write JSON directly into a reusable `Vec<u8>` buffer,
@@ -131,7 +132,7 @@ impl Get {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Put {
     pub id: String,
     pub from: Addr,
@@ -141,6 +142,32 @@ pub struct Put {
     pub checksum: Option<i32>,
     /// DAM peer-hop list
     pub peer_hop_list: Option<HashSet<String>>,
+    /// Cached wire-format bytes, populated on first serialization for relay.
+    ///
+    /// Mirrors Gun.js's `meta.raw` (`src/mesh.js`): serialize once, reuse
+    /// for all peers. Behind [`OnceLock`] for lock-free interior
+    /// mutability within `Arc<Put>`. The first [`Put::to_writer`] (or
+    /// [`Put::get_or_serialize`]) call populates this; subsequent calls
+    /// return the cached bytes without re-serializing.
+    ///
+    /// Reset to empty on [`Clone`] — each clone is a distinct message
+    /// with potentially different fields (e.g. `peer_hop_list`).
+    raw: OnceLock<Bytes>,
+}
+
+impl Clone for Put {
+    fn clone(&self) -> Self {
+        Put {
+            id: self.id.clone(),
+            from: self.from.clone(),
+            recipients: self.recipients.clone(),
+            in_response_to: self.in_response_to.clone(),
+            updated_nodes: Arc::clone(&self.updated_nodes),
+            checksum: self.checksum,
+            peer_hop_list: self.peer_hop_list.clone(),
+            raw: OnceLock::new(),
+        }
+    }
 }
 impl Put {
     pub fn new(
@@ -156,6 +183,7 @@ impl Put {
             updated_nodes: Arc::new(updated_nodes),
             checksum: None,
             peer_hop_list: None,
+            raw: OnceLock::new(),
         }
     }
 
@@ -269,6 +297,33 @@ impl Put {
         }
 
         buf.push(b'}');
+    }
+
+    /// Returns cached wire-format bytes, serializing on first call.
+    ///
+    /// Mirrors Gun.js's `meta.raw` pattern (`src/mesh.js`): the first
+    /// call serializes the Put to JSON and stores the result in
+    /// [`Put::raw`] (a [`OnceLock`]). Subsequent calls return the
+    /// cached [`Bytes`] without re-serializing — a cheap refcount bump.
+    ///
+    /// This is the primary serialization entry point for the relay path.
+    /// When a Put is relayed to N peers via `Arc::clone`, all N WsConn
+    /// actors share the same `OnceLock` — only the first serializes.
+    ///
+    /// For non-relay paths (incoming messages, storage acks), use
+    /// [`to_writer`](Self::to_writer) directly — those Puts are not
+    /// shared across multiple consumers.
+    pub fn get_or_serialize(&self) -> Bytes {
+        if let Some(cached) = self.raw.get() {
+            return cached.clone();
+        }
+        let mut buf = Vec::with_capacity(256);
+        self.to_writer(&mut buf);
+        let bytes = Bytes::from(buf);
+        // Best-effort populate — if another thread won the race,
+        // `set` returns Err and we just use our local copy.
+        let _ = self.raw.set(bytes.clone());
+        bytes
     }
 
     /// Serializes to Gun.js wire format as a `String`.
@@ -444,43 +499,55 @@ pub enum Message {
 
 impl Message {
     /// Serializes to Gun.js wire format into a reusable buffer.
-    ///
-    /// Dispatches to the variant's `to_writer` method. Internal messages
-    /// (`CheckQuorumTimeouts`, `RegisterQuorum`) are never serialized to
-    /// wire — they produce sentinel strings for backwards compatibility.
-    ///
-    /// After warmup, the buffer capacity is reused — zero allocations.
-    pub fn to_writer(&self, buf: &mut Vec<u8>) {
-        match self {
-            Message::Get(get) => get.to_writer(buf),
-            Message::Put(put) => put.to_writer(buf),
-            Message::BatchPut(batch) => batch.to_writer(buf),
-            Message::Flush(flush) => {
+///
+/// Dispatches to the variant's `to_writer` method. For `Message::Put`,
+/// checks the [`Put::raw`] cache first — if populated (by a prior
+/// [`Put::get_or_serialize`] call), the cached bytes are written directly
+/// without re-serializing. This mirrors Gun.js's `meta.raw` reuse.
+///
+/// Internal messages (`CheckQuorumTimeouts`, `RegisterQuorum`) are never
+/// serialized to wire — they produce sentinel strings for backwards
+/// compatibility.
+///
+/// After warmup, the buffer capacity is reused — zero allocations.
+pub fn to_writer(&self, buf: &mut Vec<u8>) {
+    match self {
+        Message::Put(put) => {
+            if let Some(cached) = put.raw.get() {
                 buf.clear();
-                buf.extend_from_slice(b"{\"dam\":\"flush\",\"#\":");
-                write_json_str(buf, &flush.id);
-                buf.push(b'}');
-            }
-            Message::Hi { from: _, peer_id } => {
-                buf.clear();
-                buf.extend_from_slice(b"{\"dam\":\"hi\",\"#\":");
-                write_json_str(buf, peer_id);
-                buf.push(b'}');
-            }
-            Message::RtcSignal(rtc) => rtc.to_writer(buf),
-            Message::CheckQuorumTimeouts => {
-                buf.clear();
-                buf.extend_from_slice(b"_tick_quorum");
-            }
-            Message::RegisterQuorum { put_id, .. } => {
-                debug!(
-                    "internal RegisterQuorum({}) should not reach to_writer",
-                    put_id
-                );
-                buf.clear();
+                buf.extend_from_slice(&cached);
+            } else {
+                put.to_writer(buf);
             }
         }
+        Message::Get(get) => get.to_writer(buf),
+        Message::BatchPut(batch) => batch.to_writer(buf),
+        Message::Flush(flush) => {
+            buf.clear();
+            buf.extend_from_slice(b"{\"dam\":\"flush\",\"#\":");
+            write_json_str(buf, &flush.id);
+            buf.push(b'}');
+        }
+        Message::Hi { from: _, peer_id } => {
+            buf.clear();
+            buf.extend_from_slice(b"{\"dam\":\"hi\",\"#\":");
+            write_json_str(buf, peer_id);
+            buf.push(b'}');
+        }
+        Message::RtcSignal(rtc) => rtc.to_writer(buf),
+        Message::CheckQuorumTimeouts => {
+            buf.clear();
+            buf.extend_from_slice(b"_tick_quorum");
+        }
+        Message::RegisterQuorum { put_id, .. } => {
+            debug!(
+                "internal RegisterQuorum({}) should not reach to_writer",
+                put_id
+            );
+            buf.clear();
+        }
     }
+}
 
     /// Serializes to Gun.js wire format as a `String`.
     ///
@@ -788,6 +855,7 @@ impl Message {
             updated_nodes: Arc::new(updated_nodes),
             checksum,
             peer_hop_list,
+            raw: OnceLock::new(),
         };
         Ok(Message::Put(put))
     }
@@ -1141,5 +1209,106 @@ mod tests {
             res.is_ok(),
             "~@alias registry should be accepted without sig verification"
         );
+    }
+
+    // ── Sprint 1: Serialized Message Caching ──────────────────────
+
+    use crate::message::{Get, Put};
+    use crate::types::{Children, NodeData, Value};
+    use std::collections::BTreeMap;
+
+    /// Build a Put with a single soul/key/value for cache tests.
+    fn make_test_put() -> Put {
+        let mut children = Children::new();
+        children.insert(
+            "key".to_string(),
+            NodeData {
+                value: Value::Text("hello".to_string()),
+                updated_at: 1000.0,
+            },
+        );
+        let mut nodes = BTreeMap::new();
+        nodes.insert("soul1".to_string(), children);
+        Put::new(nodes, None, Addr::noop())
+    }
+
+    #[test]
+    fn raw_cache_starts_empty() {
+        let put = make_test_put();
+        assert!(put.raw.get().is_none(), "raw cache must start as None");
+    }
+
+    #[test]
+    fn raw_cache_resets_on_clone() {
+        let put = make_test_put();
+        // Populate cache
+        let _bytes = put.get_or_serialize();
+        assert!(put.raw.get().is_some(), "cache must be populated after get_or_serialize");
+
+        // Clone — cache should reset
+        let cloned = put.clone();
+        assert!(cloned.raw.get().is_none(), "cache must reset to None on clone");
+    }
+
+    #[test]
+    fn get_or_serialize_populates_cache() {
+        let put = make_test_put();
+        // First call serializes and populates cache
+        let bytes1 = put.get_or_serialize();
+        assert!(!bytes1.is_empty(), "serialized bytes must not be empty");
+        assert!(put.raw.get().is_some(), "cache must be populated after first call");
+
+        // Second call returns cached bytes — same content
+        let bytes2 = put.get_or_serialize();
+        assert_eq!(bytes1.as_ref(), bytes2.as_ref(), "cached bytes must match first serialization");
+    }
+
+    #[test]
+    fn message_to_writer_uses_put_cache() {
+        let put = make_test_put();
+        let msg = Message::Put(put);
+
+        // Serialize via Message::to_writer (populates cache via Put path)
+        let mut buf1 = Vec::new();
+        msg.to_writer(&mut buf1);
+
+        // Serialize again — should use cache, same output
+        let mut buf2 = Vec::new();
+        msg.to_writer(&mut buf2);
+
+        assert_eq!(buf1, buf2, "second to_writer must produce identical bytes via cache");
+    }
+
+    #[test]
+    fn non_put_messages_bypass_cache() {
+        // Get messages don't have a cache — verify to_writer still works
+        let get = Get::new("test_soul".to_string(), None, Addr::noop());
+        let msg = Message::Get(get);
+
+        let mut buf1 = Vec::new();
+        msg.to_writer(&mut buf1);
+
+        let mut buf2 = Vec::new();
+        msg.to_writer(&mut buf2);
+
+        assert_eq!(buf1, buf2, "non-Put messages must serialize identically");
+    }
+
+    #[test]
+    fn cached_bytes_match_direct_serialization() {
+        let put = make_test_put();
+        let msg = Message::Put(put);
+
+        // Direct serialization (populates cache)
+        let mut direct_buf = Vec::new();
+        msg.to_writer(&mut direct_buf);
+        let direct = String::from_utf8(direct_buf).unwrap();
+
+        // get_or_serialize should return same bytes
+        if let Message::Put(ref put) = msg {
+            let cached = put.get_or_serialize();
+            let cached_str = String::from_utf8(cached.to_vec()).unwrap();
+            assert_eq!(direct, cached_str, "cached bytes must match direct serialization");
+        }
     }
 }
