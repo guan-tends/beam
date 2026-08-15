@@ -54,7 +54,7 @@ use crate::utils::{BoundedHashMap, try_send_or_log};
 use async_trait::async_trait;
 use log::{debug, error, info};
 use rand::{rng, seq::IteratorRandom};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use web_time::Instant;
@@ -163,6 +163,30 @@ impl QuorumEntry {
 /// - `peer_addrs` — mapping of peer IDs to addresses (for WebRTC signaling)
 /// - `server_peers` — outgoing WebSocket peers (subscribed to everything)
 /// - `subscribers_by_topic` — topic → set of interested peer addresses
+/// Result of HAM (Hypothetical Amnesia Machine) stale-data filtering.
+///
+/// Mirrors Gun.js's per-key `ham()` function (`src/root.js` line 120):
+/// each (soul, key) pair is independently evaluated. Stale keys are
+/// dropped; only new keys proceed to storage and relay.
+///
+/// # Variants
+///
+/// - [`Stale`](Self::Stale): all entries stale — drop the Put entirely.
+/// - [`New`](Self::New): all entries new — proceed with the original
+///   `&Put` unchanged. Zero allocation overhead.
+/// - [`PartiallyNew`](Self::PartiallyNew): some entries new — only the
+///   filtered `updated_nodes` should proceed. The caller constructs a
+///   Put with these entries only.
+#[derive(Debug)]
+pub enum HamFilterResult {
+    /// All entries stale — drop the Put entirely.
+    Stale,
+    /// All entries new — proceed with the original Put unchanged.
+    New,
+    /// Some entries new — only the filtered `updated_nodes` should proceed.
+    PartiallyNew(Arc<BTreeMap<String, Children>>),
+}
+
 ///
 /// # Deduplication
 ///
@@ -646,21 +670,33 @@ impl Router {
                 // HAM pre-filter: skip stale data before storage/relay.
                 // Only applies to non-ack Puts — acks and get-responses
                 // bypass HAM (they are control messages, not data writes).
-                if !self.ham_filter(put) {
-                    self.metrics.record_dropped_ham();
-                    debug!("ham: dropped stale put {}", put.id);
-                    return;
-                }
+                //
+                // Per-key filtering: if some keys are stale and others are
+                // new, only the new keys proceed to storage and relay.
+                // Mirrors Gun.js's per-key `ham()` inside its `while` loop.
+                let effective_put: Put;
+                let put_ref: &Put = match self.ham_filter(put) {
+                    HamFilterResult::Stale => {
+                        self.metrics.record_dropped_ham();
+                        debug!("ham: dropped stale put {}", put.id);
+                        return;
+                    }
+                    HamFilterResult::New => put,
+                    HamFilterResult::PartiallyNew(filtered_nodes) => {
+                        effective_put = put.with_updated_nodes(filtered_nodes);
+                        &effective_put
+                    }
+                };
 
                 // Forward to storage write adapter(s)
                 for addr in self.write_adapters.iter() {
-                    if put.from == *addr {
+                    if put_ref.from == *addr {
                         continue;
                     }
-                    let _res = addr.send(Message::Put(put.clone()));
+                    let _res = addr.send(Message::Put(put_ref.clone()));
                 }
                 // Network relay is handled by handle_put_relay for batching
-                self.handle_put_relay(put);
+                self.handle_put_relay(put_ref);
             }
         };
     }
@@ -970,12 +1006,21 @@ impl Router {
                 continue;
             }
             // HAM pre-filter: skip stale constituent puts before relay.
-            if !self.ham_filter(put) {
-                self.metrics.record_dropped_ham();
-                debug!("ham: dropped stale batch put {}", put.id);
-                continue;
-            }
-            self.handle_put_relay(put);
+            // Per-key filtering applies here too — only new keys are relayed.
+            let batch_effective_put: Put;
+            let batch_put_ref: &Put = match self.ham_filter(put) {
+                HamFilterResult::Stale => {
+                    self.metrics.record_dropped_ham();
+                    debug!("ham: dropped stale batch put {}", put.id);
+                    continue;
+                }
+                HamFilterResult::New => put,
+                HamFilterResult::PartiallyNew(filtered_nodes) => {
+                    batch_effective_put = put.with_updated_nodes(filtered_nodes);
+                    &batch_effective_put
+                }
+            };
+            self.handle_put_relay(batch_put_ref);
         }
     }
 
@@ -1028,25 +1073,36 @@ impl Router {
     ///
     /// # Edge Cases
     ///
-    /// - Empty `updated_nodes` → `true` (no data to filter — mirrors
-    ///   Gun.js where the key loop doesn't execute).
-    /// - First-seen soul/key → `true` (cache miss = proceed).
+    /// - Empty `updated_nodes` → [`HamFilterResult::New`] (no data to
+    ///   filter — mirrors Gun.js where the key loop doesn't execute).
+    /// - First-seen soul/key → new (cache miss = proceed).
     /// - Future timestamps → accepted (not deferred — the router is
     ///   synchronous; Gun.js defers via `setTimeout`, which is a
     ///   timing optimization, not a correctness requirement).
-    /// - Same timestamp, different value → `false` (existing wins).
-    fn ham_filter(&mut self, put: &Put) -> bool {
+    /// - Same timestamp, different value → stale (existing wins).
+    ///
+    /// # Per-Key Filtering
+    ///
+    /// Unlike the previous whole-Put bool return, this method evaluates
+    /// each (soul, key) pair independently — exactly as Gun.js's `ham()`
+    /// does inside its `while` loop. When some keys are stale and others
+    /// are new, [`HamFilterResult::PartiallyNew`] is returned with a
+    /// filtered `updated_nodes` containing only the new entries.
+    fn ham_filter(&mut self, put: &Put) -> HamFilterResult {
         // Gun.js iterates keys in a `while` loop, calling `ham()` per key.
         // If there are no keys, the loop doesn't execute and the message
         // proceeds normally. Empty `updated_nodes` → no data to filter →
         // allow through.
         if put.updated_nodes.is_empty() {
-            return true;
+            return HamFilterResult::New;
         }
 
-        let mut has_newer = false;
+        let mut has_stale = false;
+        let mut has_new = false;
+        let mut filtered = BTreeMap::new();
 
         for (soul, children) in put.updated_nodes.iter() {
+            let mut filtered_children = Children::new();
             for (key, node_data) in children {
                 // Check if this (soul, key) is stale.
                 let is_stale = self
@@ -1056,13 +1112,15 @@ impl Router {
                     .is_some_and(|&cached_at| node_data.updated_at <= cached_at);
 
                 if is_stale {
+                    has_stale = true;
                     continue;
                 }
 
-                // This key is newer (or unseen) — the Put should proceed.
-                has_newer = true;
+                // This key is newer (or unseen) — include it.
+                has_new = true;
+                filtered_children.insert(key.clone(), node_data.clone());
 
-                // Ensure the inner map exists for this soul, then update.
+                // Update the HAM cache for this (soul, key).
                 if self.ham_cache.get(soul).is_none() {
                     self.ham_cache.insert(soul.clone(), HashMap::new());
                 }
@@ -1070,9 +1128,16 @@ impl Router {
                     inner.insert(key.clone(), node_data.updated_at);
                 }
             }
+            if !filtered_children.is_empty() {
+                filtered.insert(soul.clone(), filtered_children);
+            }
         }
 
-        has_newer
+        match (has_stale, has_new) {
+            (false, _) => HamFilterResult::New,
+            (_, false) => HamFilterResult::Stale,
+            (true, true) => HamFilterResult::PartiallyNew(Arc::new(filtered)),
+        }
     }
 
     /// Checks if a message ID has been seen, and tracks it if not.
@@ -1170,26 +1235,26 @@ mod tests {
     }
 
     #[test]
-    fn ham_filter_first_seen_returns_true() {
+    fn ham_filter_first_seen_returns_new() {
         // No cache entry → cache miss = proceed.
         let metrics = Arc::new(Metrics::new());
         let mut router = Router::new(vec![], vec![], metrics);
         let put = make_put("soul1", "key1", "hello", 100.0);
-        assert!(router.ham_filter(&put));
+        assert!(matches!(router.ham_filter(&put), HamFilterResult::New));
     }
 
     #[test]
-    fn ham_filter_newer_returns_true_and_updates_cache() {
+    fn ham_filter_newer_returns_new_and_updates_cache() {
         let metrics = Arc::new(Metrics::new());
         let mut router = Router::new(vec![], vec![], metrics);
 
         // First put — populates cache with ts=100.
         let put1 = make_put("soul1", "key1", "v1", 100.0);
-        assert!(router.ham_filter(&put1));
+        assert!(matches!(router.ham_filter(&put1), HamFilterResult::New));
 
         // Second put — newer timestamp.
         let put2 = make_put("soul1", "key1", "v2", 200.0);
-        assert!(router.ham_filter(&put2));
+        assert!(matches!(router.ham_filter(&put2), HamFilterResult::New));
 
         // Cache should now have ts=200.
         let cached = router
@@ -1200,45 +1265,53 @@ mod tests {
     }
 
     #[test]
-    fn ham_filter_stale_returns_false() {
+    fn ham_filter_stale_returns_stale() {
         let metrics = Arc::new(Metrics::new());
         let mut router = Router::new(vec![], vec![], metrics);
 
         // Populate cache with ts=200.
         let put1 = make_put("soul1", "key1", "v1", 200.0);
-        assert!(router.ham_filter(&put1));
+        assert!(matches!(router.ham_filter(&put1), HamFilterResult::New));
 
         // Stale put — older timestamp → should be filtered.
         let put2 = make_put("soul1", "key1", "v0", 100.0);
-        assert!(!router.ham_filter(&put2));
+        assert!(matches!(router.ham_filter(&put2), HamFilterResult::Stale));
     }
 
     #[test]
-    fn ham_filter_same_timestamp_returns_false() {
+    fn ham_filter_same_timestamp_returns_stale() {
         // Same timestamp = existing wins the tie.
         let metrics = Arc::new(Metrics::new());
         let mut router = Router::new(vec![], vec![], metrics);
 
         let put1 = make_put("soul1", "key1", "v1", 150.0);
-        assert!(router.ham_filter(&put1));
+        assert!(matches!(router.ham_filter(&put1), HamFilterResult::New));
 
         // Same ts, different value → stale (existing wins).
         let put2 = make_put("soul1", "key1", "v2", 150.0);
-        assert!(!router.ham_filter(&put2));
+        assert!(matches!(router.ham_filter(&put2), HamFilterResult::Stale));
     }
 
     #[test]
-    fn ham_filter_mixed_stale_and_newer_returns_true() {
+    fn ham_filter_mixed_stale_and_newer_returns_partially_new() {
         let metrics = Arc::new(Metrics::new());
         let mut router = Router::new(vec![], vec![], metrics);
 
         // Populate cache: key1@100, key2@100.
         let put1 = make_multi_put("soul1", &[("key1", "v1", 100.0), ("key2", "v2", 100.0)]);
-        assert!(router.ham_filter(&put1));
+        assert!(matches!(router.ham_filter(&put1), HamFilterResult::New));
 
-        // Mixed: key1 stale (50), key2 newer (200) → should proceed.
+        // Mixed: key1 stale (50), key2 newer (200) → partially new.
         let put2 = make_multi_put("soul1", &[("key1", "old", 50.0), ("key2", "new", 200.0)]);
-        assert!(router.ham_filter(&put2));
+        match router.ham_filter(&put2) {
+            HamFilterResult::PartiallyNew(filtered) => {
+                // Only key2 should be in the filtered result.
+                let children = filtered.get("soul1").expect("soul1 must exist");
+                assert!(children.contains_key("key2"), "key2 must be present (newer)");
+                assert!(!children.contains_key("key1"), "key1 must be absent (stale)");
+            }
+            other => panic!("expected PartiallyNew, got {:?}", other),
+        }
 
         // Cache should reflect the newer key2 timestamp.
         let cached_k2 = router
@@ -1249,28 +1322,28 @@ mod tests {
     }
 
     #[test]
-    fn ham_filter_empty_put_returns_true() {
+    fn ham_filter_empty_put_returns_new() {
         // No updated_nodes → no data to filter → allow through.
         // Gun.js: the `while` loop over keys doesn't execute, so `ham()`
         // is never called and the message proceeds normally.
         let metrics = Arc::new(Metrics::new());
         let mut router = Router::new(vec![], vec![], metrics);
         let put = Put::new(BTreeMap::new(), None, Addr::noop());
-        assert!(router.ham_filter(&put));
+        assert!(matches!(router.ham_filter(&put), HamFilterResult::New));
     }
 
     #[test]
-    fn ham_filter_different_soul_is_newer() {
+    fn ham_filter_different_soul_is_new() {
         // Same key under a different soul is a cache miss → proceed.
         let metrics = Arc::new(Metrics::new());
         let mut router = Router::new(vec![], vec![], metrics);
 
         let put1 = make_put("soulA", "key1", "v1", 100.0);
-        assert!(router.ham_filter(&put1));
+        assert!(matches!(router.ham_filter(&put1), HamFilterResult::New));
 
         // soulB/key1 — different soul, no cache → proceed.
         let put2 = make_put("soulB", "key1", "v2", 50.0);
-        assert!(router.ham_filter(&put2));
+        assert!(matches!(router.ham_filter(&put2), HamFilterResult::New));
     }
 
     #[test]
@@ -1280,11 +1353,11 @@ mod tests {
         let mut router = Router::new(vec![], vec![], metrics);
 
         let put1 = make_put("soul1", "key1", "v1", 100.0);
-        assert!(router.ham_filter(&put1));
+        assert!(matches!(router.ham_filter(&put1), HamFilterResult::New));
 
         // Future ts (much larger) → newer → proceed.
         let put2 = make_put("soul1", "key1", "v2", 9999999999.0);
-        assert!(router.ham_filter(&put2));
+        assert!(matches!(router.ham_filter(&put2), HamFilterResult::New));
     }
 
     // ========================================================================
