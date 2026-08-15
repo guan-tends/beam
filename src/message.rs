@@ -193,6 +193,29 @@ impl Put {
         Put::new(updated_nodes, None, from)
     }
 
+    /// Creates a filtered copy of this Put with only the specified
+    /// `updated_nodes`.
+    ///
+    /// Used by per-key HAM filtering ([`crate::router::HamFilterResult`])
+    /// when a Put contains a mix of stale and new keys. The filtered Put
+    /// retains all metadata (id, from, recipients, etc.) but replaces
+    /// `updated_nodes` with only the new entries.
+    ///
+    /// The checksum is reset to `None` — it will be recomputed on
+    /// serialization since the `put` sub-object has changed.
+    pub fn with_updated_nodes(&self, updated_nodes: Arc<BTreeMap<String, Children>>) -> Put {
+        Put {
+            id: self.id.clone(),
+            from: self.from.clone(),
+            recipients: self.recipients.clone(),
+            in_response_to: self.in_response_to.clone(),
+            updated_nodes,
+            checksum: None, // recompute — put sub-object changed
+            peer_hop_list: self.peer_hop_list.clone(),
+            raw: OnceLock::new(),
+        }
+    }
+
     /// Serializes to Gun.js wire format into a reusable buffer.
     ///
     /// Writes compact JSON directly into `buf`, avoiding the intermediate
