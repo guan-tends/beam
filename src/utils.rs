@@ -16,7 +16,23 @@
 
 use rand::distr::Alphanumeric;
 use rand::{Rng, rng};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+use std::hash::BuildHasherDefault;
+
+/// Default hasher for non-cryptographic HashMaps/HashSets in BEAM.
+///
+/// Uses FxHash — the same hasher used by the Rust compiler itself.
+/// FxHash is ~3-4× faster than SipHash (std default) but is NOT
+/// HashDoS-resistant. This is acceptable for BEAM's P2P relay context
+/// where peers are semi-trusted (must connect via WebSocket first).
+///
+/// For cryptographic contexts (e.g. `sea::session`), use std's default
+/// `HashMap` with `RandomState` (SipHash) instead.
+pub type DefaultHasher = BuildHasherDefault<rustc_hash::FxHasher>;
+
+// Re-export FxHashMap and FxHashSet for convenient use across all BEAM modules.
+// These use FxHash (non-cryptographic, fast) — see `DefaultHasher` docs.
+pub use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Generates a random alphanumeric string of the given length.
 ///
@@ -55,23 +71,27 @@ pub fn random_string(len: usize) -> String {
 /// map.insert("a", 1);
 /// map.insert("b", 2);
 /// ```
-pub struct BoundedHashMap<K, V> {
-    map: HashMap<K, V>,
+pub struct BoundedHashMap<K, V, S = DefaultHasher> {
+    map: FxHashMap<K, V>,
     queue: VecDeque<K>,
     max_entries: usize,
+    _marker: std::marker::PhantomData<S>,
 }
 
 impl<K: Clone + std::hash::Hash + std::cmp::Eq, V> BoundedHashMap<K, V> {
     /// Creates a new `BoundedHashMap` with the given maximum capacity.
+    ///
+    /// Uses the default FxHash hasher for non-cryptographic hashing.
     ///
     /// # Panics
     ///
     /// Does not panic; a capacity of 0 will simply evict on every insert.
     pub fn new(max_entries: usize) -> Self {
         BoundedHashMap {
-            map: HashMap::new(),
+            map: FxHashMap::default(),
             queue: VecDeque::new(),
             max_entries,
+            _marker: std::marker::PhantomData,
         }
     }
 

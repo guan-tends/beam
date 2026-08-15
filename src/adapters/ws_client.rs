@@ -17,7 +17,7 @@
 //! connectivity is unavailable.
 
 use http::Uri;
-use std::collections::HashMap;
+use crate::utils::FxHashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_websockets::ClientBuilder;
@@ -44,7 +44,7 @@ use web_time::Duration;
 #[derive(Clone)]
 pub struct OutgoingWebsocketManager {
     config: Config,
-    clients: Arc<RwLock<HashMap<String, Addr>>>,
+    clients: Arc<RwLock<FxHashMap<String, Addr>>>,
     urls: Vec<String>,
 }
 
@@ -58,7 +58,7 @@ impl OutgoingWebsocketManager {
     pub fn new(config: Config, urls: Vec<String>) -> Self {
         OutgoingWebsocketManager {
             urls,
-            clients: Arc::new(RwLock::new(HashMap::new())),
+            clients: Arc::new(RwLock::new(FxHashMap::default())),
             config,
         }
     }

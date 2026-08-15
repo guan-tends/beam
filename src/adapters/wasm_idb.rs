@@ -32,7 +32,8 @@ use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
 use async_trait::async_trait;
 use log::{error, info, warn};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use crate::utils::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
@@ -54,7 +55,7 @@ pub struct WasmIdbStorage {
     /// In-memory write cache for fast reads of recently written data.
     /// IndexedDB reads are async; the cache provides synchronous reads
     /// for data that was recently written.
-    cache: Arc<parking_lot::RwLock<HashMap<String, Children>>>,
+    cache: Arc<parking_lot::RwLock<FxHashMap<String, Children>>>,
     /// Database name (default: "beam").
     db_name: String,
     /// Object store name (default: "beam_data").
@@ -71,7 +72,7 @@ impl WasmIdbStorage {
     pub fn new() -> Self {
         Self {
             db: None,
-            cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            cache: Arc::new(parking_lot::RwLock::new(FxHashMap::default())),
             db_name: "beam".to_string(),
             store_name: "beam_data".to_string(),
             db_ready: false,
@@ -82,7 +83,7 @@ impl WasmIdbStorage {
     pub fn with_name(db_name: &str) -> Self {
         Self {
             db: None,
-            cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            cache: Arc::new(parking_lot::RwLock::new(FxHashMap::default())),
             db_name: db_name.to_string(),
             store_name: "beam_data".to_string(),
             db_ready: false,
@@ -190,7 +191,7 @@ impl WasmIdbStorage {
     /// Serializes Children to a JSON string for IndexedDB storage.
     fn serialize_children(children: &Children) -> String {
         // Convert BTreeMap<String, NodeData> to a serializable format
-        let map: HashMap<String, (Value, f64)> = children
+        let map: FxHashMap<String, (Value, f64)> =children
             .iter()
             .map(|(k, v)| (k.clone(), (v.value.clone(), v.updated_at)))
             .collect();
@@ -202,7 +203,7 @@ impl WasmIdbStorage {
         if json.is_empty() {
             return BTreeMap::new();
         }
-        let map: HashMap<String, (Value, f64)> = match serde_json::from_str(json) {
+        let map: FxHashMap<String, (Value, f64)> =match serde_json::from_str(json) {
             Ok(m) => m,
             Err(e) => {
                 warn!("WasmIdbStorage: deserialize error: {}", e);
@@ -331,7 +332,7 @@ impl WasmIdbStorage {
         };
         let mut reply_with_nodes = BTreeMap::new();
         reply_with_nodes.insert(get.node_id.clone(), reply_with_children);
-        let mut recipients = HashSet::new();
+        let mut recipients = FxHashSet::default();
         recipients.insert(get.from.clone());
         let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
         let _ = get.from.send(Message::Put(put));

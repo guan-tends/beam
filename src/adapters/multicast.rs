@@ -52,7 +52,7 @@
 use base64::prelude::*;
 use oko_multicast_socket::{MulticastOptions, MulticastSocket, all_ipv4_interfaces};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::utils::FxHashMap;
 use std::net::SocketAddrV4;
 use web_time::{Duration, Instant};
 
@@ -135,7 +135,7 @@ struct ChunkFields {
 #[derive(Debug)]
 struct ReassemblyBuffer {
     /// Active reassembly slots, keyed by message ID.
-    slots: HashMap<String, PartialMessage>,
+    slots: FxHashMap<String, PartialMessage>,
 }
 
 /// A partially-reassembled message awaiting remaining chunks.
@@ -153,7 +153,7 @@ impl ReassemblyBuffer {
     /// Creates a new empty reassembly buffer.
     fn new() -> Self {
         Self {
-            slots: HashMap::new(),
+            slots: FxHashMap::default(),
         }
     }
 

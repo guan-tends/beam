@@ -8,7 +8,8 @@ use java_utils::HashCode;
 use log::{debug, error};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::{Value as JsonValue, json};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+use crate::utils::FxHashSet;
 use std::convert::TryFrom;
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
@@ -74,7 +75,7 @@ fn write_json_value(buf: &mut Vec<u8>, value: &Value) {
 pub struct Get {
     pub id: String,
     pub from: Addr,
-    pub recipients: Option<HashSet<String>>,
+    pub recipients: Option<FxHashSet<String>>,
     pub node_id: String,
     pub checksum: Option<i32>,
     pub child_key: Option<String>,
@@ -136,12 +137,12 @@ impl Get {
 pub struct Put {
     pub id: String,
     pub from: Addr,
-    pub recipients: Option<HashSet<String>>,
+    pub recipients: Option<FxHashSet<String>>,
     pub in_response_to: Option<String>,
     pub updated_nodes: Arc<BTreeMap<String, Children>>,
     pub checksum: Option<i32>,
     /// DAM peer-hop list
-    pub peer_hop_list: Option<HashSet<String>>,
+    pub peer_hop_list: Option<FxHashSet<String>>,
     /// Cached wire-format bytes, populated on first serialization for relay.
     ///
     /// Mirrors Gun.js's `meta.raw` (`src/mesh.js`): serialize once, reuse
@@ -789,10 +790,10 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
             Some(checksum) => checksum.as_i64().map(|checksum| checksum as i32),
             _ => None,
         };
-        let peer_hop_list: Option<HashSet<String>> = match json.get("><") {
+        let peer_hop_list: Option<FxHashSet<String>> = match json.get("><") {
             Some(hops) => match hops.as_str() {
                 Some(s) => {
-                    let set: HashSet<String> = s
+                    let set: FxHashSet<String> = s
                         .split(",")
                         .map(|x| x.to_string())
                         .filter(|x| !x.is_empty())

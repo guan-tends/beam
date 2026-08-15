@@ -45,7 +45,7 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
+use crate::utils::FxHashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::sync::{broadcast, oneshot};
@@ -166,7 +166,7 @@ struct NodeInner {
     addr: RwLock<Option<Addr>>,
     /// Router address — `Arc` because parent and child nodes share the same router.
     router: Arc<RwLock<Option<Addr>>>,
-    pending_flushes: RwLock<HashMap<String, oneshot::Sender<()>>>,
+    pending_flushes: RwLock<FxHashMap<String, oneshot::Sender<()>>>,
     /// Pending `put` acknowledgements keyed by `Put.id`.
     ///
     /// When `Node::put` (or `Node::batch_put`) is called, a oneshot sender
@@ -174,7 +174,7 @@ struct NodeInner {
     /// the put by sending a `Put` message with `in_response_to: Some(id)`
     /// back to this node's `addr`. `Node::handle_put` intercepts the ack
     /// and completes the oneshot, resolving the awaited future.
-    pending_puts: RwLock<HashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>,
+    pending_puts: RwLock<FxHashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>,
     allow_public_space: bool,
     ice_servers: Vec<String>,
     /// Shared lock-free observability counters.
@@ -250,8 +250,8 @@ impl Node {
             map_sender: RwLock::new(None),
             addr: RwLock::new(None),
             router: Arc::new(RwLock::new(None)),
-            pending_flushes: RwLock::new(HashMap::new()),
-            pending_puts: RwLock::new(HashMap::new()),
+            pending_flushes: RwLock::new(FxHashMap::default()),
+            pending_puts: RwLock::new(FxHashMap::default()),
             allow_public_space: config.allow_public_space,
             ice_servers: config.ice_servers.clone(),
             actor_context,
@@ -442,8 +442,8 @@ impl Node {
                 map_sender: RwLock::new(None),
                 uid: RwLock::new(new_child_uid),
                 router: self.inner.router.clone(),
-                pending_flushes: RwLock::new(HashMap::new()),
-                pending_puts: RwLock::new(HashMap::new()),
+                pending_flushes: RwLock::new(FxHashMap::default()),
+                pending_puts: RwLock::new(FxHashMap::default()),
                 addr: RwLock::new(None),
                 actor_context: self.inner.actor_context.clone(),
                 allow_public_space: self.inner.allow_public_space,

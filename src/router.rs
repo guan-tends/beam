@@ -50,11 +50,11 @@ use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL};
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::types::{Children, NodeData, Value};
-use crate::utils::{BoundedHashMap, try_send_or_log};
+use crate::utils::{BoundedHashMap, FxHashMap, FxHashSet, try_send_or_log};
 use async_trait::async_trait;
 use log::{debug, error, info};
 use rand::{rng, seq::IteratorRandom};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use web_time::Instant;
@@ -105,7 +105,7 @@ pub(crate) struct QuorumEntry {
     required: usize,
     /// Peer addresses that have already acked this put. Duplicate acks from
     /// the same peer are suppressed via this set (set semantics, not vec).
-    received: HashSet<Addr>,
+    received: FxHashSet<Addr>,
     /// When this entry was created — used by the cleanup reaper to expire
     /// entries whose policy timeout has elapsed.
     started_at: Instant,
@@ -122,7 +122,7 @@ impl QuorumEntry {
         Self {
             requester,
             required: policy.quorum,
-            received: HashSet::new(),
+            received: FxHashSet::default(),
             started_at: Instant::now(),
             max_timeout: policy.timeout,
         }
@@ -201,8 +201,8 @@ pub struct Router {
     /// diagnostics, telemetry exporters). Cloning the `Arc` shares the
     /// underlying atomic counters — both handles observe the same events.
     metrics: Arc<crate::metrics::Metrics>,
-    known_peers: HashSet<Addr>,
-    peer_addrs: HashMap<String, Addr>,
+    known_peers: FxHashSet<Addr>,
+    peer_addrs: FxHashMap<String, Addr>,
     /// Reverse mapping: WsConn addr → peer_id.
     ///
     /// Used by `handle_put_relay` to populate the `><` (peer_hop_list)
@@ -210,30 +210,30 @@ pub struct Router {
     /// This mirrors Gun.js's DAM mesh protocol, where `><` contains peer
     /// URLs/IDs (not connection-specific identifiers) so that both sides
     /// of a WebSocket connection recognize the same hop entry.
-    addr_to_pid: HashMap<Addr, String>,
+    addr_to_pid: FxHashMap<Addr, String>,
     /// Addresses of all storage adapter actors (both read and write).
     ///
     /// Used for echo-suppression checks (e.g. `put.from == *addr`).
-    storage_adapters: HashSet<Addr>,
+    storage_adapters: FxHashSet<Addr>,
     /// Addresses of storage read actors — receive `Get` messages only.
     ///
     /// These actors share the same underlying database as the corresponding
     /// write actors, but process reads concurrently without waiting for
     /// pending writes.
-    read_adapters: HashSet<Addr>,
+    read_adapters: FxHashSet<Addr>,
     /// Addresses of storage write actors — receive `Put`, `BatchPut`, `Flush`.
     ///
     /// Write actors commit inside `spawn_blocking` (for redb) so fsync
     /// never blocks the async runtime. Messages are processed sequentially
     /// within each write actor, preserving write ordering.
-    write_adapters: HashSet<Addr>,
-    network_adapters: HashSet<Addr>,
+    write_adapters: FxHashSet<Addr>,
+    network_adapters: FxHashSet<Addr>,
     storage_adapter_actors: Vec<Box<dyn Actor>>,
     network_adapter_actors: Vec<Box<dyn Actor>>,
-    server_peers: HashSet<Addr>,
+    server_peers: FxHashSet<Addr>,
     dup: Dup,
     seen_get_messages: BoundedHashMap<String, SeenGetMessage>,
-    subscribers_by_topic: HashMap<String, HashSet<Addr>>,
+    subscribers_by_topic: FxHashMap<String, FxHashSet<Addr>>,
     msg_counter: AtomicUsize,
     /// Tracks in-flight quorum-acked Puts.
     ///
@@ -269,7 +269,7 @@ pub struct Router {
     /// When full, the oldest soul entry is evicted along with all
     /// its key timestamps — acceptable because stale-data detection
     /// only needs recent entries.
-    ham_cache: BoundedHashMap<String, HashMap<String, f64>>,
+    ham_cache: BoundedHashMap<String, FxHashMap<String, f64>>,
 }
 
 #[async_trait]
@@ -429,19 +429,19 @@ impl Router {
     ) -> Self {
         Self {
             metrics,
-            known_peers: HashSet::new(),
-            peer_addrs: HashMap::new(),
-            addr_to_pid: HashMap::new(),
-            storage_adapters: HashSet::new(),
-            read_adapters: HashSet::new(),
-            write_adapters: HashSet::new(),
-            network_adapters: HashSet::new(),
+            known_peers: FxHashSet::default(),
+            peer_addrs: FxHashMap::default(),
+            addr_to_pid: FxHashMap::default(),
+            storage_adapters: FxHashSet::default(),
+            read_adapters: FxHashSet::default(),
+            write_adapters: FxHashSet::default(),
+            network_adapters: FxHashSet::default(),
             storage_adapter_actors,
             network_adapter_actors,
-            server_peers: HashSet::new(),
+            server_peers: FxHashSet::default(),
             dup: Dup::default_gun(),
             seen_get_messages: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
-            subscribers_by_topic: HashMap::new(),
+            subscribers_by_topic: FxHashMap::default(),
             msg_counter: AtomicUsize::new(0),
             quorum_entries: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
             ham_cache: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
@@ -495,7 +495,7 @@ impl Router {
             let _ = addr.send(Message::Get(get.clone()));
         }
 
-        let mut already_sent_to = HashSet::new();
+        let mut already_sent_to = FxHashSet::default();
 
         // Send to server peers
         for addr in self.server_peers.iter() {
@@ -505,7 +505,7 @@ impl Router {
         }
 
         // Ask network subscribers
-        let mut errored = HashSet::new();
+        let mut errored = FxHashSet::default();
         let mut sent_to = 0;
         let mut rng = rng();
         if let Some(topic_subscribers) = self.subscribers_by_topic.get(topic) {
@@ -545,7 +545,7 @@ impl Router {
             }
         }
         if sent_to < 4 {
-            let mut errored = HashSet::new();
+            let mut errored = FxHashSet::default();
             while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
                 sent_to += 1;
                 if sent_to >= 4 {
@@ -751,7 +751,7 @@ impl Router {
         relay_put.peer_hop_list = Some(hops.clone());
         let relay_msg: Arc<Message> = Arc::new(Message::Put(relay_put));
 
-        let mut already_sent_to = HashSet::new();
+        let mut already_sent_to = FxHashSet::default();
 
         // Relay to server peers (outgoing WebSocket adapters, relay servers).
         //
@@ -815,7 +815,7 @@ impl Router {
         // Random sampling from known_peers (Gun.js mesh fallback path).
         if already_sent_to.len() < 4 {
             let mut rng = rng();
-            let mut errored = HashSet::new();
+            let mut errored = FxHashSet::default();
             while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
                 sent_to += 1;
                 if sent_to >= 4 {
@@ -874,7 +874,7 @@ impl Router {
         let entry = QuorumEntry {
             requester,
             required,
-            received: HashSet::new(),
+            received: FxHashSet::default(),
             started_at: web_time::Instant::now(),
             max_timeout,
         };
@@ -1029,7 +1029,7 @@ impl Router {
     /// Storage adapters can use this to trigger `fsync` or other durable
     /// persistence. The flush is not relayed to network peers.
     fn handle_flush(&mut self, flush: &Flush) {
-        let mut sent = HashSet::new();
+        let mut sent = FxHashSet::default();
         for addr in self.write_adapters.iter() {
             if flush.from == *addr {
                 continue;
@@ -1122,7 +1122,7 @@ impl Router {
 
                 // Update the HAM cache for this (soul, key).
                 if self.ham_cache.get(soul).is_none() {
-                    self.ham_cache.insert(soul.clone(), HashMap::new());
+                    self.ham_cache.insert(soul.clone(), FxHashMap::default());
                 }
                 if let Some(inner) = self.ham_cache.get_mut(soul) {
                     inner.insert(key.clone(), node_data.updated_at);
