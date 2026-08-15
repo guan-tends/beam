@@ -24,6 +24,7 @@ use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
+use bytes::Bytes;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -78,16 +79,26 @@ where
     /// builder, `feed()` never triggers an implicit flush — it simply
     /// queues the frame. The caller is responsible for calling
     /// `flush()` after all messages are queued.
+    /// Serialize a message and feed it as a WS text frame into the sink.
+    ///
+    /// For `Message::Put`, uses [`Put::get_or_serialize`] to cache the
+    /// wire bytes on first serialization. When the same `Arc<Message>`
+    /// is relayed to multiple peers, only the first WsConn serializes —
+    /// subsequent peers receive cached bytes (refcount bump, zero-copy).
+    /// Mirrors Gun.js's `meta.raw` caching in `mesh.raw()`.
     async fn send_msg(&mut self, msg: &Arc<Message>, ctx: &ActorContext) {
-        msg.to_writer(&mut self.send_buf);
+        let bytes = match msg.as_ref() {
+            Message::Put(put) => put.get_or_serialize(),
+            _ => {
+                msg.to_writer(&mut self.send_buf);
+                Bytes::from(std::mem::take(&mut self.send_buf))
+            }
+        };
         ctx.metrics.record_serialization();
         if let Some(sink) = &mut self.ws_sink {
-            // Transfer ownership of send_buf into the WS frame — zero copy.
-            // Replace with a fresh buffer for the next message.
-            let buf = std::mem::take(&mut self.send_buf);
             let _ = sink
                 .feed(WsMessage::text(
-                    String::from_utf8(buf).expect("wire format is valid UTF-8"),
+                    String::from_utf8(bytes.to_vec()).expect("wire format is valid UTF-8"),
                 ))
                 .await;
         }
