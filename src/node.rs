@@ -88,6 +88,21 @@ pub struct Config {
     /// under benchmark loads. Each entry uses ~1 bit of memory in the
     /// bloom filter, so 100K entries ≈ 12.5 KiB per generation.
     pub dedup_capacity: usize,
+    /// Backpressure ceiling for the router/root actor's mailbox.
+    ///
+    /// The mailbox grows on demand (no pre-allocation). When the queue
+    /// length reaches this limit, `send` returns `Err(())`, applying
+    /// backpressure to senders. Defaults to 65536 — generous for the
+    /// high-throughput router hub. Reduce for memory-constrained environments.
+    pub mailbox_capacity: usize,
+    /// Backpressure ceiling for child node actors' mailboxes.
+    ///
+    /// Child nodes handle messages for a single graph path — a smaller
+    /// ceiling than the router is appropriate. Defaults to 256, which
+    /// is sufficient for any realistic single-path burst while limiting
+    /// memory usage under adversarial workloads (e.g. a peer creating
+    /// unique soul paths to spawn many child actors).
+    pub child_mailbox_capacity: usize,
 }
 
 impl Default for Config {
@@ -98,6 +113,8 @@ impl Default for Config {
             broadcast_buffer_size: 4096,
             ice_servers: vec!["stun:stun.l.google.com:19302".to_string()],
             dedup_capacity: 100_000,
+            mailbox_capacity: 65536,
+            child_mailbox_capacity: 256,
         }
     }
 }
@@ -177,6 +194,12 @@ struct NodeInner {
     pending_puts: RwLock<FxHashMap<String, oneshot::Sender<Result<ReplicationStatus, String>>>>,
     allow_public_space: bool,
     ice_servers: Vec<String>,
+    /// Backpressure ceiling for child node mailboxes.
+    ///
+    /// Copied from `Config.child_mailbox_capacity` at root creation and
+    /// inherited by all child nodes. Used by `new_child` to call
+    /// `start_actor_bounded` with the appropriate ceiling.
+    child_mailbox_capacity: usize,
     /// Shared lock-free observability counters.
     ///
     /// `Arc` because parent and child nodes share the same metrics handle
@@ -254,6 +277,7 @@ impl Node {
             pending_puts: RwLock::new(FxHashMap::default()),
             allow_public_space: config.allow_public_space,
             ice_servers: config.ice_servers.clone(),
+            child_mailbox_capacity: config.child_mailbox_capacity,
             actor_context,
             shutdown_tx,
             metrics: metrics.clone(),
@@ -271,7 +295,10 @@ impl Node {
         // needing get_mut. The addr and router fields on NodeInner are also
         // RwLock, so they're set through .write() too.
         *node.inner.actor_context.node.write() = Some(node.clone());
-        let addr = node.inner.actor_context.start_actor(Box::new(node.clone()));
+        let addr = node.inner.actor_context.start_actor_bounded(
+            Box::new(node.clone()),
+            config.mailbox_capacity,
+        );
         *node.inner.addr.write() = Some(addr);
 
         let router = Box::new(Router::new(
@@ -279,7 +306,10 @@ impl Node {
             network_adapters,
             node.inner.metrics.clone(),
         ));
-        let router_addr = node.inner.actor_context.start_router(router);
+        let router_addr = node.inner.actor_context.start_router_bounded(
+            router,
+            config.mailbox_capacity,
+        );
         *node.inner.actor_context.router.write() = router_addr.clone();
         *node.inner.router.write() = Some(router_addr);
 
@@ -448,13 +478,17 @@ impl Node {
                 actor_context: self.inner.actor_context.clone(),
                 allow_public_space: self.inner.allow_public_space,
                 ice_servers: self.inner.ice_servers.clone(),
+                child_mailbox_capacity: self.inner.child_mailbox_capacity,
                 // Children share the parent's metrics Arc so all nodes in a
                 // tree aggregate drops into the same counters.
                 metrics: self.inner.metrics.clone(),
                 shutdown_tx: self.inner.shutdown_tx.clone(),
             }),
         };
-        let addr = self.inner.actor_context.start_actor(Box::new(node.clone()));
+        let addr = self.inner.actor_context.start_actor_bounded(
+            Box::new(node.clone()),
+            self.inner.child_mailbox_capacity,
+        );
         *node.inner.addr.write() = Some(addr);
         let mut guard = self.inner.children.write();
         guard.insert(key, node.clone());
@@ -1348,10 +1382,14 @@ mod tests {
             broadcast_buffer_size: 1024,
             ice_servers: vec![],
             dedup_capacity: 100_000,
+            mailbox_capacity: 65536,
+            child_mailbox_capacity: 256,
         };
         assert!(!config.allow_public_space);
         assert_eq!(config.broadcast_buffer_size, 1024);
         assert!(config.ice_servers.is_empty());
+        assert_eq!(config.mailbox_capacity, 65536);
+        assert_eq!(config.child_mailbox_capacity, 256);
     }
 
     #[test]
