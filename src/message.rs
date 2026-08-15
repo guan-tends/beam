@@ -538,7 +538,7 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
         Message::Put(put) => {
             if let Some(cached) = put.raw.get() {
                 buf.clear();
-                buf.extend_from_slice(&cached);
+                buf.extend_from_slice(cached);
             } else {
                 put.to_writer(buf);
             }
@@ -1333,5 +1333,109 @@ mod tests {
             let cached_str = String::from_utf8(cached.to_vec()).unwrap();
             assert_eq!(direct, cached_str, "cached bytes must match direct serialization");
         }
+    }
+
+    // ── Sprint 3: Batched WebSocket Frames ─────────────────────────
+
+    #[test]
+    fn try_from_parses_json_array_of_messages() {
+        // Verify that the receive side correctly parses a JSON array
+        // of Gun.js messages — this is what a peer receives when BEAM
+        // sends batched WS frames (Sprint 3 send-side optimization).
+        let array_json = r##"[
+          {
+            "put": {
+              "soul1": {
+                "_": { "#": "soul1", ">": { "key": 1000.0 } },
+                "key": "hello"
+              }
+            },
+            "#": "msg001"
+          },
+          {
+            "put": {
+              "soul2": {
+                "_": { "#": "soul2", ">": { "key": 2000.0 } },
+                "key": "world"
+              }
+            },
+            "#": "msg002"
+          }
+        ]"##;
+        let messages = Message::try_from(array_json, Addr::noop(), true).unwrap();
+        assert_eq!(messages.len(), 2, "array of 2 messages must parse to 2 Messages");
+    }
+
+    #[test]
+    fn try_from_single_message_still_works() {
+        // Single message (not array) must still parse correctly —
+        // backwards compatibility with non-batched peers.
+        let single_json = r##"{
+          "put": {
+            "soul1": {
+              "_": { "#": "soul1", ">": { "key": 1000.0 } },
+              "key": "hello"
+            }
+          },
+          "#": "msg001"
+        }"##;
+        let messages = Message::try_from(single_json, Addr::noop(), true).unwrap();
+        assert_eq!(messages.len(), 1, "single message must parse to 1 Message");
+    }
+
+    #[test]
+    fn batched_frame_roundtrip() {
+        // End-to-end: serialize 2 Puts, pack as array, parse back.
+        let put1 = make_test_put();
+        let put2 = {
+            let mut children = Children::new();
+            children.insert(
+                "key2".to_string(),
+                NodeData {
+                    value: Value::Text("world".to_string()),
+                    updated_at: 2000.0,
+                },
+            );
+            let mut nodes = BTreeMap::new();
+            nodes.insert("soul2".to_string(), children);
+            Put::new(nodes, None, Addr::noop())
+        };
+
+        // Serialize each put and pack as JSON array
+        let mut buf1 = Vec::new();
+        put1.to_writer(&mut buf1);
+        let mut buf2 = Vec::new();
+        put2.to_writer(&mut buf2);
+
+        let mut array_frame = Vec::new();
+        array_frame.push(b'[');
+        array_frame.extend_from_slice(&buf1);
+        array_frame.push(b',');
+        array_frame.extend_from_slice(&buf2);
+        array_frame.push(b']');
+
+        let array_str = String::from_utf8(array_frame).unwrap();
+
+        // Parse back — should get 2 messages
+        let messages = Message::try_from(&array_str, Addr::noop(), true).unwrap();
+        assert_eq!(messages.len(), 2, "batched frame must roundtrip to 2 messages");
+    }
+
+    #[test]
+    fn cached_bytes_work_in_batched_frame() {
+        // Verify that cached serialization (Sprint 1) produces bytes
+        // that are valid inside a JSON array frame (Sprint 3).
+        let put = make_test_put();
+        let cached = put.get_or_serialize();
+
+        // Build a simple array: [cached_bytes]
+        let mut array = Vec::new();
+        array.push(b'[');
+        array.extend_from_slice(&cached);
+        array.push(b']');
+
+        let array_str = String::from_utf8(array).unwrap();
+        let messages = Message::try_from(&array_str, Addr::noop(), true).unwrap();
+        assert_eq!(messages.len(), 1, "cached bytes in array must parse correctly");
     }
 }

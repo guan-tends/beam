@@ -125,41 +125,97 @@ where
         self.flush_sink().await;
     }
 
-    /// Batch handler — feeds all messages into the WS frame buffer without
-    /// flushing. Because `flush_threshold` is set to `usize::MAX`, `feed()`
-    /// never triggers an implicit flush and never blocks on I/O.
+    /// Batch handler — packs all messages into a single WebSocket text
+    /// frame as a JSON array, then flushes once.
     ///
-    /// Flushing is handled by a dedicated background task spawned in
-    /// `pre_start`, which calls `flush()` on a timer. This decouples the
-    /// actor's message processing from socket I/O — the actor never
-    /// suspends waiting for the TCP buffer to drain.
+    /// Mirrors Gun.js's `peer.batch` packing in `mesh.say`: messages
+    /// are accumulated as `[{msg1},{msg2},...]` and flushed as a single
+    /// WS frame, amortizing frame header overhead.
+    ///
+    /// For single-message batches, the message is sent as-is (no array
+    /// wrapper) — preserving backwards compatibility with peers that
+    /// may not expect array frames.
+    ///
+    /// # Serialized Message Cache (Sprint 1)
+    ///
+    /// For `Message::Put`, uses [`Put::get_or_serialize`] to reuse
+    /// cached wire bytes. When the same `Arc<Message>` is relayed to
+    /// multiple peers, only the first WsConn serializes — subsequent
+    /// peers get cached bytes (refcount bump).
     ///
     /// # Cooperative Scheduling
     ///
-    /// On `current_thread` runtime, `feed()` with `flush_threshold(MAX)`
-    /// completes without suspending, so a full batch of 64 messages can
-    /// be processed without yielding to other tasks. We call
-    /// `yield_now()` every 16 messages to ensure the relay's router and
-    /// other actors get scheduled. Without this, on `current_thread`, a
-    /// sender's WsConn can starve the relay's receive loop, causing a
-    /// deadlock where the relay never processes incoming puts.
+    /// On `current_thread` runtime, we call `yield_now()` every 16
+    /// messages to ensure the relay's router and other actors get
+    /// scheduled. Without this, a sender's WsConn can starve the
+    /// relay's receive loop, causing a deadlock.
+    ///
+    /// # Frame Size Safety
+    ///
+    /// If the accumulated buffer exceeds `MAX_BATCH_FRAME_SIZE`, we
+    /// flush early and start a new array. This prevents exceeding
+    /// WebSocket frame size limits on peers with restrictive configs.
     async fn handle_batch(&mut self, batch: &mut Vec<Arc<Message>>, ctx: &ActorContext) {
-        if self.ws_sink.is_some() {
-            let mut count = 0;
-            for msg in batch.drain(..) {
-                self.send_msg(&msg, ctx).await;
-                count += 1;
-                if count % 16 == 0 {
-                    crate::tokio_spawn::yield_now().await;
-                }
-            }
-            // Single flush per batch — not per message. This is the key
-            // difference from `sink.send()` (which flushes per message).
-            // One flush per 64 messages dramatically reduces I/O syscalls
-            // while still delivering data to TCP promptly.
-            self.flush_sink().await;
-        } else {
+        if self.ws_sink.is_none() {
             batch.clear();
+            return;
+        }
+
+        match batch.len() {
+            0 => {}
+            1 => {
+                // Single message — send as-is (no array wrapper needed).
+                let msg = batch.drain(..).next().unwrap();
+                self.send_msg(&msg, ctx).await;
+                self.flush_sink().await;
+            }
+            _ => {
+                // Multiple messages — pack into a JSON array frame.
+                // Gun.js: peer.batch = '['; peer.batch += ',' + raw; ... flush
+                self.send_buf.clear();
+                self.send_buf.push(b'[');
+                let mut first = true;
+                let mut count = 0;
+
+                for msg in batch.drain(..) {
+                    if !first {
+                        self.send_buf.push(b',');
+                    }
+                    first = false;
+
+                    // Use cached serialization for Put, direct for others.
+                    let bytes = match msg.as_ref() {
+                        Message::Put(put) => put.get_or_serialize(),
+                        _ => {
+                            let mut buf = Vec::with_capacity(64);
+                            msg.to_writer(&mut buf);
+                            Bytes::from(buf)
+                        }
+                    };
+                    self.send_buf.extend_from_slice(&bytes);
+                    ctx.metrics.record_serialization();
+                    ctx.metrics.record_ws_sent();
+
+                    count += 1;
+                    if count % 16 == 0 {
+                        crate::tokio_spawn::yield_now().await;
+                    }
+                }
+
+                self.send_buf.push(b']');
+
+                // Feed the batched array as a single WS text frame.
+                let buf = std::mem::take(&mut self.send_buf);
+                if let Some(sink) = &mut self.ws_sink {
+                    let _ = sink
+                        .feed(WsMessage::text(
+                            String::from_utf8(buf).expect("wire format is valid UTF-8"),
+                        ))
+                        .await;
+                }
+
+                self.flush_sink().await;
+            }
         }
     }
 

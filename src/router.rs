@@ -163,20 +163,19 @@ impl QuorumEntry {
 /// - `peer_addrs` — mapping of peer IDs to addresses (for WebRTC signaling)
 /// - `server_peers` — outgoing WebSocket peers (subscribed to everything)
 /// - `subscribers_by_topic` — topic → set of interested peer addresses
-/// Result of HAM (Hypothetical Amnesia Machine) stale-data filtering.
-///
-/// Mirrors Gun.js's per-key `ham()` function (`src/root.js` line 120):
-/// each (soul, key) pair is independently evaluated. Stale keys are
-/// dropped; only new keys proceed to storage and relay.
-///
-/// # Variants
-///
-/// - [`Stale`](Self::Stale): all entries stale — drop the Put entirely.
-/// - [`New`](Self::New): all entries new — proceed with the original
-///   `&Put` unchanged. Zero allocation overhead.
-/// - [`PartiallyNew`](Self::PartiallyNew): some entries new — only the
-///   filtered `updated_nodes` should proceed. The caller constructs a
-///   Put with these entries only.
+//
+// Result of HAM (Hypothetical Amnesia Machine) stale-data filtering.
+//
+// Mirrors Gun.js's per-key `ham()` function (`src/root.js` line 120):
+// each (soul, key) pair is independently evaluated. Stale keys are
+// dropped; only new keys proceed to storage and relay.
+//
+// Variants:
+// - Stale: all entries stale — drop the Put entirely.
+// - New: all entries new — proceed with the original &Put unchanged.
+//   Zero allocation overhead.
+// - PartiallyNew: some entries new — only the filtered updated_nodes
+//   should proceed. The caller constructs a Put with these entries only.
 #[derive(Debug)]
 pub enum HamFilterResult {
     /// All entries stale — drop the Put entirely.
@@ -187,6 +186,7 @@ pub enum HamFilterResult {
     PartiallyNew(Arc<BTreeMap<String, Children>>),
 }
 
+/// The central message router actor.
 ///
 /// # Deduplication
 ///
