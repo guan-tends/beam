@@ -67,8 +67,9 @@ use tokio::sync::Notify;
 /// Both [`MailboxSender`] and [`MailboxReceiver`] hold `Arc<MailboxInner>`
 /// (or `None` for a noop sender), so cloning a sender is a refcount bump.
 struct MailboxInner {
-    /// Bounded FIFO queue of `Arc<Message>`. Pre-allocated at construction
-    /// via `VecDeque::with_capacity`; after warmup, push/pop never allocate.
+    /// Bounded FIFO queue of `Arc<Message>`. Grows on demand from zero
+    /// capacity — no upfront allocation. The `capacity` field above
+    /// controls the backpressure ceiling, not pre-allocation size.
     queue: Mutex<VecDeque<Arc<Message>>>,
     /// Maximum messages before `send` returns `Err` (backpressure).
     capacity: usize,
@@ -91,7 +92,7 @@ impl std::fmt::Debug for MailboxInner {
 impl MailboxInner {
     fn new(capacity: usize) -> Self {
         Self {
-            queue: Mutex::new(VecDeque::with_capacity(capacity)),
+            queue: Mutex::new(VecDeque::new()),
             capacity,
             notify: Notify::new(),
             closed: Mutex::new(false),
