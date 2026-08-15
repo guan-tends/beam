@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-15 — Relay Hot-Path Optimization (FxHash + String Allocation Reduction)
+
+### Changed — Performance
+
+- **FxHash replacement**: Replaced SipHasher-1-3 (std default) with FxHash
+  (`rustc-hash` crate) for all non-cryptographic `HashMap`/`HashSet` across
+  the codebase. FxHash is the hasher used by the Rust compiler itself — ~3-4×
+  faster than SipHash for non-cryptographic workloads. Profiling showed
+  `sip::Hasher::write` at 2.98% + `hash_one` at 0.84% of CPU in the relay
+  hot path. Security tradeoff: FxHash is not HashDoS-resistant, but affected
+  maps are keyed by message IDs from semi-trusted WebSocket peers (same trust
+  model as Gun.js's JavaScript `HashMap`).
+
+- **`sea::session` kept on SipHash**: Cryptographic session storage retains
+  std's default `RandomState` (SipHash) for HashDoS resistance — security-
+  critical context where adversarial key crafting is a real threat.
+
+- **String allocation reduction in message parsing**: `from_json_obj` and
+  `from_put_obj` now accept `&str` for `json_str` instead of `String`,
+  eliminating one `String` allocation per message on the common path (only
+  cloned on signature verification failure, which is rare).
+
+- **`msg_id` move instead of clone**: Fixed `msg_id.to_string()` in
+  `from_put_obj` — was cloning an already-owned `String`. Now moved directly.
+
+- **`TryFrom<&SerdeJsonValue>` for `Value`**: Added borrowed conversion impl
+  alongside the existing owned `TryFrom<SerdeJsonValue>`. Avoids cloning the
+  `JsonValue` tree when only a reference is available during parsing.
+
+### Added
+
+- `BoundedHashMap` is now generic over `BuildHasher` (default: `FxBuildHasher`),
+  allowing callers to choose their hasher. Existing code using
+  `BoundedHashMap::new()` or `BoundedHashMap::default()` works unchanged.
+
+- `FxHashMap` and `FxHashSet` type aliases re-exported from `crate::utils`,
+  using `BuildHasherDefault<rustc_hash::FxHasher>` as the default hasher.
+
+### Benchmark Results (vs v0.13.0, normal load, ~75°F ambient)
+
+| Benchmark | v0.13.0 | v0.14.0 | Change |
+|-----------|---------|---------|--------|
+| Local put (100k) | 46,380 | 47,499 | +2.4% |
+| Relay 1×50k | 15,419 | 15,594 | +1.1% |
+| Relay 10×5k | 11,355 | 11,966 | +5.4% |
+
+### Dependencies
+
+- Added `rustc-hash = "2.1.3"` — pure Rust, zero transitive deps, WASM-compatible.
+
 ## [0.13.0] — 2026-08-15 — Relay Optimization (Serialized Caching + Per-Key HAM + Batched Frames)
 
 Three Gun.js-inspired relay optimizations that reduce redundant work on the
