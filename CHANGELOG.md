@@ -8,6 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+## [0.13.0] — 2026-08-15 — Relay Optimization (Serialized Caching + Per-Key HAM + Batched Frames)
+
+Three Gun.js-inspired relay optimizations that reduce redundant work on the
+network fan-out path. All three are transparent to the wire protocol — a
+Gun.js peer sees identical JSON, just packed more efficiently in transit.
+
+### Sprint 1: Serialized Message Caching
+- `OnceLock<Bytes>` on `Put` struct — first serialization populates the cache,
+  subsequent peers get `Bytes::clone()` (Arc refcount bump, zero-copy)
+- Mirrors Gun.js `meta.raw`: serialize once per relayed Put, reuse for all peers
+- `Message::to_writer` checks cache before serializing
+- `WsConn::send_msg` uses cached bytes for Put variant
+- Cache resets on `Clone` (each clone is a different message)
+
+### Sprint 2: Per-Key HAM Filtering
+- `HamFilterResult` enum replaces `bool` return: `Stale`, `New`, `PartiallyNew`
+- Each (soul, key) pair independently evaluated — stale keys dropped, only new
+  keys proceed to storage and relay
+- Mirrors Gun.js `ham()` called per-key inside its `while` loop
+- Common case (all-new) is zero overhead — uses original `&Put` with no allocation
+- `Put::with_updated_nodes()` constructor for the partial case
+
+### Sprint 3: Batched WebSocket Frames
+- `handle_batch` packs >1 messages into a JSON array in a single WS text frame
+- Single-message sends unchanged (no array wrapper) — backwards compatible
+- Mirrors Gun.js `peer.batch` packing in `mesh.say`
+- Receive side already handles arrays (`Message::try_from` checks `as_array()`)
+- Integrates with Sprint 1 cache for Put messages in batch
+
+### Benchmark Results
+
+| Test | v0.12.0 | v0.13.0 | Change |
+|------|---------|---------|--------|
+| Local put (100K) | ~53,300 puts/sec | ~46,400 puts/sec | neutral (within variance) |
+| Relay 1 sender × 10k | 5,287 msgs/sec | 6,984 msgs/sec | **+32%** |
+| Relay 1 sender × 50k | 10,643 msgs/sec | 15,419 msgs/sec | **+45%** |
+| Relay 10 senders × 5k | 11,380 msgs/sec | 11,355 msgs/sec | neutral |
+
+The 50k relay test shows the biggest gain because serialization caching and
+batched frame packing both amortize over more messages.
+
+### Test Summary
+- 356 native tests (10 new for relay optimizations), 0 failures
+- 19 doctests, 0 failures
+- 7 WASM tests pass, 4 ignored (browser-only), 0 failures
+- 0 clippy warnings
+
 ## [0.12.0] — 2026-08-13 — Performance Overhaul + HAM Pre-Filter
 
 **17.5× throughput improvement** (3,050 → 53,300 puts/sec on clean machine)
