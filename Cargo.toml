@@ -1,6 +1,6 @@
 [package]
 name = "beamdb"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 repository = "https://github.com/guan-tends/beam"
 homepage = "https://github.com/guan-tends/beam"
@@ -56,6 +56,7 @@ http = "1"
 oko-multicast-socket = { version = "0.5", features = ["tokio"] }
 redb = "4.1"
 persy = { version = "1.8", features = ["background_ops"], optional = true }
+mimalloc = { version = "0.1.52", optional = true }
 clap = { version = "4.6", features = ["derive", "env"] }
 env_logger = "0.11"
 dirs = "6.0"
@@ -73,10 +74,11 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [features]
-default = ["native"]
+default = ["native", "mimalloc"]
 webrtc = ["dep:str0m", "dep:stun"]
 native = []
 persy = ["dep:persy"]
+mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 

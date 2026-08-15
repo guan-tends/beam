@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-15 — Growable Mailboxes + mimalloc
+
+### Changed — Performance
+
+- **mimalloc global allocator**: Added mimalloc 0.1.52 as the default global
+  allocator on native targets (optional via `mimalloc` feature). Profiling
+  showed the system allocator at 31.9% of CPU. mimalloc's per-thread heap
+  segments with deferred freeing reduce allocation contention. Local put
+  benchmark improved 34% on average (47K → 64K puts/sec), with warm runs
+  hitting 91K puts/sec — nearly 2× the v0.14.0 baseline.
+- **Eliminated mailbox pre-allocation**: `MailboxInner::new()` now uses
+  `VecDeque::new()` instead of `VecDeque::with_capacity(capacity)`. The
+  previous code pre-allocated 65536 slots (512KB) per actor — 94.6% of
+  all allocated bytes per DHAT profiling. The queue now grows on demand
+  with amortized O(1) push. The `capacity` field remains as a backpressure
+  ceiling (DoS prevention) — `send()` returns `Err(())` when full.
+- **Configurable mailbox ceilings**: Added `mailbox_capacity` (default 65536)
+  and `child_mailbox_capacity` (default 256) to `Config`. The router/root
+  actor uses `mailbox_capacity`; child nodes use `child_mailbox_capacity`
+  via the new `start_actor_bounded` / `start_router_bounded` API. Operators
+  can tune for memory-constrained or high-throughput environments.
+
+### Security
+
+- **Reduced DoS surface**: With pre-allocation eliminated, a malicious peer
+  creating unique soul paths to spawn child actors now allocates ~2KB per
+  actor (256-slot queue grown on demand) instead of 512KB pre-allocated.
+  Attack memory cost reduced 256×.
+
+### Benchmark Results
+
+| Benchmark | v0.14.0 | v0.15.0 (avg) | Change |
+|-----------|---------|---------------|--------|
+| Local put (100k) | 47,499/sec | 63,568/sec | +33.8% |
+| Relay 1×10k | 6,931/sec | 6,634/sec | -4.3% (noise) |
+| Relay 1×50k | 15,594/sec | 18,337/sec | +17.6% |
+| Relay 10×5k | 11,966/sec | 12,277/sec | +2.6% |
+
 ## [0.14.0] — 2026-08-15 — Relay Hot-Path Optimization (FxHash + String Allocation Reduction)
 
 ### Changed — Performance

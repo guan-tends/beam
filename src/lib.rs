@@ -1,3 +1,17 @@
+// Global allocator — mimalloc.
+//
+// mimalloc is a compact general-purpose allocator by Microsoft with excellent
+// performance characteristics. It uses per-thread heap segments with deferred
+// freeing, reducing contention and fragmentation compared to glibc's malloc.
+//
+// Enabled by default on native targets via the `mimalloc` feature. Disabled on
+// WASM (no system allocator to replace) and when the feature is turned off.
+//
+// To use the system allocator instead: `cargo build --no-default-features --features native`
+#[cfg(all(feature = "mimalloc", not(target_arch = "wasm32")))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod ack;
 pub mod actor;
 pub mod adapters;

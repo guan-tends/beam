@@ -302,6 +302,15 @@ impl ActorContext {
         self.start_actor_or_router(actor, true, None)
     }
 
+    /// Spawns a router actor with a bounded mailbox.
+    ///
+    /// Same as [`start_router`](Self::start_router) but with an explicit
+    /// backpressure ceiling. Use when the default `DEFAULT_MAILBOX_CAPACITY`
+    /// is not appropriate for the deployment.
+    pub fn start_router_bounded(&self, actor: Box<dyn Actor>, bound: usize) -> Addr {
+        self.start_actor_or_router(actor, true, Some(bound))
+    }
+
     /// Spawns a child async task (non-blocking).
     ///
     /// The task's `JoinHandle` is tracked so it can be aborted on stop.

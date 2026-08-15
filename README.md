@@ -805,6 +805,8 @@ let config = Config {
     broadcast_buffer_size: 4096,
     ice_servers: vec!["stun:stun.l.google.com:19302".into()],
     dedup_capacity: 100_000,
+    mailbox_capacity: 65536,
+    child_mailbox_capacity: 256,
 };
 # }
 ```
