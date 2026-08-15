@@ -216,7 +216,36 @@ impl Value {
     }
 }
 
-/// Converts a [`serde_json::Value`] into a BEAM [`Value`].
+impl Value {
+    /// Convert a borrowed `&serde_json::Value` into a BEAM [`Value`].
+    ///
+    /// Zero-clone-preferred alternative to [`TryFrom<SerdeJsonValue>`].
+    /// Borrows the value and only allocates a `String` for `Text` and `Link`
+    /// variants (unavoidable — BEAM owns its strings).
+    ///
+    /// For `Null`, `Bool`, and `Number` variants: zero allocation.
+    /// For `String` and `Object` (link): one `String` allocation.
+    /// Saves one `JsonValue` clone per call vs `TryFrom<SerdeJsonValue>`.
+    pub fn from_json_ref(v: &SerdeJsonValue) -> Result<Value, &'static str> {
+        match v {
+            SerdeJsonValue::Null => Ok(Value::Null),
+            SerdeJsonValue::Bool(b) => Ok(Value::Bit(*b)),
+            SerdeJsonValue::String(s) => Ok(Value::Text(s.clone())),
+            SerdeJsonValue::Number(n) => match n.as_f64() {
+                Some(n) => Ok(Value::Number(n)),
+                _ => Err("not convertible to f64"),
+            },
+            SerdeJsonValue::Object(obj) => {
+                if let Some(soul) = obj.get("#").and_then(|v| v.as_str()) {
+                    Ok(Value::Link(soul.to_string()))
+                } else {
+                    Err("cannot convert json object into Value")
+                }
+            }
+            SerdeJsonValue::Array(_) => Err("cannot convert array into Value"),
+        }
+    }
+}
 ///
 /// This conversion validates that the JSON value is one of the five
 /// supported types. Objects are accepted *only* if they are a Gun.js
@@ -249,6 +278,41 @@ impl TryFrom<SerdeJsonValue> for Value {
             },
             SerdeJsonValue::Object(obj) => {
                 // Node reference: {"#": "soul"} → Value::Link
+                if let Some(soul) = obj.get("#").and_then(|v| v.as_str()) {
+                    Ok(Value::Link(soul.to_string()))
+                } else {
+                    Err("cannot convert json object into Value")
+                }
+            }
+            SerdeJsonValue::Array(_) => Err("cannot convert array into Value"),
+        }
+    }
+}
+
+/// Borrowed conversion from `&serde_json::Value` to BEAM [`Value`].
+///
+/// This avoids cloning the `JsonValue` when only a reference is available
+/// (e.g. during message parsing where the JSON tree is borrowed). The
+/// resulting `Value` still owns its data — `String` values are cloned
+/// only when the variant requires it (`Text`, `Link`), not for the
+/// common `Null`/`Bit`/`Number` cases.
+///
+/// # Errors
+///
+/// Same error semantics as [`TryFrom<SerdeJsonValue> for Value`].
+impl TryFrom<&SerdeJsonValue> for Value {
+    type Error = &'static str;
+
+    fn try_from(v: &SerdeJsonValue) -> Result<Value, Self::Error> {
+        match v {
+            SerdeJsonValue::Null => Ok(Value::Null),
+            SerdeJsonValue::Bool(b) => Ok(Value::Bit(*b)),
+            SerdeJsonValue::String(s) => Ok(Value::Text(s.clone())),
+            SerdeJsonValue::Number(n) => match n.as_f64() {
+                Some(n) => Ok(Value::Number(n)),
+                _ => Err("not convertible to f64"),
+            },
+            SerdeJsonValue::Object(obj) => {
                 if let Some(soul) = obj.get("#").and_then(|v| v.as_str()) {
                     Ok(Value::Link(soul.to_string()))
                 } else {
@@ -487,6 +551,73 @@ mod tests {
     fn test_try_from_json_object_without_soul_fails() {
         let json = serde_json::json!({ "foo": "bar" });
         assert!(Value::try_from(json).is_err());
+    }
+
+    // ── TryFrom<&JsonValue> (borrowed conversion) ──
+
+    #[test]
+    fn test_try_from_json_ref_null() {
+        let json = SerdeJsonValue::Null;
+        let v = Value::try_from(&json).unwrap();
+        assert!(v.is_null());
+    }
+
+    #[test]
+    fn test_try_from_json_ref_bool() {
+        let json = SerdeJsonValue::Bool(true);
+        let v = Value::try_from(&json).unwrap();
+        assert_eq!(v.as_bit(), Some(true));
+    }
+
+    #[test]
+    fn test_try_from_json_ref_string() {
+        let json = SerdeJsonValue::String("hello".into());
+        let v = Value::try_from(&json).unwrap();
+        assert_eq!(v.as_text(), Some("hello"));
+    }
+
+    #[test]
+    fn test_try_from_json_ref_number() {
+        let json = serde_json::json!(42.0);
+        let v = Value::try_from(&json).unwrap();
+        assert_eq!(v.as_number(), Some(42.0));
+    }
+
+    #[test]
+    fn test_try_from_json_ref_link() {
+        let json = serde_json::json!({ "#": "node/abc" });
+        let v = Value::try_from(&json).unwrap();
+        assert_eq!(v.as_link(), Some("node/abc"));
+    }
+
+    #[test]
+    fn test_try_from_json_ref_array_fails() {
+        let json = serde_json::json!([1, 2, 3]);
+        assert!(Value::try_from(&json).is_err());
+    }
+
+    #[test]
+    fn test_try_from_json_ref_object_without_soul_fails() {
+        let json = serde_json::json!({ "foo": "bar" });
+        assert!(Value::try_from(&json).is_err());
+    }
+
+    #[test]
+    fn test_try_from_json_ref_matches_owned() {
+        // Borrowed and owned conversions should produce identical results.
+        let cases = vec![
+            SerdeJsonValue::Null,
+            SerdeJsonValue::Bool(true),
+            SerdeJsonValue::Bool(false),
+            SerdeJsonValue::String("test".into()),
+            serde_json::json!(42.0),
+            serde_json::json!({ "#": "soul/123" }),
+        ];
+        for json in cases {
+            let owned = Value::try_from(json.clone()).unwrap();
+            let borrowed = Value::try_from(&json).unwrap();
+            assert_eq!(owned, borrowed, "mismatch for json: {}", json);
+        }
     }
 
     // ── From<Value> for JsonValue (round-trip) ──

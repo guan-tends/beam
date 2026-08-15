@@ -10,7 +10,6 @@ use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::{Value as JsonValue, json};
 use std::collections::BTreeMap;
 use crate::utils::FxHashSet;
-use std::convert::TryFrom;
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
 use bytes::Bytes;
@@ -767,7 +766,7 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
 
     fn from_put_obj(
         json: &JsonValue,
-        json_str: String,
+        json_str: &str,
         msg_id: String,
         from: Addr,
         allow_public_space: bool,
@@ -844,7 +843,7 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
                     .get(child_key)
                     .and_then(|t| t.as_f64())
                     .unwrap_or(0.0);
-                let value = match Value::try_from(child_val.clone()) {
+                let value = match Value::from_json_ref(child_val) {
                     Ok(v) => v,
                     Err(e) => {
                         // Skip values we can't convert rather than rejecting
@@ -872,7 +871,7 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
             updated_nodes.insert(node_id.to_string(), children);
         }
         let put = Put {
-            id: msg_id.to_string(),
+            id: msg_id,
             from,
             recipients: None,
             in_response_to,
@@ -926,7 +925,7 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
 
     pub fn from_json_obj(
         json: &JsonValue,
-        json_str: String,
+        json_str: &str,
         from: Addr,
         allow_public_space: bool,
     ) -> Result<Self, &'static str> {
@@ -1018,19 +1017,20 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
         if let Some(arr) = json.as_array() {
             let mut vec = Vec::<Self>::new();
             for msg in arr {
+                // Serialize individual array elements for error logging.
+                // This is cheaper than cloning the entire input string for
+                // every message — only allocated when the array has >1 msg.
+                let msg_str = serde_json::to_string(msg).unwrap_or_default();
                 vec.push(Self::from_json_obj(
                     msg,
-                    msg.to_string(),
+                    &msg_str,
                     from.clone(),
                     allow_public_space,
                 )?);
             }
             Ok(vec)
         } else {
-            match Self::from_json_obj(&json, s.to_string(), from, allow_public_space) {
-                Ok(msg) => Ok(vec![msg]),
-                Err(e) => Err(e),
-            }
+            Self::from_json_obj(&json, s, from, allow_public_space).map(|msg| vec![msg])
         }
     }
 }
