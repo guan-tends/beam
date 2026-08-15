@@ -22,7 +22,7 @@ use crate::message::Message;
 use crate::metrics::Metrics;
 
 use async_trait::async_trait;
-use std::collections::HashSet;
+use crate::utils::FxHashSet;
 use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;
@@ -34,7 +34,7 @@ use tokio_native_tls::native_tls::Identity;
 use tokio_websockets::ServerBuilder;
 
 /// Shared set of connected client addresses.
-type Clients = Arc<RwLock<HashSet<Addr>>>;
+type Clients = Arc<RwLock<FxHashSet<Addr>>>;
 
 /// Configuration for the [`WsServer`] adapter.
 #[derive(Clone)]

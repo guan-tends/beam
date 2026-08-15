@@ -63,7 +63,7 @@ use crate::utils::random_string;
 use async_trait::async_trait;
 use futures_util::Future;
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use crate::utils::FxHashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::Send;
@@ -217,7 +217,7 @@ pub struct ActorContext {
     /// router is created after the node itself).
     pub router: Arc<RwLock<Addr>>,
     /// Stop signals for child actors (keyed by child Addr).
-    stop_signals: Arc<RwLock<HashMap<Addr, Sender<()>>>>,
+    stop_signals: Arc<RwLock<FxHashMap<Addr, Sender<()>>>>,
     /// Join handles for spawned child tasks.
     task_handles: Arc<RwLock<Vec<JoinHandle<()>>>>,
     /// This actor's own address.
@@ -245,7 +245,7 @@ impl ActorContext {
     pub fn new(peer_id: String) -> Self {
         Self {
             addr: Addr::noop(),
-            stop_signals: Arc::new(RwLock::new(HashMap::new())),
+            stop_signals: Arc::new(RwLock::new(FxHashMap::default())),
             task_handles: Arc::new(RwLock::new(Vec::new())),
             peer_id: Arc::new(RwLock::new(peer_id)),
             router: Arc::new(RwLock::new(Addr::noop())),
@@ -263,7 +263,7 @@ impl ActorContext {
 
     /// Creates a child context with the given address and stop signal.
     fn child_context(&self, addr: Addr, stop_signal: Sender<()>) -> Self {
-        let mut stop_signals = HashMap::new();
+        let mut stop_signals = FxHashMap::default();
         stop_signals.insert(addr.clone(), stop_signal);
         Self {
             addr,

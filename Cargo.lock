@@ -256,6 +256,7 @@ dependencies = [
  "postcard",
  "rand 0.9.5",
  "redb",
+ "rustc-hash",
  "serde",
  "serde_json",
  "sha2",

@@ -30,7 +30,7 @@
 //! assert!(!dup.check("msg-2"));   // different message not seen
 //! ```
 
-use std::collections::HashMap;
+use crate::utils::FxHashMap;
 use web_time::{Duration, Instant};
 
 /// A bounded, TTL-based deduplication tracker matching Gun.js `dup.js`.
@@ -39,7 +39,7 @@ use web_time::{Duration, Instant};
 /// within the TTL are automatically evicted. The map is also bounded by
 /// `max` entries — when exceeded, the oldest third is evicted.
 pub struct Dup {
-    entries: HashMap<String, DupEntry>,
+    entries: FxHashMap<String, DupEntry>,
     /// Maximum entries before forced eviction (default: 100,000).
     max: usize,
     /// Entry TTL (default: 9 seconds, matching Gun.js `opt.age`).
@@ -61,7 +61,7 @@ impl Dup {
     /// * `age_secs` — TTL in seconds. Entries older than this are evicted.
     pub fn new(max: usize, age_secs: u64) -> Self {
         Self {
-            entries: HashMap::with_capacity(max),
+            entries: FxHashMap::with_capacity_and_hasher(max, Default::default()),
             max,
             age: Duration::from_secs(age_secs),
             last_drop: Instant::now(),

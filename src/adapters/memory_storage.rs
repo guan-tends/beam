@@ -22,7 +22,8 @@
 
 #![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+use crate::utils::{FxHashMap, FxHashSet};
 
 use crate::actor::{Actor, ActorContext};
 use crate::message::{BatchPut, Get, Message, Put};
@@ -38,7 +39,7 @@ use std::sync::Arc;
 /// See the [module docs](self) for semantics.
 #[derive(Clone)]
 pub struct MemoryStorage {
-    store: Arc<RwLock<HashMap<String, Children>>>,
+    store: Arc<RwLock<FxHashMap<String, Children>>>,
 }
 
 impl Default for MemoryStorage {
@@ -51,7 +52,7 @@ impl MemoryStorage {
     /// Creates a new empty in-memory storage adapter.
     pub fn new() -> Self {
         MemoryStorage {
-            store: Arc::new(RwLock::new(HashMap::new())),
+            store: Arc::new(RwLock::new(FxHashMap::default())),
         }
     }
 
@@ -85,7 +86,7 @@ impl MemoryStorage {
             };
             let mut reply_with_nodes = BTreeMap::new();
             reply_with_nodes.insert(get.node_id.clone(), reply_with_children);
-            let mut recipients = HashSet::new();
+            let mut recipients = FxHashSet::default();
             recipients.insert(get.from.clone());
             let my_addr = ctx.addr.clone();
             let put = Put::new(reply_with_nodes, Some(get.id.clone()), my_addr);
