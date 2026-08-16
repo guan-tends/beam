@@ -15,6 +15,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub mod ack;
 pub mod actor;
 pub mod adapters;
+/// Thread-safe bump arena allocator (native only — uses `std::sync::Mutex`).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod arena;
 mod dup;
 pub mod mailbox;
 #[doc(hidden)]
