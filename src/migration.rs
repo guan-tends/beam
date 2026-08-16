@@ -533,7 +533,7 @@ pub use io::migrate;
 mod tests {
     use super::*;
     use crate::types::{NodeData, Value};
-    use std::collections::BTreeMap;
+    use arena_btreemap::BTreeMap;
 
     /// Helper: build a representative `Children` map using the real BEAM value types.
     fn make_test_children() -> Children {

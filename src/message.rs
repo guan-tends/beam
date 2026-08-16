@@ -8,7 +8,7 @@ use java_utils::HashCode;
 use log::{debug, error};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::{Value as JsonValue, json};
-use std::collections::BTreeMap;
+use arena_btreemap::BTreeMap;
 use crate::utils::FxHashSet;
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
@@ -1239,7 +1239,7 @@ mod tests {
 
     use crate::message::{Get, Put};
     use crate::types::{Children, NodeData, Value};
-    use std::collections::BTreeMap;
+    use arena_btreemap::BTreeMap;
 
     /// Build a Put with a single soul/key/value for cache tests.
     fn make_test_put() -> Put {

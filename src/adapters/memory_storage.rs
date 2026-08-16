@@ -22,7 +22,7 @@
 
 #![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
 
-use std::collections::BTreeMap;
+use arena_btreemap::BTreeMap;
 use crate::utils::{FxHashMap, FxHashSet};
 
 use crate::actor::{Actor, ActorContext};

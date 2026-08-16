@@ -39,7 +39,7 @@
 //! beam = { version = "0.3", features = ["persy"] }
 //! ```
 
-use std::collections::BTreeMap;
+use arena_btreemap::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use web_time::{SystemTime, UNIX_EPOCH};

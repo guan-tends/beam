@@ -32,7 +32,7 @@ use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
 use async_trait::async_trait;
 use log::{error, info, warn};
-use std::collections::BTreeMap;
+use arena_btreemap::BTreeMap;
 use crate::utils::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 use wasm_bindgen::closure::Closure;

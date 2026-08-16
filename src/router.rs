@@ -54,7 +54,7 @@ use crate::utils::{BoundedHashMap, FxHashMap, FxHashSet, try_send_or_log};
 use async_trait::async_trait;
 use log::{debug, error, info};
 use rand::{rng, seq::IteratorRandom};
-use std::collections::BTreeMap;
+use arena_btreemap::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use web_time::Instant;
@@ -624,7 +624,7 @@ impl Router {
                         // mirrors the storage _ack/_err sentinels, just with a
                         // different key, so the requester's oneshot drain picks
                         // it up via the same pending_puts plumbing.
-                        let children: Children = std::collections::BTreeMap::from([(
+                        let children: Children = arena_btreemap::BTreeMap::from([(
                             "_".to_string(),
                             NodeData {
                                 value: Value::Number(count as f64),
@@ -933,7 +933,7 @@ impl Router {
             //   Number(N) → success, Ok(ReplicationStatus { acked_by: N })
             //   Bit(true) → timeout, Err("quorum timed out")
             //   else → malformed (decoder returns None, falls through)
-            let mut children: Children = std::collections::BTreeMap::new();
+            let mut children: Children = arena_btreemap::BTreeMap::new();
             children.insert(
                 "_".to_string(),
                 NodeData {
@@ -1160,7 +1160,7 @@ mod tests {
     use super::*;
     use crate::adapters::MemoryStorage;
     use crate::metrics::Metrics;
-    use std::collections::BTreeMap;
+    use arena_btreemap::BTreeMap;
     use web_time::Duration;
 
     #[test]
