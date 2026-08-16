@@ -185,7 +185,7 @@ impl PersyStorage {
             }
         };
 
-        let mut reply_children = BTreeMap::default();
+        let mut reply_children: Children = BTreeMap::default();
         for (_id, bytes) in scan_iter {
             let record: NodeRecord = match postcard::from_bytes(&bytes) {
                 Ok(r) => r,
@@ -206,7 +206,7 @@ impl PersyStorage {
             Some(target) => reply_children
                 .into_iter()
                 .filter(|(k, _)| k == target)
-                .collect::<BTreeMap<_, _>>(),
+                .collect::<Children>(),
             None => reply_children,
         };
 
@@ -249,7 +249,7 @@ impl PersyStorage {
             // so we can delete the stale records after merging.
             // `tx.scan` returns `Result<TxSegmentIter>`; bind the iter first,
             // then iterate (each yielded item is `(PersyId, Vec<u8>)`, not a Result).
-            let mut existing_children: BTreeMap<String, NodeData> = BTreeMap::default();
+            let mut existing_children: Children = BTreeMap::default();
             let mut stale_ids: Vec<PersyId> = Vec::new();
             // `tx.scan` returns `Result<TxSegmentIter, PE<SegmentError>>`. The
             // surrounding function returns `Result<(), String>`, so map the
@@ -264,7 +264,7 @@ impl PersyStorage {
                         continue;
                     }
                 };
-                if record.node_id == node_id {
+                if record.node_id == *node_id {
                     for (k, v) in record.children {
                         // LWW: keep newer updated_at, prefer existing if equal
                         match existing_children.get(&k) {
@@ -345,7 +345,7 @@ impl PersyStorage {
 /// format means `Node::handle_put` drains `pending_puts` uniformly.
 fn build_ack_children(
     result: &Result<Result<(), String>, tokio::task::JoinError>,
-) -> (BTreeMap<String, NodeData>, Option<String>) {
+) -> (Children, Option<String>) {
     let now_millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -360,7 +360,7 @@ fn build_ack_children(
                 },
             )]
             .into_iter()
-            .collect(),
+            .collect::<Children>(),
             None,
         ),
         Ok(Err(e)) => {
@@ -374,7 +374,7 @@ fn build_ack_children(
                     },
                 )]
                 .into_iter()
-                .collect(),
+                .collect::<Children>(),
                 Some(e.clone()),
             )
         }
@@ -390,7 +390,7 @@ fn build_ack_children(
                     },
                 )]
                 .into_iter()
-                .collect(),
+                .collect::<Children>(),
                 Some(msg),
             )
         }
@@ -423,6 +423,7 @@ impl Actor for PersyStorage {
                 let put_id = put.id.clone();
                 let put_from = put.from.clone();
                 let storage = self.clone();
+                let put = put.clone();
                 let result =
                     tokio::task::spawn_blocking(move || storage.handle_put_internal(put.clone()))
                         .await;
@@ -432,6 +433,7 @@ impl Actor for PersyStorage {
                 let batch_id = batch.id.clone();
                 let batch_from = batch.from.clone();
                 let storage = self.clone();
+                let batch = batch.clone();
                 let result =
                     tokio::task::spawn_blocking(move || storage.handle_batch_put(batch.clone()))
                         .await;
@@ -445,7 +447,7 @@ impl Actor for PersyStorage {
                 // For embedded Persy, put() already commits inline (prepared.commit).
                 // Flush has no additional durability work. Send ack immediately so
                 // Node::flush() drains its pending_flushes oneshot promptly.
-                let mut ack_children = BTreeMap::default();
+                let mut ack_children: Children = BTreeMap::default();
                 ack_children.insert(
                     "_flushed".to_string(),
                     NodeData {
