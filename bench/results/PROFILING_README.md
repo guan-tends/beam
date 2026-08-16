@@ -59,3 +59,39 @@ This distributes clone/allocation cost, hiding true impact. Production LTO build
 inline surrounding overhead, making the clone a LARGER proportion of execution time.
 Always verify with production-mode benchmarks after fixing what the profiler shows.
 Take profiling results as LOWER BOUNDS, not ground truth.
+
+---
+
+## v0.16.0 Profiling Battery (2026-08-16)
+
+### Methodology (refined)
+Profiling binaries built with `cargo build --profile profiling --test local_put_bench --test relay_throughput_bench`.
+For heaptrack/dhat without mimalloc: `cargo build --profile profiling --no-default-features --features native --test local_put_bench --test relay_throughput_bench`.
+
+Two sets of binaries:
+- **With mimalloc** (default features): for perf/flamegraph (production-like allocator)
+- **Without mimalloc** (`--no-default-features --features native`): for heaptrack/dhat (system allocator exposes individual allocations)
+
+### Execution Order (by overhead, lowest first) — for BOTH local put and relay:
+1. **perf + inferno** (flame graph) — `perf record --call-graph dwarf -F 99 -o bench/results/v0XX/perf_XXX.data -- $BENCH $TEST --ignored --nocapture`
+2. **heaptrack** (heap allocation) — `heaptrack -o bench/results/v0XX/heaptrack_XXX -- $BENCH_NO_MI $TEST --ignored --nocapture`
+3. **valgrind --tool=dhat** (allocation lifetime) — `valgrind --tool=dhat --dhat-out-file=bench/results/v0XX/dhat_XXX.out -- $BENCH_NO_MI $TEST --ignored --nocapture`
+
+### Binaries
+- Local put (mimalloc): `target/profiling/deps/local_put_bench-<hash>`
+- Local put (no mimalloc): `target/profiling/deps/local_put_bench-<hash>` (different hash)
+- Relay (mimalloc): `target/profiling/deps/relay_throughput_bench-<hash>`
+- Relay (no mimalloc): `target/profiling/deps/relay_throughput_bench-<hash>` (different hash)
+- Find latest: `ls -lt target/profiling/deps/ | grep -E "local_put|relay_throughput" | grep -v '\.d$' | head -4`
+
+### Test names
+- Local put: `local_put_100k --ignored --nocapture`
+- Relay: `relay_throughput_1_sender_50k --ignored --nocapture`
+
+### Long-running tools (dhat takes 2-5 min under valgrind)
+- Use `nohup` for dhat: `nohup bash -c 'valgrind ... > output.txt 2>&1; echo "DONE=$?" >> output.txt' &`
+- Poll with: `grep "DONE=" output.txt`
+- tmux sessions can die silently — nohup is more reliable
+
+### Files
+See `bench/results/v016/SUMMARY.md` for full results.
