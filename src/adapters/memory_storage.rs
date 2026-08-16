@@ -73,7 +73,7 @@ impl MemoryStorage {
                     // Reply with specific child if it's found
                     match children.get(child_key) {
                         Some(child_val) => {
-                            let mut r = BTreeMap::new();
+                            let mut r = BTreeMap::default();
                             r.insert(child_key.clone(), child_val.clone());
                             r
                         }
@@ -84,7 +84,7 @@ impl MemoryStorage {
                 }
                 None => children.clone(), // Reply with all children of this node
             };
-            let mut reply_with_nodes = BTreeMap::new();
+            let mut reply_with_nodes = BTreeMap::default();
             reply_with_nodes.insert(get.node_id.clone(), reply_with_children);
             let mut recipients = FxHashSet::default();
             recipients.insert(get.from.clone());
@@ -94,8 +94,8 @@ impl MemoryStorage {
         } else {
             debug!("have not {}", get.node_id);
             // Empty set: still a valid replay. Emit sentinel so `.map()` doesn't hang.
-            let mut reply_with_nodes = BTreeMap::new();
-            reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
+            let mut reply_with_nodes = BTreeMap::default();
+            reply_with_nodes.insert(get.node_id.clone(), BTreeMap::default());
             let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
             let _ = get.from.send(Message::Put(put));
         }
@@ -148,7 +148,7 @@ impl MemoryStorage {
     /// - `_ack` child → success
     /// - `_err` child carrying the message → failure
     fn send_put_ack(&self, put: &Put, result: &Result<(), String>, ctx: &ActorContext) {
-        let mut ack_children = BTreeMap::new();
+        let mut ack_children = BTreeMap::default();
         match result {
             Ok(()) => {
                 ack_children.insert(
@@ -175,7 +175,7 @@ impl MemoryStorage {
                 );
             }
         }
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), ack_children);
         let ack = Put::new(nodes, Some(put.id.clone()), ctx.addr.clone());
         let _ = put.from.send(Message::Put(ack));
@@ -209,7 +209,7 @@ impl MemoryStorage {
         result: &Result<(), String>,
         ctx: &ActorContext,
     ) {
-        let mut ack_children = BTreeMap::new();
+        let mut ack_children = BTreeMap::default();
         match result {
             Ok(()) => {
                 ack_children.insert(
@@ -236,7 +236,7 @@ impl MemoryStorage {
                 );
             }
         }
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), ack_children);
         // Send as Put ack keyed on batch.id so Node::handle_put drains it.
         let ack = Put::new(nodes, Some(batch.id.clone()), ctx.addr.clone());
@@ -259,7 +259,7 @@ impl Actor for MemoryStorage {
             Message::Flush(flush) => {
                 // Memory storage has no disk state; flush is a no-op.
                 // Ack the barrier so callers never hang.
-                let mut ack = BTreeMap::new();
+                let mut ack = BTreeMap::default();
                 ack.insert(
                     "_flushed".to_string(),
                     NodeData {
@@ -270,7 +270,7 @@ impl Actor for MemoryStorage {
                             .as_millis() as f64,
                     },
                 );
-                let mut nodes = BTreeMap::new();
+                let mut nodes = BTreeMap::default();
                 nodes.insert("_ack".to_string(), ack);
                 let put = Put::new(nodes, Some(flush.id.clone()), ctx.addr.clone());
                 put.to_string(); // compute checksum

@@ -266,7 +266,7 @@ impl Node {
         let inner = NodeInner {
             path: vec![],
             uid: RwLock::new("".to_string()),
-            children: RwLock::new(BTreeMap::new()),
+            children: RwLock::new(BTreeMap::default()),
             parent: RwLock::new(None),
             broadcast_buffer_size: config.broadcast_buffer_size,
             on_sender: RwLock::new(None),
@@ -465,7 +465,7 @@ impl Node {
         let node = Self {
             inner: Arc::new(NodeInner {
                 path,
-                children: RwLock::new(BTreeMap::new()),
+                children: RwLock::new(BTreeMap::default()),
                 parent: RwLock::new(Some((self.inner.uid.read().clone(), self.clone()))),
                 broadcast_buffer_size: self.inner.broadcast_buffer_size,
                 on_sender: RwLock::new(None),
@@ -834,7 +834,7 @@ impl Node {
         if let Some(sender) = self.inner.on_sender.read().as_ref() {
             sender.send(value.clone()).ok();
         }
-        let mut updated_nodes = BTreeMap::new();
+        let mut updated_nodes = BTreeMap::default();
         self.add_parent_nodes(&mut updated_nodes, value, updated_at);
         let my_addr = self.inner.addr.read().clone().unwrap();
         let put = Put::new(updated_nodes, None, my_addr.clone());
@@ -892,7 +892,7 @@ impl Node {
             sender.send(value.clone()).ok();
         }
         debug!("put {}", value.to_string());
-        let mut updated_nodes = BTreeMap::new();
+        let mut updated_nodes = BTreeMap::default();
         // Store the value at self.inner.uid under the "_" convention (Gun.js
         // soul-value encoding) so that map() on self returns the value
         // as a synthetic child. This is what Gun.js semantics expect for
@@ -988,7 +988,7 @@ impl Node {
                 let _ = sender.send(value.clone());
             }
 
-            let mut updated_nodes = BTreeMap::new();
+            let mut updated_nodes = BTreeMap::default();
             leaf.add_parent_nodes(&mut updated_nodes, value, updated_at);
 
             let my_addr = self.inner.addr.read().clone().unwrap();
@@ -1419,7 +1419,7 @@ mod tests {
     /// The from-address is a no-op since these unit tests inject the ack
     /// directly through `handle(...)` — no routing involved.
     fn make_ack_put(put_id: &str, sentinel: &str) -> Put {
-        let mut children = BTreeMap::new();
+        let mut children = BTreeMap::default();
         children.insert(
             sentinel.to_string(),
             NodeData {
@@ -1431,7 +1431,7 @@ mod tests {
                 updated_at: 0.0,
             },
         );
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), children);
         let put = Put::new(nodes, Some(put_id.to_string()), Addr::noop());
         // Compute checksum so callers can serialize.
@@ -1463,7 +1463,7 @@ mod tests {
     async fn test_decode_put_ack_payload_no_sentinel_treated_as_success() {
         // Empty ack payload (no _ack/_err) is treated as success — the ack's
         // presence is the signal. This matches the documented fallback.
-        let mut children = BTreeMap::new();
+        let mut children = BTreeMap::default();
         children.insert(
             "_ack".to_string(),
             NodeData {
@@ -1471,7 +1471,7 @@ mod tests {
                 updated_at: 0.0,
             },
         );
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), children);
         let put = Put::new(nodes, Some("put-3".to_string()), Addr::noop());
         let result = Node::decode_put_ack_payload(&put);
@@ -1671,7 +1671,7 @@ mod tests {
 
     /// Build a Put carrying the `__quorum_met__` sentinel for decoder tests.
     fn make_quorum_put(sentinel_value: Value) -> Put {
-        let mut children: Children = arena_btreemap::BTreeMap::new();
+        let mut children: Children = arena_btreemap::BTreeMap::default();
         children.insert(
             "_".to_string(),
             NodeData {
@@ -1718,7 +1718,7 @@ mod tests {
 
     #[test]
     fn decode_quorum_payload_no_sentinel_falls_through() {
-        let mut children: Children = arena_btreemap::BTreeMap::new();
+        let mut children: Children = arena_btreemap::BTreeMap::default();
         children.insert(
             "_".to_string(),
             NodeData {
@@ -1752,7 +1752,7 @@ mod tests {
 
     #[test]
     fn decode_quorum_payload_missing_underscore_key() {
-        let mut children: Children = arena_btreemap::BTreeMap::new();
+        let mut children: Children = arena_btreemap::BTreeMap::default();
         children.insert(
             "wrong_key".to_string(),
             NodeData {
@@ -1851,7 +1851,7 @@ mod tests {
             other => panic!("expected Some(Err) for Bit(true) payload, got {other:?}"),
         }
         let non_sentinel_put = {
-            let mut children = arena_btreemap::BTreeMap::new();
+            let mut children = arena_btreemap::BTreeMap::default();
             children.insert(
                 "_".to_string(),
                 NodeData {

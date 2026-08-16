@@ -73,7 +73,7 @@ fn write_redb_records(path: &std::path::Path, count: usize) -> Result<usize, Str
             .map_err(|e| format!("open_table: {:?}", e))?;
 
         for i in 0..count {
-            let mut children: BTreeMap<String, NodeData> = BTreeMap::new();
+            let mut children: BTreeMap<String, NodeData> = BTreeMap::default();
             children.insert(
                 format!("leaf_{:04}", i),
                 NodeData {
@@ -236,7 +236,7 @@ async fn e2e_migration_preserves_children() {
         let mut table = txn.open_table(BEAM_NODES).expect("open_table");
 
         // root node with child "level1_a"
-        let mut root_children: BTreeMap<String, NodeData> = BTreeMap::new();
+        let mut root_children: BTreeMap<String, NodeData> = BTreeMap::default();
         root_children.insert(
             "level1_a".to_string(),
             NodeData {
@@ -248,7 +248,7 @@ async fn e2e_migration_preserves_children() {
         table.insert("root", bytes.as_slice()).expect("insert root");
 
         // level1_a node with child "level2_a"
-        let mut l1_children: BTreeMap<String, NodeData> = BTreeMap::new();
+        let mut l1_children: BTreeMap<String, NodeData> = BTreeMap::default();
         l1_children.insert(
             "level2_a".to_string(),
             NodeData {
@@ -262,7 +262,7 @@ async fn e2e_migration_preserves_children() {
             .expect("insert l1");
 
         // level2_a node with 2 leaf children
-        let mut l2_children: BTreeMap<String, NodeData> = BTreeMap::new();
+        let mut l2_children: BTreeMap<String, NodeData> = BTreeMap::default();
         l2_children.insert(
             "leaf1".to_string(),
             NodeData {
@@ -382,7 +382,7 @@ async fn diag_persy_count_basic() {
     {
         let mut table = txn.open_table(BEAM_NODES).unwrap();
         for i in 0..100 {
-            let mut children: BTreeMap<String, NodeData> = BTreeMap::new();
+            let mut children: BTreeMap<String, NodeData> = BTreeMap::default();
             children.insert(
                 format!("leaf_{:04}", i),
                 NodeData {

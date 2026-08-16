@@ -537,7 +537,7 @@ mod tests {
 
     /// Helper: build a representative `Children` map using the real BEAM value types.
     fn make_test_children() -> Children {
-        let mut children = BTreeMap::new();
+        let mut children = BTreeMap::default();
         children.insert(
             "greeting".to_string(),
             NodeData {
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn empty_children_translates_cleanly() {
-        let empty: Children = BTreeMap::new();
+        let empty: Children = BTreeMap::default();
         let bytes = postcard::to_allocvec(&empty).unwrap();
 
         let translated = redb_to_persy_payload("empty-node", &bytes).unwrap();
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn all_value_variants_preserved() {
         // Build children using every Value variant to confirm roundtrip fidelity.
-        let mut children = BTreeMap::new();
+        let mut children = BTreeMap::default();
         children.insert(
             "null".to_string(),
             NodeData {
@@ -702,7 +702,7 @@ mod tests {
     fn unsorted_keys_preserved_after_roundtrip() {
         // BTreeMap sorts by key, so insertion order doesn't matter —
         // but verify the roundtrip doesn't somehow scramble the key set.
-        let mut children = BTreeMap::new();
+        let mut children: Children = BTreeMap::default();
         children.insert(
             "z".to_string(),
             NodeData {

@@ -125,9 +125,7 @@ dependencies = [
 
 [[package]]
 name = "arena-btreemap"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5440957640698e8a582763f10fe3a5086f8079eb9f35d815a97303e5abecb91"
+version = "0.1.2"
 dependencies = [
  "allocator-api2 0.4.0",
  "serde",

@@ -145,13 +145,13 @@ impl RedbStorage {
         let children_for_node = match table.get(&*get.node_id) {
             Ok(Some(access_guard)) => {
                 let bytes = access_guard.value();
-                unwrap_or_return!(postcard::from_bytes::<BTreeMap<String, NodeData>>(bytes))
+                unwrap_or_return!(postcard::from_bytes::<Children>(bytes))
             }
             Ok(None) => {
                 debug!("redb get: no data for node_id={}", get.node_id);
                 // Empty set is still a valid replay — send sentinel so `.map()` listeners don't hang.
-                let mut reply_with_nodes = BTreeMap::new();
-                reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
+                let mut reply_with_nodes = BTreeMap::default();
+                reply_with_nodes.insert(get.node_id.clone(), BTreeMap::default());
                 let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
                 put.to_string(); // compute checksum
                 let _ = get.from.send(Message::Put(put));
@@ -165,7 +165,7 @@ impl RedbStorage {
 
         let reply_with_children = match &get.child_key {
             Some(target_key) => {
-                let mut c = BTreeMap::new();
+                let mut c: Children = BTreeMap::default();
                 if let Some(node_data) = children_for_node.get(target_key) {
                     c.insert(target_key.clone(), node_data.clone());
                 }
@@ -174,7 +174,7 @@ impl RedbStorage {
             None => children_for_node,
         };
 
-        let mut reply_with_nodes = BTreeMap::new();
+        let mut reply_with_nodes = BTreeMap::default();
         reply_with_nodes.insert(get.node_id.clone(), reply_with_children);
 
         let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
@@ -212,13 +212,13 @@ impl RedbStorage {
                 continue;
             }
 
-            let mut children_for_node: BTreeMap<String, NodeData> =
+            let mut children_for_node: Children =
                 match node_table.get(&**node_id)? {
                     Some(access_guard) => {
                         let bytes = access_guard.value();
                         postcard::from_bytes(bytes).unwrap_or_default()
                     }
-                    None => BTreeMap::new(),
+                    None => BTreeMap::default(),
                 };
 
             for (child_id, child_data) in update_data {
@@ -325,7 +325,7 @@ impl Actor for RedbStorage {
 
                 // For embedded redb, put() already commits inline (wtxn.commit).
                 // Flush has no additional durability work. Send ack immediately.
-                let mut ack_children = BTreeMap::new();
+                let mut ack_children = BTreeMap::default();
                 ack_children.insert(
                     "_flushed".to_string(),
                     NodeData {
@@ -336,7 +336,7 @@ impl Actor for RedbStorage {
                             .as_millis() as f64,
                     },
                 );
-                let mut ack_nodes = BTreeMap::new();
+                let mut ack_nodes = BTreeMap::default();
                 ack_nodes.insert("_ack".to_string(), ack_children);
                 let put = Put::new(ack_nodes, Some(flush_id), ctx_addr.clone());
                 put.to_string(); // compute checksum
@@ -384,7 +384,7 @@ impl RedbStorage {
                     },
                 )]
                 .into_iter()
-                .collect::<BTreeMap<_, _>>(),
+                .collect::<Children>(),
                 None,
             ),
             Ok(Err(e)) => {
@@ -401,7 +401,7 @@ impl RedbStorage {
                         },
                     )]
                     .into_iter()
-                    .collect(),
+                    .collect::<Children>(),
                     Some(format!("redb put commit failed: {:?}", e)),
                 )
             }
@@ -419,12 +419,12 @@ impl RedbStorage {
                         },
                     )]
                     .into_iter()
-                    .collect(),
+                    .collect::<Children>(),
                     Some(format!("redb put task panicked: {:?}", e)),
                 )
             }
         };
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), ack_children);
         let ack = Put::new(nodes, Some(put_id.to_string()), ctx.addr.clone());
         let _ = put_from.send(Message::Put(ack));
@@ -458,7 +458,7 @@ impl RedbStorage {
                     },
                 )]
                 .into_iter()
-                .collect::<BTreeMap<_, _>>(),
+                .collect::<Children>(),
                 None,
             ),
             Ok(Err(e)) => {
@@ -475,7 +475,7 @@ impl RedbStorage {
                         },
                     )]
                     .into_iter()
-                    .collect(),
+                    .collect::<Children>(),
                     Some(format!("redb batch_put commit failed: {:?}", e)),
                 )
             }
@@ -493,12 +493,12 @@ impl RedbStorage {
                         },
                     )]
                     .into_iter()
-                    .collect(),
+                    .collect::<Children>(),
                     Some(format!("redb batch_put task panicked: {:?}", e)),
                 )
             }
         };
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), ack_children);
         let ack = Put::new(nodes, Some(batch_id.to_string()), ctx.addr.clone());
         let _ = batch_from.send(Message::Put(ack));
@@ -569,7 +569,7 @@ mod tests {
         let ctx = ActorContext::new("test".to_string());
 
         // Pre-populate: store a child under node "n1" via the Actor entry point.
-        let mut children = BTreeMap::new();
+        let mut children = BTreeMap::default();
         children.insert(
             "k".to_string(),
             NodeData {
@@ -577,7 +577,7 @@ mod tests {
                 updated_at: 0.0,
             },
         );
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("n1".to_string(), children.clone());
         let seed_put = Put::new(nodes, None, ctx.addr.clone());
         Actor::handle(&mut storage, Arc::new(Message::Put(seed_put)), &ctx).await;
@@ -590,7 +590,7 @@ mod tests {
         // Compute the checksum the storage will produce for the reply.
         let reply = Put::new(
             {
-                let mut m = BTreeMap::new();
+                let mut m = BTreeMap::default();
                 m.insert("n1".to_string(), children.clone());
                 m
             },

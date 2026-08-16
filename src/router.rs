@@ -933,7 +933,7 @@ impl Router {
             //   Number(N) → success, Ok(ReplicationStatus { acked_by: N })
             //   Bit(true) → timeout, Err("quorum timed out")
             //   else → malformed (decoder returns None, falls through)
-            let mut children: Children = arena_btreemap::BTreeMap::new();
+            let mut children: Children = arena_btreemap::BTreeMap::default();
             children.insert(
                 "_".to_string(),
                 NodeData {
@@ -1099,10 +1099,10 @@ impl Router {
 
         let mut has_stale = false;
         let mut has_new = false;
-        let mut filtered = BTreeMap::new();
+        let mut filtered = BTreeMap::default();
 
         for (soul, children) in put.updated_nodes.iter() {
-            let mut filtered_children = Children::new();
+            let mut filtered_children = Children::default();
             for (key, node_data) in children {
                 // Check if this (soul, key) is stale.
                 let is_stale = self
@@ -1204,7 +1204,7 @@ mod tests {
 
     /// Helper: build a Put with a single (soul, key, value, timestamp).
     fn make_put(soul: &str, key: &str, value: &str, ts: f64) -> Put {
-        let mut children: Children = BTreeMap::new();
+        let mut children: Children = BTreeMap::default();
         children.insert(
             key.to_string(),
             NodeData {
@@ -1212,14 +1212,14 @@ mod tests {
                 updated_at: ts,
             },
         );
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert(soul.to_string(), children);
         Put::new(nodes, None, Addr::noop())
     }
 
     /// Helper: build a Put with multiple keys under one soul.
     fn make_multi_put(soul: &str, pairs: &[(&str, &str, f64)]) -> Put {
-        let mut children: Children = BTreeMap::new();
+        let mut children: Children = BTreeMap::default();
         for (key, val, ts) in pairs {
             children.insert(
                 key.to_string(),
@@ -1229,7 +1229,7 @@ mod tests {
                 },
             );
         }
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert(soul.to_string(), children);
         Put::new(nodes, None, Addr::noop())
     }
@@ -1328,7 +1328,7 @@ mod tests {
         // is never called and the message proceeds normally.
         let metrics = Arc::new(Metrics::new());
         let mut router = Router::new(vec![], vec![], metrics);
-        let put = Put::new(BTreeMap::new(), None, Addr::noop());
+        let put = Put::new(BTreeMap::default(), None, Addr::noop());
         assert!(matches!(router.ham_filter(&put), HamFilterResult::New));
     }
 
