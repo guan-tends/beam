@@ -44,7 +44,7 @@ use crate::utils::random_string;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
-use std::collections::BTreeMap;
+use arena_btreemap::BTreeMap;
 use crate::utils::FxHashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -1671,7 +1671,7 @@ mod tests {
 
     /// Build a Put carrying the `__quorum_met__` sentinel for decoder tests.
     fn make_quorum_put(sentinel_value: Value) -> Put {
-        let mut children: Children = std::collections::BTreeMap::new();
+        let mut children: Children = arena_btreemap::BTreeMap::new();
         children.insert(
             "_".to_string(),
             NodeData {
@@ -1718,7 +1718,7 @@ mod tests {
 
     #[test]
     fn decode_quorum_payload_no_sentinel_falls_through() {
-        let mut children: Children = std::collections::BTreeMap::new();
+        let mut children: Children = arena_btreemap::BTreeMap::new();
         children.insert(
             "_".to_string(),
             NodeData {
@@ -1752,7 +1752,7 @@ mod tests {
 
     #[test]
     fn decode_quorum_payload_missing_underscore_key() {
-        let mut children: Children = std::collections::BTreeMap::new();
+        let mut children: Children = arena_btreemap::BTreeMap::new();
         children.insert(
             "wrong_key".to_string(),
             NodeData {
@@ -1851,7 +1851,7 @@ mod tests {
             other => panic!("expected Some(Err) for Bit(true) payload, got {other:?}"),
         }
         let non_sentinel_put = {
-            let mut children = std::collections::BTreeMap::new();
+            let mut children = arena_btreemap::BTreeMap::new();
             children.insert(
                 "_".to_string(),
                 NodeData {

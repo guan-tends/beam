@@ -21,7 +21,7 @@ fn main() {
         let (k, v) = entry.unwrap();
         let node_id: String = k.value().to_string();
         let bytes = v.value();
-        let children: std::collections::BTreeMap<String, beam::types::NodeData> =
+        let children: arena_btreemap::BTreeMap<String, beam::types::NodeData> =
             match postcard::from_bytes(bytes) {
                 Ok(c) => c,
                 Err(e) => {

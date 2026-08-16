@@ -33,7 +33,7 @@
 //! Write commits run inside `spawn_blocking` so the fsync never blocks the
 //! async runtime's worker threads.
 
-use std::collections::BTreeMap;
+use arena_btreemap::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use web_time::{SystemTime, UNIX_EPOCH};
@@ -563,7 +563,7 @@ mod tests {
     async fn test_redb_get_always_replies_when_in_response_to_set() {
         use crate::actor::{Actor, ActorContext};
         use crate::message::Put;
-        use std::collections::BTreeMap;
+        use arena_btreemap::BTreeMap;
 
         let mut storage = create_test_storage("ack-always");
         let ctx = ActorContext::new("test".to_string());

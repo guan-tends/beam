@@ -48,7 +48,7 @@ use beam::actor::Addr;
 use beam::message::Message;
 
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use arena_btreemap::BTreeMap;
 use std::fs;
 use std::path::Path;
 
