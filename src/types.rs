@@ -47,6 +47,15 @@ use std::convert::TryFrom;
 /// name within the parent; the value is the child's [`NodeData`] (value +
 /// timestamp). `BTreeMap` is used to ensure deterministic iteration order,
 /// which is important for consistent checksums across distributed peers.
+///
+/// On native targets, the BTreeMap uses [`SyncBumpArena`][crate::arena::SyncBumpArena]
+/// for arena allocation — O(1) allocation via bump pointer, O(chunks) drop
+/// instead of O(entries). On WASM, the global allocator is used (no `std::sync`).
+#[cfg(not(target_arch = "wasm32"))]
+pub type Children = BTreeMap<String, NodeData, crate::arena::SyncBumpArena>;
+
+/// WASM fallback: `Children` uses the global allocator (no `std::sync::Mutex`).
+#[cfg(target_arch = "wasm32")]
 pub type Children = BTreeMap<String, NodeData>;
 
 /// Data stored in a leaf node of the graph.
@@ -700,7 +709,7 @@ mod tests {
 
     #[test]
     fn test_children_btreemap() {
-        let mut children: Children = BTreeMap::new();
+        let mut children: Children = BTreeMap::default();
         children.insert(
             "key1".to_string(),
             NodeData {

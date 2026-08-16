@@ -185,7 +185,7 @@ impl PersyStorage {
             }
         };
 
-        let mut reply_children = BTreeMap::new();
+        let mut reply_children = BTreeMap::default();
         for (_id, bytes) in scan_iter {
             let record: NodeRecord = match postcard::from_bytes(&bytes) {
                 Ok(r) => r,
@@ -210,7 +210,7 @@ impl PersyStorage {
             None => reply_children,
         };
 
-        let mut reply_nodes = BTreeMap::new();
+        let mut reply_nodes = BTreeMap::default();
         reply_nodes.insert(get.node_id.clone(), final_children);
         let mut put = Put::new(reply_nodes, Some(get.id.clone()), ctx.addr.clone());
         put.to_string(); // compute checksum
@@ -249,7 +249,7 @@ impl PersyStorage {
             // so we can delete the stale records after merging.
             // `tx.scan` returns `Result<TxSegmentIter>`; bind the iter first,
             // then iterate (each yielded item is `(PersyId, Vec<u8>)`, not a Result).
-            let mut existing_children: BTreeMap<String, NodeData> = BTreeMap::new();
+            let mut existing_children: BTreeMap<String, NodeData> = BTreeMap::default();
             let mut stale_ids: Vec<PersyId> = Vec::new();
             // `tx.scan` returns `Result<TxSegmentIter, PE<SegmentError>>`. The
             // surrounding function returns `Result<(), String>`, so map the
@@ -445,7 +445,7 @@ impl Actor for PersyStorage {
                 // For embedded Persy, put() already commits inline (prepared.commit).
                 // Flush has no additional durability work. Send ack immediately so
                 // Node::flush() drains its pending_flushes oneshot promptly.
-                let mut ack_children = BTreeMap::new();
+                let mut ack_children = BTreeMap::default();
                 ack_children.insert(
                     "_flushed".to_string(),
                     NodeData {
@@ -456,7 +456,7 @@ impl Actor for PersyStorage {
                             .as_millis() as f64,
                     },
                 );
-                let mut ack_nodes = BTreeMap::new();
+                let mut ack_nodes = BTreeMap::default();
                 ack_nodes.insert("_ack".to_string(), ack_children);
                 let mut put = Put::new(ack_nodes, Some(flush_id), ctx_addr);
                 put.to_string();
@@ -488,7 +488,7 @@ impl PersyStorage {
         ctx: &ActorContext,
     ) {
         let (ack_children, err_msg) = build_ack_children(result);
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), ack_children);
         let ack = Put::new(nodes, Some(put_id.to_string()), ctx.addr.clone());
         let _ = put_from.send(Message::Put(ack));
@@ -555,9 +555,9 @@ mod tests {
         let storage = PersyStorage::new_with_path(&path);
 
         // Build a Put: node "a" gets child "b" with value "hello" @ t=100
-        let mut children = BTreeMap::new();
+        let mut children = BTreeMap::default();
         children.insert("b".to_string(), make_node_data("hello", 100.0));
-        let mut updated_nodes = BTreeMap::new();
+        let mut updated_nodes = BTreeMap::default();
         updated_nodes.insert("a".to_string(), children);
         let put = Put::new(updated_nodes, Some("put-1".to_string()), Addr::noop());
 
@@ -593,27 +593,27 @@ mod tests {
         let storage = PersyStorage::new_with_path(&path);
 
         // First Put: child "x" with updated_at=100
-        let mut children = BTreeMap::new();
+        let mut children = BTreeMap::default();
         children.insert("x".to_string(), make_node_data("old", 100.0));
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("n1".to_string(), children);
         storage
             .handle_put_internal(Put::new(nodes, Some("p1".to_string()), Addr::noop()))
             .unwrap();
 
         // Second Put: child "x" with updated_at=50 (older)
-        let mut children2 = BTreeMap::new();
+        let mut children2 = BTreeMap::default();
         children2.insert("x".to_string(), make_node_data("older", 50.0));
-        let mut nodes2 = BTreeMap::new();
+        let mut nodes2 = BTreeMap::default();
         nodes2.insert("n1".to_string(), children2);
         storage
             .handle_put_internal(Put::new(nodes2, Some("p2".to_string()), Addr::noop()))
             .unwrap();
 
         // Third Put: child "x" with updated_at=200 (newest)
-        let mut children3 = BTreeMap::new();
+        let mut children3 = BTreeMap::default();
         children3.insert("x".to_string(), make_node_data("newest", 200.0));
-        let mut nodes3 = BTreeMap::new();
+        let mut nodes3 = BTreeMap::default();
         nodes3.insert("n1".to_string(), children3);
         storage
             .handle_put_internal(Put::new(nodes3, Some("p3".to_string()), Addr::noop()))

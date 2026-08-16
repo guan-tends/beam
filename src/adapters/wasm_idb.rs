@@ -201,13 +201,13 @@ impl WasmIdbStorage {
     /// Deserializes Children from a JSON string.
     fn deserialize_children(json: &str) -> Children {
         if json.is_empty() {
-            return BTreeMap::new();
+            return BTreeMap::default();
         }
         let map: FxHashMap<String, (Value, f64)> =match serde_json::from_str(json) {
             Ok(m) => m,
             Err(e) => {
                 warn!("WasmIdbStorage: deserialize error: {}", e);
-                return BTreeMap::new();
+                return BTreeMap::default();
             }
         };
         map.into_iter()
@@ -275,8 +275,8 @@ impl WasmIdbStorage {
                 Ok(result) => {
                     if result.is_null() || result.is_undefined() {
                         // Key not found
-                        let mut reply_with_nodes = BTreeMap::new();
-                        reply_with_nodes.insert(node_id.clone(), BTreeMap::new());
+                        let mut reply_with_nodes = BTreeMap::default();
+                        reply_with_nodes.insert(node_id.clone(), BTreeMap::default());
                         let put = Put::new(reply_with_nodes, Some(get_id.clone()), my_addr.clone());
                         let _ = from.send(Message::Put(put));
                         return;
@@ -289,7 +289,7 @@ impl WasmIdbStorage {
                     let reply_with_children = match &child_key {
                         Some(ck) => match children.get(ck) {
                             Some(cv) => {
-                                let mut r = BTreeMap::new();
+                                let mut r = BTreeMap::default();
                                 r.insert(ck.clone(), cv.clone());
                                 r
                             }
@@ -297,7 +297,7 @@ impl WasmIdbStorage {
                         },
                         None => children.clone(),
                     };
-                    let mut reply_with_nodes = BTreeMap::new();
+                    let mut reply_with_nodes = BTreeMap::default();
                     reply_with_nodes.insert(node_id.clone(), reply_with_children);
                     let put = Put::new(reply_with_nodes, Some(get_id.clone()), my_addr.clone());
                     let _ = from.send(Message::Put(put));
@@ -322,7 +322,7 @@ impl WasmIdbStorage {
         let reply_with_children = match &get.child_key {
             Some(ck) => match children.get(ck) {
                 Some(cv) => {
-                    let mut r = BTreeMap::new();
+                    let mut r = BTreeMap::default();
                     r.insert(ck.clone(), cv.clone());
                     r
                 }
@@ -330,7 +330,7 @@ impl WasmIdbStorage {
             },
             None => children,
         };
-        let mut reply_with_nodes = BTreeMap::new();
+        let mut reply_with_nodes = BTreeMap::default();
         reply_with_nodes.insert(get.node_id.clone(), reply_with_children);
         let mut recipients = FxHashSet::default();
         recipients.insert(get.from.clone());
@@ -340,8 +340,8 @@ impl WasmIdbStorage {
 
     /// Replies to a Get with empty data (node not found).
     fn reply_get_empty(&self, get: &Get, ctx: &ActorContext) {
-        let mut reply_with_nodes = BTreeMap::new();
-        reply_with_nodes.insert(get.node_id.clone(), BTreeMap::new());
+        let mut reply_with_nodes = BTreeMap::default();
+        reply_with_nodes.insert(get.node_id.clone(), BTreeMap::default());
         let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
         let _ = get.from.send(Message::Put(put));
     }
@@ -397,7 +397,7 @@ impl WasmIdbStorage {
 
     /// Sends a put ack back to the originating node.
     fn send_put_ack(&self, put: &Put, ctx: &ActorContext) {
-        let mut ack_children = BTreeMap::new();
+        let mut ack_children = BTreeMap::default();
         ack_children.insert(
             "_ack".to_string(),
             NodeData {
@@ -408,7 +408,7 @@ impl WasmIdbStorage {
                     .as_millis() as f64,
             },
         );
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), ack_children);
         let ack = Put::new(nodes, Some(put.id.clone()), ctx.addr.clone());
         let _ = put.from.send(Message::Put(ack));
@@ -465,7 +465,7 @@ impl WasmIdbStorage {
         }
 
         // Send batch ack
-        let mut ack_children = BTreeMap::new();
+        let mut ack_children = BTreeMap::default();
         ack_children.insert(
             "_ack".to_string(),
             NodeData {
@@ -476,7 +476,7 @@ impl WasmIdbStorage {
                     .as_millis() as f64,
             },
         );
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("_ack".to_string(), ack_children);
         let ack = Put::new(nodes, Some(batch.id.clone()), ctx.addr.clone());
         let _ = batch.from.send(Message::Put(ack));
@@ -519,7 +519,7 @@ impl Actor for WasmIdbStorage {
             Message::Flush(flush) => {
                 // IndexedDB writes are flushed immediately (write-through).
                 // Ack the barrier so callers don't hang.
-                let mut ack = BTreeMap::new();
+                let mut ack = BTreeMap::default();
                 ack.insert(
                     "_flushed".to_string(),
                     NodeData {
@@ -530,7 +530,7 @@ impl Actor for WasmIdbStorage {
                             .as_millis() as f64,
                     },
                 );
-                let mut nodes = BTreeMap::new();
+                let mut nodes = BTreeMap::default();
                 nodes.insert("_ack".to_string(), ack);
                 let put = Put::new(nodes, Some(flush.id.clone()), ctx.addr.clone());
                 let _ = flush.from.send(Message::Put(put));

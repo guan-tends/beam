@@ -188,7 +188,7 @@ impl Put {
     }
 
     pub fn new_from_kv(key: String, children: Children, from: Addr) -> Self {
-        let mut updated_nodes = BTreeMap::new();
+        let mut updated_nodes = BTreeMap::default();
         updated_nodes.insert(key, children);
         Put::new(updated_nodes, None, from)
     }
@@ -1243,7 +1243,7 @@ mod tests {
 
     /// Build a Put with a single soul/key/value for cache tests.
     fn make_test_put() -> Put {
-        let mut children = Children::new();
+        let mut children = Children::default();
         children.insert(
             "key".to_string(),
             NodeData {
@@ -1251,7 +1251,7 @@ mod tests {
                 updated_at: 1000.0,
             },
         );
-        let mut nodes = BTreeMap::new();
+        let mut nodes = BTreeMap::default();
         nodes.insert("soul1".to_string(), children);
         Put::new(nodes, None, Addr::noop())
     }
@@ -1389,7 +1389,7 @@ mod tests {
         // End-to-end: serialize 2 Puts, pack as array, parse back.
         let put1 = make_test_put();
         let put2 = {
-            let mut children = Children::new();
+            let mut children = Children::default();
             children.insert(
                 "key2".to_string(),
                 NodeData {
@@ -1397,7 +1397,7 @@ mod tests {
                     updated_at: 2000.0,
                 },
             );
-            let mut nodes = BTreeMap::new();
+            let mut nodes = BTreeMap::default();
             nodes.insert("soul2".to_string(), children);
             Put::new(nodes, None, Addr::noop())
         };
