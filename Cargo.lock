@@ -248,6 +248,7 @@ name = "beamdb"
 version = "0.15.0"
 dependencies = [
  "aes-gcm",
+ "allocator-api2 0.4.0",
  "arena-btreemap",
  "async-trait",
  "base64",
