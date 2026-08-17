@@ -270,7 +270,6 @@ impl Actor for WebRtcPeer {
                                             answer: Some(answer_str),
                                             candidate: None,
                                             local_addr: Some(local_addr.to_string()),
-                                            json_str: None,
                                         });
                                         let _ = router.send(reply);
                                     }
@@ -406,7 +405,6 @@ impl Actor for WebRtcPeer {
                                         answer: Some(answer_str),
                                         candidate: None,
                                         local_addr: Some(local_addr.to_string()),
-                                        json_str: None,
                                     });
                                     let _ = router.send(reply);
                                 }
@@ -505,7 +503,6 @@ impl WebRtcPeer {
             answer: None,
             candidate: None,
             local_addr: Some(local_addr.to_string()),
-            json_str: None,
         });
         let _ = ctx.router.read().send(signal);
         Some(pending)
