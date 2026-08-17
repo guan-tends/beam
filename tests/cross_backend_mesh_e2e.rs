@@ -33,10 +33,21 @@
 //! A single put on peer1 should arrive at both peer2 (redb) and peer3
 //! (persy).
 //!
+//! # Key depth requirement
+//!
+//! All puts and subscriptions use **two-level** keys (`node.get(topic).get(key)`)
+//! rather than one-level keys (`node.get(key)`). This is required because
+//! `Put::to_writer` skips the empty root soul `""` during wire serialization
+//! for Gun.js interoperability. With a one-level key, the parent node update
+//! (uid=`""`) is stripped from the wire format, so the subscriber (registered
+//! for topic `""`) never receives the relayed Put. Two-level keys ensure the
+//! parent soul (e.g. `"data"`) is non-empty and survives serialization, so
+//! the subscriber (registered for topic `"data"`) receives the relay.
+//!
 //! # Feature gate
 //!
 //! ```bash
-//! cargo test -p beam --features persy --test cross_backend_mesh_e2e -- --test-threads=1
+//! cargo test --features persy --test cross_backend_mesh_e2e -- --test-threads=1
 //! ```
 
 #![cfg(feature = "persy")]
@@ -144,6 +155,7 @@ async fn e2e_cross_backend_three_node_mesh_convergence() {
     use beam::adapters::PersyStorage;
 
     let port = 4956;
+    let topic = "data";
     let key = "from_peer1";
     let value = "convergence_value";
 
@@ -198,11 +210,19 @@ async fn e2e_cross_backend_three_node_mesh_convergence() {
     wait_for_peer_count(&ws_server1, 2, 5000).await;
 
     // Subscribe before the put, so we don't miss the broadcast.
-    let mut sub2 = peer2.get(key).on();
-    let mut sub3 = peer3.get(key).on();
+    // Two-level keys: `get(topic).get(key)` ensures the parent soul
+    // ("data") is non-empty and survives wire serialization.
+    // See module docs for the full explanation.
+    let mut sub2 = peer2.get(topic).get(key).on();
+    let mut sub3 = peer3.get(topic).get(key).on();
 
     // peer1 (redb) puts.
-    peer1.get(key).put(value.into()).await.expect("peer1 put");
+    peer1
+        .get(topic)
+        .get(key)
+        .put(value.into())
+        .await
+        .expect("peer1 put");
 
     // peer2 (redb) receives.
     let recv2 = timeout(Duration::from_secs(15), sub2.recv())
@@ -233,6 +253,7 @@ async fn e2e_cross_backend_persy_initiator_convergence() {
     use beam::adapters::PersyStorage;
 
     let port = 4958;
+    let topic = "data";
     let key = "from_peer3";
     let value = "persy_sender_value";
 
@@ -282,11 +303,17 @@ async fn e2e_cross_backend_persy_initiator_convergence() {
     wait_for_port(port, 5000).await;
     wait_for_peer_count(&ws_server1, 2, 5000).await;
 
-    let mut sub1 = peer1.get(key).on();
-    let mut sub2 = peer2.get(key).on();
+    // Two-level keys — see module docs.
+    let mut sub1 = peer1.get(topic).get(key).on();
+    let mut sub2 = peer2.get(topic).get(key).on();
 
     // peer3 (persy) puts.
-    peer3.get(key).put(value.into()).await.expect("peer3 put");
+    peer3
+        .get(topic)
+        .get(key)
+        .put(value.into())
+        .await
+        .expect("peer3 put");
 
     let recv1 = timeout(Duration::from_secs(15), sub1.recv())
         .await

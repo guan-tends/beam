@@ -435,6 +435,14 @@ impl Actor for WsServer {
         true
     }
 
+    /// WsServer is a relay server — it accepts incoming connections and
+    /// fans out to individual WsConn clients. The Router always relays
+    /// to WsServer (even for messages from remote peers) because the
+    /// WsServer handles per-connection echo-back via `msg.is_from(conn)`.
+    fn is_relay_server(&self) -> bool {
+        true
+    }
+
     async fn stopping(&mut self, _context: &ActorContext) {
         info!(
             "WsServer stopping — closing {} client connections",

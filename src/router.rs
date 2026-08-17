@@ -231,6 +231,14 @@ pub struct Router {
     storage_adapter_actors: Vec<Box<dyn Actor>>,
     network_adapter_actors: Vec<Box<dyn Actor>>,
     server_peers: FxHashSet<Addr>,
+
+    /// Relay server (WsServer) addresses — a subset of `server_peers`.
+    /// These always receive relayed Puts, even when the sender is a
+    /// remote peer, because WsServer handles per-connection echo-back
+    /// via `msg.is_from(conn)`. OutgoingWebsocketManager (also in
+    /// `server_peers` but NOT here) is skipped for remote-peer Puts to
+    /// prevent echo-back to the relay that sent the message.
+    relay_servers: FxHashSet<Addr>,
     dup: Dup,
     seen_get_messages: BoundedHashMap<String, SeenGetMessage>,
     subscribers_by_topic: FxHashMap<String, FxHashSet<Addr>>,
@@ -301,10 +309,14 @@ impl Actor for Router {
         }
         while let Some(adapter) = self.network_adapter_actors.pop() {
             let subscribe_to_everything = adapter.subscribe_to_everything();
+            let is_relay = adapter.is_relay_server();
             let addr = ctx.start_actor(adapter);
             self.network_adapters.insert(addr.clone());
             if subscribe_to_everything {
-                self.server_peers.insert(addr);
+                self.server_peers.insert(addr.clone());
+                if is_relay {
+                    self.relay_servers.insert(addr);
+                }
             }
         }
 
@@ -439,6 +451,7 @@ impl Router {
             storage_adapter_actors,
             network_adapter_actors,
             server_peers: FxHashSet::default(),
+            relay_servers: FxHashSet::default(),
             dup: Dup::default_gun(),
             seen_get_messages: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
             subscribers_by_topic: FxHashMap::default(),
@@ -761,19 +774,43 @@ impl Router {
         //   2. `if(meta.yo && meta.yo[peer.id]){ return false }` — don't
         //      send to peers listed in `><` (already visited).
         //
-        // BEAM's actor model separates the adapter (OutgoingWebsocketManager)
-        // from its child WsConn, so `put.from` (WsConn addr) ≠ server_peer
-        // adapter addr. The `put.from == *addr` check only covers the case
-        // where the adapter itself is the sender. For messages arriving
-        // from a remote peer via WsConn, `from_remote_peer` provides the
-        // `meta.via` check: if `put.from` is in `known_peers`, the message
-        // came from a remote peer — skip server_peers to prevent echo-back.
+        // BEAM's actor model separates the adapter (WsServer) from its
+        // child WsConn actors. The per-peer echo-back check (`meta.via`)
+        // is implemented at the WsServer level: `msg.is_from(conn)` in
+        // `WsServer::handle` skips the specific WsConn that sent the
+        // message. This mirrors Gun.js's per-peer `peer === meta.via`
+        // check — the WsServer relays to ALL connected clients except
+        // the sender.
+        //
+        // Previously, a `from_remote_peer` gate skipped server_peers
+        // entirely when the sender was a known peer. This broke hub
+        // relay topology: a hub receiving a Put from peer A could not
+        // relay it to peer B through the WsServer. The gate was removed
+        // because it prevented legitimate relay, and the WsServer's
+        // per-connection `is_from` check already handles echo-back.
         //
         // The hops check (layer 2) is applied in the subscribers and
         // known_peers sections below.
+        // Always relay to WsServer (relay_servers) — it handles
+        // per-connection echo-back via `msg.is_from(conn)`.
+        for addr in self.relay_servers.iter() {
+            if put.from == *addr {
+                continue;
+            }
+            let _ = addr.send(Arc::clone(&relay_msg));
+            already_sent_to.insert(addr.clone());
+        }
+
+        // Relay to OutgoingWebsocketManager (server_peers minus
+        // relay_servers) only if the message did NOT come from a
+        // remote peer. This prevents echo-back: a client receiving
+        // a Put from the relay must not send it back.
         let from_remote_peer = self.known_peers.contains(&put.from);
         if !from_remote_peer {
             for addr in self.server_peers.iter() {
+                if self.relay_servers.contains(addr) {
+                    continue; // already sent above
+                }
                 if put.from == *addr {
                     continue;
                 }

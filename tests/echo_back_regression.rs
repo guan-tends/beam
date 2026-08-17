@@ -21,9 +21,11 @@
 //!   2. `if(meta.yo && meta.yo[peer.id]){ return false }` — hops check
 //!
 //! BEAM's `handle_put_relay` implements the equivalent:
-//!   1. `from_remote_peer` check — skip server_peers if message came from
-//!      a known peer (equivalent to `meta.via`)
-//!   2. Hops check in subscribers and known_peers sections
+//!   1. `relay_servers` set — WsServer always receives relayed Puts (it
+//!      handles per-connection echo-back via `is_from`)
+//!   2. `from_remote_peer` gate on OutgoingWebsocketManager — skip if
+//!      message came from a remote peer (prevents client echo-back)
+//!   3. Hops check in subscribers and known_peers sections
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -114,13 +116,22 @@ async fn no_echo_back_single_sender() {
         ws_recv, relayed, dropped_dup
     );
 
-    // The relay should receive ~100 messages (the original puts).
-    // With echo-back, it would receive 200-400+.
-    // Allow some slack for Hi messages and handshake noise.
+    // The relay should receive ~200 messages: 100 original puts from
+    // the sender + ~100 storage acks from the subscriber (which received
+    // the relayed puts and acked them back). This is correct Gun.js
+    // behavior: when a relay forwards a put to a peer, the peer stores
+    // it and sends an ack back to the relay (meta.via).
+    //
+    // With TRUE echo-back (puts echoed back and re-relayed), the count
+    // would be 400+ (17x amplification as documented in the original
+    // test). The dedup check (is_message_seen) and the per-connection
+    // is_from check in WsServer prevent amplification.
+    //
+    // Allow slack for Hi messages and handshake noise.
     assert!(
-        ws_recv <= 150,
+        ws_recv <= 250,
         "relay received {} WS messages for 100 puts — echo-back detected! \
-         (expected ~100, got {})",
+         (expected ~200, got {})",
         ws_recv,
         ws_recv
     );

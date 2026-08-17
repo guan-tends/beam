@@ -144,6 +144,20 @@ pub trait Actor: Send + Sync + 'static {
         false
     }
 
+    /// Whether this actor is a relay server (WsServer) that accepts
+    /// incoming WebSocket connections and fans out to individual WsConn
+    /// clients.
+    ///
+    /// The Router uses this to distinguish WsServer (which handles
+    /// per-connection echo-back via `msg.is_from(conn)`) from
+    /// OutgoingWebsocketManager (which sends to a single remote relay
+    /// and must be skipped on echo-back).
+    ///
+    /// Defaults to `false`.
+    fn is_relay_server(&self) -> bool {
+        false
+    }
+
     /// Attempts to produce a clone of this actor for storage read/write
     /// splitting.
     ///
