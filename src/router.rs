@@ -739,29 +739,50 @@ impl Router {
     fn handle_put_relay(&mut self, put: &Put) {
         // NOTE: NO is_message_seen here. Router::handle_put already dedup'd.
 
-        // Gun.js mesh.raw(): build hops from incoming `><` plus ALL known
-        // peer IDs (up to 6), matching the reference implementation:
-        //   var to = []; for(var k in opt.peers){ to.push(p.url||p.pid||p.id);
-        //     if(++i > 6){ break } } if(i > 1){ msg['><'] = to.join() }
-        // The sender's pid is included via `from_pid` below.
-        let mut hops = put.peer_hop_list.clone().unwrap_or_default();
-        // Only insert the sender's peer ID if they're a known network peer.
-        // Non-peer senders (e.g. local Node actors) have no recognizable
-        // peer ID — adding their formatted Addr would pollute the hop list
-        // with an entry no remote peer would recognize.
+        // ── Hops (>< field) ──
+        //
+        // Gun.js has two separate uses of the `><` field:
+        //
+        // 1. **Wire serialization** (mesh.raw): builds `><` from ALL known
+        //    peer URLs (up to 6) so the RECEIVER knows who already has the
+        //    message. This is the `peer_hop_list` we serialize onto the wire.
+        //
+        // 2. **Relay skip** (mesh.say, line 175): checks `meta.yo` (parsed
+        //    from the INCOMING `><` field) to skip peers who already saw the
+        //    message. For LOCAL puts (no incoming `><`), `meta.yo` is empty
+        //    and NO peers are skipped.
+        //
+        // BEAM previously conflated these: it built `hops` from ALL known
+        // peers and used it BOTH for the wire field AND for the local relay
+        // skip check. This caused local Puts to skip ALL known_peers in the
+        // random sampling path, preventing delivery to WasmWsConn and
+        // runtime-connected peers (connect_peer / connect_peer_wasm).
+        //
+        // Fix: separate `wire_hops` (for serialization) from `relay_skip`
+        // (for local send decisions). `relay_skip` only contains the INCOMING
+        // `><` entries plus the sender's PID — matching Gun.js's `meta.yo`.
+
+        // relay_skip: peers to skip when relaying (incoming >< + sender PID).
+        // For local Puts, this is empty (or just the sender's PID if they're
+        // a known network peer) — all peers should receive the message.
+        let mut relay_skip = put.peer_hop_list.clone().unwrap_or_default();
         if let Some(from_pid) = self.addr_to_pid.get(&put.from).cloned() {
-            hops.insert(from_pid);
+            relay_skip.insert(from_pid);
         }
+
+        // wire_hops: all known peer PIDs (up to 6) for the wire `><` field.
+        // This tells receivers which peers already have the message.
+        let mut wire_hops = relay_skip.clone();
         for (i, pid) in self.peer_addrs.keys().enumerate() {
             if i >= 6 {
                 break;
             }
-            hops.insert(pid.clone());
+            wire_hops.insert(pid.clone());
         }
 
-        // Build the relay Put ONCE with peer_hop_list set, wrap in Arc.
+        // Build the relay Put ONCE with wire_hops as the `><` field.
         let mut relay_put = put.clone();
-        relay_put.peer_hop_list = Some(hops.clone());
+        relay_put.peer_hop_list = Some(wire_hops);
         let relay_msg: Arc<Message> = Arc::new(Message::Put(relay_put));
 
         let mut already_sent_to = FxHashSet::default();
@@ -830,7 +851,7 @@ impl Router {
                         return true;
                     }
                     if let Some(pid) = self.addr_to_pid.get(addr) {
-                        if hops.contains(pid) {
+                        if relay_skip.contains(pid) {
                             return true;
                         }
                     }
@@ -866,7 +887,7 @@ impl Router {
                     continue;
                 }
                 if let Some(pid) = self.addr_to_pid.get(addr) {
-                    if hops.contains(pid) {
+                    if relay_skip.contains(pid) {
                         continue;
                     }
                 }
