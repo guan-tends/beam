@@ -104,6 +104,7 @@ test('beam puts, gun receives', async ({ context }) => {
   await beamPage.waitForFunction(() => window.beamReady === true, { timeout: 20000 });
   await gunPage.evaluate(() => window.gunSubscribe('e2etest'));
   await beamPage.evaluate(() => window.beamSubscribe('e2etest'));
+  await gunPage.waitForTimeout(1000); // Let subscriptions settle on relay
   await beamPage.evaluate(() => window.beamPut('e2etest', 'msg2', 'hello from beam'));
   await gunPage.waitForFunction(
     () => document.getElementById('data').textContent.includes('hello from beam'),
