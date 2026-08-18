@@ -1,4 +1,3 @@
-#![cfg(not(target_arch = "wasm32"))]
 //! BEAM SEA Session Key Generator
 //!
 //! Generates a cryptographically random 32-byte master key for session encryption.
@@ -21,12 +20,20 @@
 //! 3. Never commit the key to version control
 //! 4. Rotate by clearing session directory and distributing new key
 //!
+
+#[cfg(not(target_arch = "wasm32"))]
 use base64::prelude::*;
+
+#[cfg(not(target_arch = "wasm32"))]
 use rand::RngCore;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let mut key = [0u8; 32];
     rand::rng().fill_bytes(&mut key);
     let encoded = BASE64_STANDARD.encode(key);
     println!("{}", encoded);
 }
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
