@@ -131,10 +131,10 @@ async fn local_put_get_roundtrip() {
 async fn relay_connect() {
     use crate::wasm::Beam;
 
-    let _relay = Relay::start(4960).await;
+    let _relay = Relay::start(4900).await;
 
     let mut beam = Beam::new();
-    beam.connect("ws://127.0.0.1:4960");
+    beam.connect("ws://127.0.0.1:4900");
     sleep(500).await; // WebSocket handshake + Hi exchange
 
     // If we got here without panicking, the connection succeeded.
@@ -147,10 +147,10 @@ async fn relay_connect() {
 async fn relay_put_echo() {
     use crate::wasm::Beam;
 
-    let _relay = Relay::start(4961).await;
+    let _relay = Relay::start(4910).await;
 
     let mut beam = Beam::new();
-    beam.connect("ws://127.0.0.1:4961");
+    beam.connect("ws://127.0.0.1:4910");
     sleep(500).await;
 
     // Put should not panic, and the value should be locally readable.
@@ -169,28 +169,21 @@ async fn relay_put_echo() {
 //
 // This is the killer test. If it passes, WASM cross-window delivery
 // works and we can merge to master + NPM publish.
-//
-// IGNORED: `web_sys::WebSocket` callbacks (onopen/onmessage/onerror) do not
-// fire in the Node.js wasm-bindgen-test runner. The WebSocket object is
-// created without error, but the Node.js event loop in the test harness
-// does not pump browser WebSocket events. These tests require a real browser
-// environment (e.g. headless Chrome via karma/wasm-pack test --chrome) or a
-// Node.js WebSocket polyfill that bridges to the `ws` npm package.
-// See: https://github.com/rustwasm/wasm-bindgen/issues/1003
+// WebSocket callbacks DO fire in Node 22+ (native WebSocket global).
 
 #[wasm_bindgen_test(async)]
-#[ignore = "requires browser WebSocket API — web_sys::WebSocket events don't fire in Node.js test runner"]
+
 async fn two_clients_cross_talk() {
     use crate::wasm::Beam;
 
-    let _relay = Relay::start(4970).await;
+    let _relay = Relay::start(4920).await;
 
     // Two independent BEAM nodes, both connecting to the same relay.
     let mut client1 = Beam::new();
-    client1.connect("ws://127.0.0.1:4970");
+    client1.connect("ws://127.0.0.1:4920");
 
     let mut client2 = Beam::new();
-    client2.connect("ws://127.0.0.1:4970");
+    client2.connect("ws://127.0.0.1:4920");
 
     sleep(1000).await; // Both WebSockets open + Hi exchanged
 
@@ -239,17 +232,17 @@ async fn two_clients_cross_talk() {
 // Both clients send AND receive. This is what the browser chat example needs.
 
 #[wasm_bindgen_test(async)]
-#[ignore = "requires browser WebSocket API — web_sys::WebSocket events don't fire in Node.js test runner"]
+
 async fn bidirectional_cross_talk() {
     use crate::wasm::Beam;
 
-    let _relay = Relay::start(4980).await;
+    let _relay = Relay::start(4930).await;
 
     let mut client1 = Beam::new();
-    client1.connect("ws://127.0.0.1:4980");
+    client1.connect("ws://127.0.0.1:4930");
 
     let mut client2 = Beam::new();
-    client2.connect("ws://127.0.0.1:4980");
+    client2.connect("ws://127.0.0.1:4930");
 
     sleep(1000).await;
 
@@ -279,11 +272,11 @@ async fn bidirectional_cross_talk() {
 
     // Direction 1: client1 → client2
     client1.put("chat.001", "from_client_1");
-    sleep(500).await;
+    sleep(1000).await;
 
     // Direction 2: client2 → client1
     client2.put("chat.002", "from_client_2");
-    sleep(500).await;
+    sleep(1000).await;
 
     client1.stop();
     client2.stop();
@@ -526,13 +519,13 @@ async fn run_wasm_relay_throughput(port: u16, count: usize) {
 }
 
 #[wasm_bindgen_test(async)]
-#[ignore = "requires browser WebSocket API — web_sys::WebSocket events don't fire in Node.js test runner"]
+
 async fn wasm_relay_throughput_1k() {
-    run_wasm_relay_throughput(4971, 1_000).await;
+    run_wasm_relay_throughput(4940, 1_000).await;
 }
 
 #[wasm_bindgen_test(async)]
-#[ignore = "requires browser WebSocket API — web_sys::WebSocket events don't fire in Node.js test runner"]
+
 async fn wasm_relay_throughput_5k() {
-    run_wasm_relay_throughput(4972, 5_000).await;
+    run_wasm_relay_throughput(4950, 5_000).await;
 }

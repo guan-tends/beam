@@ -1,5 +1,3 @@
-#![cfg(not(target_arch = "wasm32"))]
-#![cfg(not(target_arch = "wasm32"))]
 
 //! BEAM — a Rust implementation of the Gun.js P2P synchronized graph database.
 //!
@@ -60,14 +58,20 @@
 //! If a second signal is received during shutdown, the process exits
 //! immediately with exit code 1.
 
+#[cfg(not(target_arch = "wasm32"))]
 mod cli;
 
+#[cfg(not(target_arch = "wasm32"))]
 use beam::actor::Actor;
+#[cfg(not(target_arch = "wasm32"))]
 use beam::adapters::{
     MemoryStorage, Multicast, OutgoingWebsocketManager, RedbStorage, WsServer, WsServerConfig,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use beam::{Config, Node};
+#[cfg(not(target_arch = "wasm32"))]
 use clap::Parser;
+#[cfg(not(target_arch = "wasm32"))]
 use cli::{Cli, Command};
 
 /// Waits for a shutdown signal (SIGINT or SIGTERM on Unix, Ctrl-C on all platforms).
@@ -75,6 +79,7 @@ use cli::{Cli, Command};
 /// This is a convenience helper used by the `Start` command to await the first
 /// or second shutdown signal without embedding platform-specific code directly
 /// in `tokio::select!` branches (which don't support `#[cfg]` attributes).
+#[cfg(not(target_arch = "wasm32"))]
 async fn wait_for_signal() {
     #[cfg(unix)]
     {
@@ -99,13 +104,16 @@ async fn wait_for_signal() {
 }
 
 #[tokio::main]
+#[cfg(not(target_arch = "wasm32"))]
 async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
         #[cfg(feature = "persy")]
         Command::Migrate(args) => {
+#[cfg(not(target_arch = "wasm32"))]
             use beam::migration::{Backend, MigrateOpts, migrate};
+#[cfg(not(target_arch = "wasm32"))]
             use std::path::PathBuf;
 
             let parse_backend = |s: &str| -> Result<Backend, String> {
@@ -249,3 +257,6 @@ async fn main() {
         }
     }
 }
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
