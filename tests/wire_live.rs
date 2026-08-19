@@ -420,13 +420,17 @@ async fn reconnection_sync() {
     sleep(Duration::from_secs(5)).await;
 
     // Request the data Gun.js wrote while we were disconnected.
-    // on() sends a Get to the relay which should respond with stored data.
+    // on() sends a soul-level Get to the relay. Gun.js's mesh.say self-check
+    // would normally drop Get responses for the requesting peer (when F=true
+    // and faith.via is set during async serialization). The relay's custom
+    // Get handler bypasses mesh.say by sending the Put response directly.
     let mut sub = beam2.get("beamtest/recon").get("phase2").on();
     let result = timeout(Duration::from_secs(15), sub.recv())
         .await
         .expect("timeout waiting for reconnection sync")
         .expect("channel closed");
 
+    assert_eq!(result, "second".into(), "reconnection sync should deliver phase2");
     beam2.stop();
 }
 
