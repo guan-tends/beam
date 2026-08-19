@@ -245,7 +245,8 @@ async fn bidirectional_cross_talk() {
     let mut client2 = Beam::new();
     client2.connect("ws://127.0.0.1:4930");
 
-    sleep(1000).await;
+    // Allow dam: "?" handshake to complete for both clients.
+    sleep(2000).await;
 
     // Separate receive buffers per client.
     js_sys::eval(
@@ -269,7 +270,8 @@ async fn bidirectional_cross_talk() {
 
     client1.on("chat", c1_cb);
     client2.on("chat", c2_cb);
-    sleep(200).await;
+    // Allow subscriptions to register with the relay before putting.
+    sleep(500).await;
 
     // Direction 1: client1 → client2
     client1.put("chat.001", "from_client_1");

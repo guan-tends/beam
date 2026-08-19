@@ -351,7 +351,7 @@ impl Actor for Router {
         info!("Router stopping");
     }
 
-    async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
+    async fn handle(&mut self, msg: Arc<Message>, ctx: &ActorContext) {
         match &*msg {
             Message::Put(put) => {
                 self.handle_put(put);
@@ -361,13 +361,16 @@ impl Actor for Router {
             }
             Message::Get(get) => self.handle_get(get),
             Message::Flush(flush) => self.handle_flush(flush),
-            Message::Hi { from, peer_id } => {
+            Message::Hi { from, peer_id, is_ack, msg_id } => {
+                // Register the peer in known_peers and PID mappings.
                 self.known_peers.insert(from.clone());
                 if !peer_id.is_empty() {
                     if let Some(existing) = self.peer_addrs.get(peer_id) {
                         if existing != from {
                             error!(
-                                "Router peer_id collision: '{}' already mapped to {:?}, rejecting {:?}. Each peer_id must be unique.",
+                                "Router peer_id collision: '{}' already mapped \
+                                 to {:?}, rejecting {:?}. Each peer_id must be \
+                                 unique.",
                                 peer_id, existing, from
                             );
                             return;
@@ -375,6 +378,28 @@ impl Actor for Router {
                     }
                     self.peer_addrs.insert(peer_id.clone(), from.clone());
                     self.addr_to_pid.insert(from.clone(), peer_id.clone());
+                }
+
+                // Gun.js dam: "?" PID exchange handshake.
+                //
+                // When Gun.js connects to a BEAM relay (or vice versa), it
+                // sends `{"dam":"?","pid":"<gun_pid>","#":"<msg_id>"}` with no
+                // `@` field. The peer must respond with:
+                //   `{"dam":"?","pid":"<own_pid>","@":"<msg_id>","#":"<new_id>"}`
+                // Gun.js sees the `@` field and considers the peer fully
+                // registered. Without this ack, Gun.js silently ignores Get
+                // requests from the peer — data never flows back.
+                //
+                // `is_ack` is `None` for initial contact (respond with ack).
+                // `is_ack` is `Some(_)` for ack responses (don't respond again).
+                if is_ack.is_none() {
+                    let my_pid = ctx.peer_id.read().clone();
+                    let _ = from.send(Message::Hi {
+                        from: ctx.addr.clone(),
+                        peer_id: my_pid,
+                        is_ack: Some(msg_id.clone()), // ack the incoming # ID
+                        msg_id: crate::utils::random_string(8),
+                    });
                 }
             }
             Message::RtcSignal(rtc) => {
@@ -510,10 +535,19 @@ impl Router {
 
         let mut already_sent_to = FxHashSet::default();
 
-        // Send to server peers
+        // Send to server peers (OutgoingWebsocketManager, WsServer).
+        // These fan out to their child WsConn actors, so we must also
+        // mark those children as "already sent" to prevent duplicate
+        // delivery via the known_peers random sample below.
         for addr in self.server_peers.iter() {
-            debug!("send to server peer");
             let _ = addr.send(Message::Get(get.clone()));
+            already_sent_to.insert(addr.clone());
+        }
+        // Mark all known peer addrs (WsConn children) as already-sent.
+        // The OutgoingWebsocketManager will forward to them; sending
+        // directly via known_peers would duplicate the Get with the
+        // same message ID, causing Gun.js dedup to drop the response.
+        for addr in self.peer_addrs.values() {
             already_sent_to.insert(addr.clone());
         }
 
@@ -819,6 +853,14 @@ impl Router {
                 continue;
             }
             let _ = addr.send(Arc::clone(&relay_msg));
+            already_sent_to.insert(addr.clone());
+        }
+        // Mark all WsConn addrs as already-sent — the OutgoingWebsocketManager
+        // (in server_peers) will fan out to them. Without this, the
+        // subscribers and known_peers loops below would send duplicate
+        // copies (same message ID) to the WsConn, causing Gun.js dedup
+        // to drop the response.
+        for addr in self.peer_addrs.values() {
             already_sent_to.insert(addr.clone());
         }
 

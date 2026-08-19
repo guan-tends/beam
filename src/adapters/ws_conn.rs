@@ -224,6 +224,8 @@ where
         let hi = Message::Hi {
             from: ctx.addr.clone(),
             peer_id: ctx.peer_id.read().clone(),
+            is_ack: None, // Initial contact — Gun.js should ack with dam: "?" + "@"
+            msg_id: crate::utils::random_string(8),
         };
         hi.to_writer(&mut self.send_buf);
         ctx.metrics.record_serialization();

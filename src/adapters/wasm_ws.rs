@@ -60,6 +60,8 @@ impl WasmWsConn {
             let hi = Message::Hi {
                 from: Addr::noop(),
                 peer_id: peer_id_for_open.clone(),
+                is_ack: None,
+                msg_id: crate::utils::random_string(8),
             };
             let _ = ws_for_open.send_with_str(&hi.to_string());
 
@@ -120,6 +122,8 @@ impl Actor for WasmWsConn {
         let _ = ctx.router.read().send(Message::Hi {
             from: ctx.addr.clone(),
             peer_id: ctx.peer_id.read().clone(),
+            is_ack: None,
+            msg_id: crate::utils::random_string(8),
         });
     }
 
