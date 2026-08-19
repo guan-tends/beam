@@ -55,8 +55,8 @@ impl WasmWsConn {
         let peer_id_for_open = peer_id.clone();
         let ws_for_open = ws.clone();
         let onopen: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {
-            // Register with the relay. The wire Hi format is {{"#":"...","dam":"hi"}}
-            // — the actor addr is not serialized, so noop is fine here.
+            // Register with the relay via dam:"?" PID exchange handshake.
+            // is_ack=None means initial contact — relay should respond with ack.
             let hi = Message::Hi {
                 from: Addr::noop(),
                 peer_id: peer_id_for_open.clone(),
