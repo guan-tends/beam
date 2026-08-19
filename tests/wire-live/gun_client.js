@@ -37,6 +37,27 @@ const gun = Gun({
   radisk: false,
 });
 
+// Force mesh to open WebSocket connections to all peers.
+// In Node.js ESM, Gun's websocket module may not auto-trigger the
+// initial connection because the setTimeout in websocket.js's
+// `Gun.on('opt')` handler can fire before the mesh is ready.
+// Manually calling mesh.hi() for each peer ensures the WebSocket
+// is opened regardless of module loading order.
+function forceConnect() {
+  const mesh = gun._.opt.mesh;
+  if (!mesh) { return; }
+  for (const url of Object.keys(gun._.opt.peers)) {
+    const peer = gun._.opt.peers[url];
+    if (!peer.wire || peer.wire.readyState === 3) {
+      try { mesh.hi(peer); } catch(e) {}
+    }
+  }
+}
+setTimeout(forceConnect, 50);
+setTimeout(forceConnect, 500);
+setTimeout(forceConnect, 1000);
+setInterval(forceConnect, 2000);
+
 console.log(`Gun.js client connecting to ${RELAY_URL}`);
 
 // ---------------------------------------------------------------------------

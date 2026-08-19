@@ -45,6 +45,8 @@
 //! tx.send(Arc::new(Message::Hi {
 //!     from: beam::actor::Addr::noop(),
 //!     peer_id: "test".to_string(),
+//!     is_ack: None,
+//!     msg_id: "doc".to_string(),
 //! })).unwrap();
 //!
 //! let mut batch = Vec::with_capacity(64);
@@ -252,6 +254,8 @@ mod tests {
         Arc::new(Message::Hi {
             from: Addr::noop(),
             peer_id: "test".to_string(),
+            is_ack: None,
+            msg_id: "test_id".to_string(),
         })
     }
 
@@ -270,6 +274,8 @@ mod tests {
             let msg = Arc::new(Message::Hi {
                 from: Addr::noop(),
                 peer_id: format!("peer_{i}"),
+                is_ack: None,
+                msg_id: format!("id_{i}"),
             });
             tx.send(msg).unwrap();
         }

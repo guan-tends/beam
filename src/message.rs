@@ -244,11 +244,20 @@ impl Put {
         buf.push(b'{');
         let mut first_node = true;
         for (node_id, children) in self.updated_nodes.iter() {
-            // Skip BEAM-internal souls that have no meaning in Gun.js wire format:
+            // Skip BEAM-internal souls that should not appear on the wire:
             // - "" (empty root pointer) — Gun.js doesn't use a root soul
-            // - "soul/key" (value souls containing "/") — Gun.js stores values
-            //   as fields on the parent soul, not as separate souls
-            if node_id.is_empty() || node_id.contains('/') {
+            // - Souls whose only child is "_" — these are BEAM's internal
+            //   leaf-value encoding (soul-value nodes where the node's own
+            //   value is stored under the "_" key). Gun.js stores values as
+            //   fields on the parent soul, not as separate nodes. The parent
+            //   soul (which DOES have non-"_" children) is serialized normally.
+            //
+            // Note: souls containing "/" are valid in Gun.js (e.g.,
+            // "~user/profile") and must NOT be filtered out by "/" alone.
+            if node_id.is_empty() {
+                continue;
+            }
+            if children.len() == 1 && children.contains_key("_") {
                 continue;
             }
             if !first_node {
@@ -490,6 +499,15 @@ pub enum Message {
     Hi {
         from: Addr,
         peer_id: String,
+        /// Gun.js dam: "?" handshake support.
+        /// - `None`: legacy `dam: "hi"` or initial `dam: "?"` with no `@`.
+        ///   For `dam: "?"`, Router should respond with an ack.
+        /// - `Some(msg_id)`: this IS an ack response (incoming had `@` field).
+        ///   Router should NOT respond. The value is the `@` field content.
+        is_ack: Option<String>,
+        /// The incoming message's `#` ID. Used by the Router to build the
+        /// ack response's `@` field. Only relevant for initial `dam: "?"`.
+        msg_id: String,
     },
     RtcSignal(RtcSignal),
     /// Periodic self-tick fired by the cleanup reaper spawned in
@@ -551,11 +569,29 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
             write_json_str(buf, &flush.id);
             buf.push(b'}');
         }
-        Message::Hi { from: _, peer_id } => {
+        Message::Hi { from: _, peer_id, is_ack, msg_id: _ } => {
             buf.clear();
-            buf.extend_from_slice(b"{\"dam\":\"hi\",\"#\":");
-            write_json_str(buf, peer_id);
-            buf.push(b'}');
+            match is_ack {
+                Some(ack_id) => {
+                    // dam: "?" ack response — completing the Gun.js PID exchange.
+                    // `ack_id` is the incoming message's `#` that we're acking.
+                    buf.extend_from_slice(b"{\"dam\":\"?\",\"pid\":");
+                    write_json_str(buf, peer_id);
+                    buf.extend_from_slice(b",\"@\":");
+                    write_json_str(buf, ack_id);
+                    buf.extend_from_slice(b",\"#\":");
+                    write_json_str(buf, &crate::utils::random_string(8));
+                    buf.push(b'}');
+                }
+                None => {
+                    // Initial dam: "?" with our PID — Gun.js will ack with dam: "?" + "@"
+                    buf.extend_from_slice(b"{\"dam\":\"?\",\"pid\":");
+                    write_json_str(buf, peer_id);
+                    buf.extend_from_slice(b",\"#\":");
+                    write_json_str(buf, &crate::utils::random_string(8));
+                    buf.push(b'}');
+                }
+            }
         }
         Message::RtcSignal(rtc) => rtc.to_writer(buf),
         Message::CheckQuorumTimeouts => {
@@ -588,7 +624,7 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
             Message::Put(put) => put.id.clone(),
             Message::BatchPut(batch) => batch.id.clone(),
             Message::Flush(flush) => flush.id.clone(),
-            Message::Hi { from: _, peer_id } => peer_id.to_string(),
+            Message::Hi { from: _, peer_id, .. } => peer_id.to_string(),
             Message::RtcSignal(rtc) => rtc.id.clone(),
             Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
             Message::RegisterQuorum { put_id, .. } => put_id.clone(),
@@ -601,7 +637,7 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
             Message::Put(put) => put.from == *addr,
             Message::BatchPut(batch) => batch.from == *addr,
             Message::Flush(flush) => flush.from == *addr,
-            Message::Hi { from, peer_id: _ } => *from == *addr,
+            Message::Hi { from, .. } => *from == *addr,
             Message::RtcSignal(rtc) => rtc.from == *addr,
             Message::CheckQuorumTimeouts => false,
             Message::RegisterQuorum { requester, .. } => *requester == *addr,
@@ -614,10 +650,7 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
             Message::Put(put) => put.from.clone(),
             Message::BatchPut(batch) => batch.from.clone(),
             Message::Flush(flush) => flush.from.clone(),
-            Message::Hi {
-                from: _,
-                peer_id: _,
-            } => Addr::noop(),
+            Message::Hi { .. } => Addr::noop(),
             Message::RtcSignal(rtc) => rtc.from.clone(),
             Message::CheckQuorumTimeouts => Addr::noop(),
             Message::RegisterQuorum { requester, .. } => requester.clone(),
@@ -978,9 +1011,34 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
                     local_addr,
                 }))
             } else {
+                // dam: "?" (Gun.js PID exchange) or dam: "hi" (legacy).
+                // For dam: "?": extract `pid` field. The `@` field (if present)
+                // means this is an ack response — no reply needed.
+                // If `@` is absent, store the incoming `#` as the ack target
+                // so the Router can respond with dam: "?" + our pid + "@".
+                // For dam: "hi": use `#` as peer_id (backwards compat).
+                let dam_type = dam;
+                let (peer_id, is_ack) = if dam_type == "?" {
+                    let pid = obj
+                        .get("pid")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if let Some(ack) = obj.get("@").and_then(|a| a.as_str()) {
+                        // This IS an ack response — @ field present, don't reply
+                        (pid, Some(ack.to_string()))
+                    } else {
+                        // Initial contact — no @ field. Router should respond.
+                        (pid, None)
+                    }
+                } else {
+                    (msg_id.clone(), None)
+                };
                 Ok(Message::Hi {
                     from,
-                    peer_id: msg_id,
+                    peer_id,
+                    is_ack,
+                    msg_id,
                 })
             }
         } else {

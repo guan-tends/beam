@@ -796,6 +796,8 @@ fn actor_mailbox_benchmarks(c: &mut Criterion) {
                         let _ = addr.send(Message::Hi {
                             from: addr.clone(),
                             peer_id: "bench".to_string(),
+                            is_ack: None,
+                            msg_id: crate::utils::random_string(8),
                         });
                     }
                     ctx.stop();

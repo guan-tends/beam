@@ -201,6 +201,8 @@ impl Actor for WebRtcPeer {
         let hi = Message::Hi {
             from: ctx.addr.clone(),
             peer_id: self.peer_id.clone(),
+            is_ack: None,
+            msg_id: crate::utils::random_string(8),
         };
         let _ = ctx.router.read().send(hi);
 
@@ -321,6 +323,8 @@ impl Actor for WebRtcPeer {
                             let hi = Message::Hi {
                                 from: own_addr.clone(),
                                 peer_id: peer_id.clone(),
+                                is_ack: None,
+                                msg_id: crate::utils::random_string(8),
                             };
                             let _ = router.send(hi);
                         }

@@ -114,9 +114,8 @@ impl WsServer {
         let ws_config = tokio_websockets::Config::default().flush_threshold(usize::MAX);
         let ws_stream = match ServerBuilder::new().config(ws_config).accept(stream).await {
             Ok((_req, s)) => s,
-            Err(_e) => {
-                // Suppress errors from receiving normal HTTP requests
-                // (e.g. browser preflight checks).
+            Err(e) => {
+                log::warn!("WsServer WebSocket handshake failed: {}", e);
                 return;
             }
         };
