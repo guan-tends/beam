@@ -401,6 +401,17 @@ impl Node {
                             let _ = sender.send(child_data.value.clone());
                         }
                     }
+                    // Deliver the node's own value to its on() subscriber.
+                    // When on() sends a soul-level Get (no `.` field), the
+                    // response includes a `"_"` key holding the node's own
+                    // value (BEAM's soul-value encoding). This delivers that
+                    // value to the node's on() subscriber, matching the
+                    // behavior of put() which fires on_sender directly.
+                    if child == "_" {
+                        if let Some(sender) = self.inner.on_sender.read().as_ref() {
+                            let _ = sender.send(child_data.value.clone());
+                        }
+                    }
                     if let Some(sender) = self.inner.map_sender.read().as_ref() {
                         let _ = sender.send((child.to_string(), child_data.value.clone()));
                     }
@@ -500,22 +511,80 @@ impl Node {
     /// Returns a [`broadcast::Receiver`] that will receive [`Value`] updates
     /// whenever the node's value changes. The current value (if any) is
     /// requested from storage via a `Get` message — it arrives asynchronously.
+    ///
+    /// # Wire Format — Soul-Level Get
+    ///
+    /// Sends a **soul-level Get** (no `.` field) to the relay:
+    /// `{"get":{"#":"soul"}}`
+    ///
+    /// Gun.js responds to soul-level Gets with the full node data (all keys
+    /// for that soul). BEAM's [`Node::handle`] Put handler then routes each
+    /// key's value to the appropriate child node's `on()` subscriber, and
+    /// the `"_"` key (value leaf marker) to the node's own `on()` subscriber.
+    ///
+    /// Key-level Gets (`{"get":{"#":"soul",".":"key"}}`) are avoided because
+    /// Gun.js's `mesh.say` self-check (`peer === meta.via`) silently drops
+    /// ack responses for key-level Gets when the ack's resolved peer equals
+    /// the requesting WebSocket peer. Soul-level Gets do not trigger this
+    /// code path because the full-node response creates a separate
+    /// `mesh.say` invocation that correctly routes to the requesting peer.
+    ///
+    /// # Soul & Address Resolution
+    ///
+    /// For a child node like `get("soul").get("key")`:
+    ///   - Soul = parent's UID (e.g., `"beamtest/recon"`) — the Gun.js soul
+    ///   - Reply addr = parent's actor addr (parent's uid matches the soul
+    ///     in the Put response, so handle_put on the parent routes each
+    ///     child key's value to the corresponding child's `on()` subscriber)
+    ///
+    /// For a top-level node like `get("soul")`:
+    ///   - Soul = self's UID (e.g., `"beamtest/recon"`)
+    ///   - Reply addr = self's actor addr (self's uid matches the soul)
+    ///   - Previous code used parent_id (`""` for root's children) which
+    ///     produced `{"get":{"#":""}}` — an empty soul that Gun.js ignored.
+    ///
+    /// For the root node:
+    ///   - Soul = self's UID (`""`)
+    ///   - Reply addr = self's actor addr
     pub fn on(&mut self) -> broadcast::Receiver<Value> {
-        let key = if self.inner.path.len() > 1 {
-            self.inner.path.last().cloned()
-        } else {
-            None
-        };
-        let addr;
+        // Determine soul and reply address for the Get request.
+        //
+        // The reply address must be an actor whose uid MATCHES the soul
+        // in the storage Put response — otherwise handle_put won't fire
+        // and the subscriber never receives the value.
+        //
+        // For deep children (get("a").get("b")): parent's uid "a" is the
+        // soul, so the reply goes to the parent's actor. The parent's
+        // handle_put matches soul "a", iterates children, and delivers
+        // key "b"'s value to child "b"'s on() subscriber.
+        //
+        // For root's direct children (get("a")): self's uid "a" is the
+        // soul, so the reply goes to self's actor. Self's handle_put
+        // matches soul "a", finds the "_" key, and delivers to self's
+        // on() subscriber.
         let node_id;
+        let addr;
         if let Some((parent_id, parent)) = &*self.inner.parent.read() {
-            node_id = parent_id.clone();
-            addr = parent.inner.addr.read().clone().unwrap();
+            if parent_id.is_empty() {
+                // Direct child of root: parent's UID is "" (root).
+                // Use our own UID as soul and our own addr as reply target.
+                node_id = self.inner.uid.read().to_string();
+                addr = self.inner.addr.read().clone().unwrap();
+            } else {
+                // Deeper child: parent's UID is the Gun.js soul.
+                // Use parent's UID as soul and parent's addr as reply target.
+                node_id = parent_id.clone();
+                addr = parent.inner.addr.read().clone().unwrap();
+            }
         } else {
+            // Root node: use own UID and addr.
             node_id = self.inner.uid.read().to_string();
             addr = self.inner.addr.read().clone().unwrap();
         }
-        let get = Get::new(node_id, key, addr);
+
+        // Soul-level Get (no `.` field). See method docs for rationale.
+        let get = Get::new(node_id, None, addr);
+
         // Lazily create the broadcast channel on first subscription.
         // All clones share the same Arc<RwLock<Option<...>>>, so the
         // channel created here is visible to the actor's handle_put.
@@ -989,6 +1058,20 @@ impl Node {
             }
 
             let mut updated_nodes = BTreeMap::default();
+            // Store the value at the leaf's own UID under the "_" convention
+            // (soul-value encoding), matching Node::put behavior. This ensures
+            // on()/once() on the leaf can retrieve the value via a soul-level
+            // Get, and map() on the leaf sees the value as a synthetic child.
+            let leaf_uid = leaf.inner.uid.read().clone();
+            let mut self_children = Children::default();
+            self_children.insert(
+                "_".to_string(),
+                NodeData {
+                    value: value.clone(),
+                    updated_at,
+                },
+            );
+            updated_nodes.insert(leaf_uid, self_children);
             leaf.add_parent_nodes(&mut updated_nodes, value, updated_at);
 
             let my_addr = self.inner.addr.read().clone().unwrap();

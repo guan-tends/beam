@@ -42,6 +42,58 @@ wsServer.listen(WS_PORT, () => {
   console.log(`Gun relay WebSocket on port ${WS_PORT} (path /gun)`);
 });
 
+// Custom Get response handler — sends Put responses directly to the requesting
+// peer's WebSocket, bypassing mesh.say's self-check (peer === meta.via) which
+// drops Get responses for the originating peer when F=true (in-memory graph).
+//
+// Root cause: Gun.on.get.ack creates a `faith` object when F=true (node === root.graph[soul]).
+// During the async mesh.raw/mesh.hash pipeline, faith.via gets set to the requesting peer.
+// mesh.say's self-check (peer === meta.via) then drops the response.
+//
+// This handler intercepts Gets AFTER Gun.on.get has processed them (via root.on('get')),
+// and sends the response directly via peer.wire.send(), bypassing mesh.say entirely.
+// This mimics what a storage adapter does — the response comes from a different code
+// path that doesn't go through the faith/mesh.say pipeline.
+const gunRoot = gun._.root || gun._;
+gunRoot.on('get', function(msg) {
+  this.to.next(msg); // pass to other adapters
+  const lex = msg.get;
+  const soul = lex && lex['#'];
+  if (!soul) return;
+  const node = gunRoot.graph[soul];
+  if (!node) return;
+
+  // Build a Put response message (matching Gun.js wire format)
+  const soulObj = {};
+  const meta = { '#': soul, '>': {} };
+  for (const k in node) {
+    if (k === '_') { Object.assign(meta, node[k]); continue; }
+    soulObj[k] = node[k];
+    if (node._ && node._['>'] && node._['>'][k]) meta['>'][k] = node._['>'][k];
+  }
+  soulObj['_'] = meta;
+  const put = {}; put[soul] = soulObj;
+
+  const response = {
+    '#': (Gun.text && Gun.text.random) ? Gun.text.random(9) : Math.random().toString(36).slice(2, 11),
+    '@': msg['#'],
+    'put': put,
+  };
+
+  // Find the peer that sent the Get
+  let peer = (msg._ && msg._.via) ? msg._.via : null;
+  if (!peer) {
+    const dup = gunRoot.dup;
+    if (dup && dup.s && dup.s[msg['#']]) peer = dup.s[msg['#']].via;
+  }
+
+  if (peer && peer.wire) {
+    const raw = JSON.stringify(response);
+    if (peer.say) peer.say(raw);
+    else if (peer.wire.send) peer.wire.send(raw);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // HTTP API server (separate port — Gun.js doesn't intercept this one)
 // ---------------------------------------------------------------------------
@@ -112,6 +164,17 @@ const apiServer = http.createServer(async (req, res) => {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));
     }
+    return;
+  }
+
+  if (url.pathname === '/debug' && req.method === 'GET') {
+    const graphKeys = Object.keys(gun._.root.graph || {});
+    const reconNode = gun._.root.graph && gun._.root.graph['beamtest/recon'];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      graphKeys,
+      reconNode: reconNode ? JSON.stringify(reconNode).slice(0,500) : null,
+    }));
     return;
   }
 
