@@ -88,6 +88,25 @@ const BEAM_NODES: &str = "beam_nodes_v1";
 /// table.
 const BEAM_META: &str = "beam_meta_v1";
 
+/// Prefix byte prepended to every keyspace key.
+///
+/// Fjall's LSM-tree panics on empty keys (`"key may not be empty"`).
+/// BEAM uses `""` (empty string) as the root soul — a valid node_id that
+/// must be stored. Prepending a single byte to all keys ensures no key
+/// is ever empty, while remaining transparent to the rest of the system
+/// (the encoding is internal to this adapter).
+///
+/// `\x00` is chosen because it sorts before all printable characters,
+/// preserving the natural lexicographic ordering of keyspace keys.
+const KEY_PREFIX: u8 = 0x00;
+
+/// Encodes a node_id string as a keyspace key (prefixed to avoid empty keys).
+fn encode_key(node_id: &str) -> Vec<u8> {
+    let mut key = vec![KEY_PREFIX];
+    key.extend_from_slice(node_id.as_bytes());
+    key
+}
+
 /// fjall-backed persistent storage adapter for BEAM.
 ///
 /// Stores the graph in a fjall database. Each `Put` writes directly
@@ -190,7 +209,7 @@ impl FjallStorage {
     /// is suppressed (already sent) — unless this is an ack reply (those
     /// MUST always be sent, see the always-reply-when-ack invariant).
     fn handle_get(&self, get: &Get, ctx: &ActorContext) {
-        let children_for_node: Children = match self.nodes.get(get.node_id.as_bytes()) {
+        let children_for_node: Children = match self.nodes.get(encode_key(&get.node_id).as_slice()) {
             Ok(Some(slice)) => {
                 match postcard::from_bytes(slice.as_ref()) {
                     Ok(c) => c,
@@ -204,7 +223,7 @@ impl FjallStorage {
                 debug!("fjall get: no data for node_id={}", get.node_id);
                 // Empty set is still a valid reply — send sentinel so .map() listeners don't hang.
                 let mut reply_with_nodes = BTreeMap::default();
-                reply_with_nodes.insert(get.node_id.clone(), BTreeMap::default());
+                reply_with_nodes.insert(get.node_id.clone(), BTreeMap::default()); // node_id="" is valid in BEAM graph (root soul)
                 let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
                 put.to_string(); // compute checksum
                 let _ = get.from.send(Message::Put(put));
@@ -266,7 +285,8 @@ impl FjallStorage {
             }
 
             // Read existing children (point lookup — no scan needed).
-            let mut children_for_node: Children = match self.nodes.get(node_id.as_bytes()) {
+            let key = encode_key(node_id);
+            let mut children_for_node: Children = match self.nodes.get(key.as_slice()) {
                 Ok(Some(slice)) => {
                     postcard::from_bytes(slice.as_ref()).unwrap_or_default()
                 }
@@ -288,13 +308,13 @@ impl FjallStorage {
 
             // Write: remove if empty, else insert merged result.
             if children_for_node.is_empty() {
-                if let Err(e) = self.nodes.remove(node_id.as_bytes()) {
+                if let Err(e) = self.nodes.remove(key.as_slice()) {
                     return Err(format!("fjall remove: {:?}", e));
                 }
             } else {
                 let bytes = postcard::to_allocvec(&children_for_node)
                     .map_err(|e| format!("postcard serialize: {:?}", e))?;
-                if let Err(e) = self.nodes.insert(node_id.as_bytes(), bytes) {
+                if let Err(e) = self.nodes.insert(key.as_slice(), bytes) {
                     return Err(format!("fjall insert: {:?}", e));
                 }
             }
@@ -348,7 +368,8 @@ impl FjallStorage {
                 }
 
                 // Read existing children (point lookup).
-                let mut children_for_node: Children = match self.nodes.get(node_id.as_bytes()) {
+                let key = encode_key(node_id);
+                let mut children_for_node: Children = match self.nodes.get(key.as_slice()) {
                     Ok(Some(slice)) => {
                         postcard::from_bytes(slice.as_ref()).unwrap_or_default()
                     }
@@ -370,11 +391,11 @@ impl FjallStorage {
 
                 // Add to write batch.
                 if children_for_node.is_empty() {
-                    write_batch.remove(&self.nodes, node_id.as_bytes());
+                    write_batch.remove(&self.nodes, key.as_slice());
                 } else {
                     let bytes = postcard::to_allocvec(&children_for_node)
                         .map_err(|e| format!("postcard serialize: {:?}", e))?;
-                    write_batch.insert(&self.nodes, node_id.as_bytes(), bytes);
+                    write_batch.insert(&self.nodes, key.as_slice(), bytes);
                 }
             }
         }
@@ -658,10 +679,10 @@ mod tests {
 
         storage.apply_put(&put).expect("put should succeed");
 
-        // Verify via direct keyspace read
+        // Verify via direct keyspace read (using encode_key, same as adapter)
         let slice = storage
             .nodes
-            .get(b"a")
+            .get(encode_key("a").as_slice())
             .expect("get should not error")
             .expect("node 'a' should exist");
         let result: Children = postcard::from_bytes(slice.as_ref()).expect("deserialize should work");
@@ -710,7 +731,7 @@ mod tests {
         // Verify: only the "newest" value should be stored
         let slice = storage
             .nodes
-            .get(b"n1")
+            .get(encode_key("n1").as_slice())
             .expect("get should not error")
             .expect("node 'n1' should exist");
         let result: Children = postcard::from_bytes(slice.as_ref()).unwrap();
@@ -728,8 +749,8 @@ mod tests {
     fn test_fjall_get_missing_node_returns_empty() {
         let storage = create_test_storage("missing");
 
-        // Direct keyspace read on empty db
-        let result = storage.nodes.get(b"nonexistent").unwrap();
+        // Direct keyspace read on empty db (using encode_key)
+        let result = storage.nodes.get(encode_key("nonexistent").as_slice()).unwrap();
         assert!(result.is_none(), "fresh db has no records");
 
         cleanup(&storage.path);
@@ -762,7 +783,7 @@ mod tests {
             let storage = FjallStorage::new_with_config(Config::default(), &path);
             let slice = storage
                 .nodes
-                .get(b"node1")
+                .get(encode_key("node1").as_slice())
                 .expect("get should not error")
                 .expect("node1 should survive reopen");
             let result: Children = postcard::from_bytes(slice.as_ref()).unwrap();
@@ -801,7 +822,7 @@ mod tests {
         for i in 0..3 {
             let slice = storage
                 .nodes
-                .get(format!("n{}", i).as_bytes())
+                .get(encode_key(&format!("n{}", i)).as_slice())
                 .expect("get should not error")
                 .expect("node should exist after batch put");
             let result: Children = postcard::from_bytes(slice.as_ref()).unwrap();
@@ -829,7 +850,7 @@ mod tests {
             .unwrap();
 
         // Verify it exists
-        assert!(storage.nodes.get(b"n1").unwrap().is_some());
+        assert!(storage.nodes.get(encode_key("n1").as_slice()).unwrap().is_some());
 
         // Overwrite with a newer child that has the same key but different value
         // Then delete by sending an empty update (updated_at newer but empty children)
@@ -849,7 +870,7 @@ mod tests {
         // The node should still exist because the existing child "x" @ t=100
         // is newer than the empty incoming update (default updated_at=0).
         // This is correct LWW behavior — empty updates don't delete newer data.
-        assert!(storage.nodes.get(b"n1").unwrap().is_some());
+        assert!(storage.nodes.get(encode_key("n1").as_slice()).unwrap().is_some());
 
         cleanup(&storage.path);
     }
