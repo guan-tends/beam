@@ -9,6 +9,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-08-20 — Arena-Allocated Children + WASM Test Architecture + Reconnection Sync
+
+### Changed — Architecture
+
+- **Arena-allocated `Children`**: Replaced `std::collections::BTreeMap<String, NodeData>`
+  with `arena_btreemap::BTreeMap` backed by `SyncBumpArena` — a Send+Sync bump allocator.
+  All `Children` in `Put`, `NodeInner`, and storage adapters now use arena allocation.
+  Eliminates per-node BTreeMap heap allocation — bump pointer arithmetic instead of
+  malloc/free. Profiling showed this eliminated 100% of context switches and reduced
+  page faults by 95% (25,378 → 1,151) on local put benchmark.
+- **`arena-btreemap` v0.1.2**: Switched from path dependency to published crates.io
+  version. Published by Guan as a companion crate.
+- **`pub mod utils`**: Made `utils` module public for benchmarking access.
+
+### Changed — WASM
+
+- **WASM test architecture**: Split WASM tests into three tiers following industry
+  standards:
+  - `wasm_tests.rs` (wasm-bindgen-test): 5 pure logic tests (parsing, serialization,
+    local put/get) — no network I/O
+  - `tests/wasm-integration/node-integration.mjs` (Node.js): 7 network tests
+    (WebSocket connectivity, cross-talk, throughput) — real event loop
+  - `tests/e2e/gun-beam-interop.spec.mjs` (Playwright/Chromium): 3 browser interop
+    tests with Gun.js
+  - Root cause: `wasm-bindgen-test-runner` uses microtask-based event loop executor
+    that processes ALL microtasks before ANY I/O events (macrotasks). Network tests
+    in wasm-bindgen-test are fundamentally unreliable.
+- **WASM WebSocket send strategy**: Replaced unreliable `web_sys::WebSocket::ready_state()`
+  check with direct `send_with_str()` try-send pattern. `Ok(())` = sent, `Err(_)` =
+  buffer to outbox. `onopen` flushes outbox. Bypasses `ready_state()` entirely.
+- **WASM Hi handshake fix**: Both `Message::Hi` constructions in `wasm_ws.rs` now
+  include `is_ack: None` and `msg_id: uid.clone()` — required after struct gained
+  new fields for DAM handshake protocol.
+
+### Fixed
+
+- **Reconnection sync**: `on()` uses `self.inner.uid` for root's direct children
+  (empty soul bug fix), `parent_id` for deep children. Soul-level Gets (no `.` field).
+  Relay custom Get handler bypasses `mesh.say` entirely, sends Put directly to
+  requesting peer's WebSocket.
+- **`handle_put` child-descendant matching**: Fires `map_sender` when
+  `node_id.starts_with("{uid}/")` — extracts child key for map() callbacks.
+- **Wire-live DAM handshake**: Fixed `dam:?` handshake protocol, soul filtering
+  for relay, dedup, HTTP path handling, and test timing.
+- **Hub relay topology**: Fixed cross-backend mesh E2E tests and relay forwarding
+  for hub topology (non-mesh relay where all peers connect to central relay).
+- **WebRTC RtcSignal**: Removed phantom `json_str` field from construction sites.
+- **Persy storage**: Arena-allocated Children in `persy_storage` + borrow lifetime fixes.
+- **Browser WASM**: Use web-target WASM build (not nodejs), add subscription settle delay.
+- **Clippy**: Fixed pre-existing `unused mut` warnings in `persy_storage.rs`.
+
+### Added
+
+- `docs/TESTING.md` — standardized test workflow for all 7 test suites
+- `docs/PROFILING.md` — profiling guide for perf, flamegraph, heaptrack, and dhat
+- `justfile` — 21-stage release pipeline with `just` task runner
+- `deny.toml` — added Zlib license to allow-list (for `foldhash` transitive dep)
+- `.gitignore` — added `radata/` directory
+- `radata/` junk files removed from git tracking
+
+### Test Summary
+
+| Suite | Count | Status |
+|---|---|---|
+| Native unit (lib) | 320 | ✅ ALL PASS |
+| Binary (CLI) | 21 | ✅ ALL PASS |
+| Integration | 10 | ✅ ALL PASS |
+| Wire live (Gun.js interop) | 7 | ✅ ALL PASS |
+| WASM unit (logic only) | 5 | ✅ ALL PASS |
+| Node.js WASM integration | 7 | ✅ ALL PASS |
+| Browser (Playwright) | 3 | ✅ ALL PASS |
+| **Total** | **373** | **0 failures** |
+
+Zero clippy warnings on both native and WASM targets.
+
 ## [0.15.0] — 2026-08-15 — Growable Mailboxes + mimalloc
 
 ### Changed — Performance

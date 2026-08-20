@@ -49,10 +49,10 @@
 //! lost, the message will not be reassembled and will time out. This is
 //! acceptable for multicast's best-effort LAN sync use case.
 
+use crate::utils::FxHashMap;
 use base64::prelude::*;
 use oko_multicast_socket::{MulticastOptions, MulticastSocket, all_ipv4_interfaces};
 use serde::{Deserialize, Serialize};
-use crate::utils::FxHashMap;
 use std::net::SocketAddrV4;
 use web_time::{Duration, Instant};
 

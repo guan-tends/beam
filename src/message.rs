@@ -2,17 +2,17 @@
 use crate::ack::AckPolicy;
 use crate::actor::Addr;
 use crate::types::{Children, NodeData, Value};
+use crate::utils::FxHashSet;
 use crate::utils::random_string;
+use arena_btreemap::BTreeMap;
 use base64::prelude::*;
+use bytes::Bytes;
 use java_utils::HashCode;
 use log::{debug, error};
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde_json::{Value as JsonValue, json};
-use arena_btreemap::BTreeMap;
-use crate::utils::FxHashSet;
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
-use bytes::Bytes;
 
 // ─── JSON writing helpers ──────────────────────────────────────────
 // These helpers write JSON directly into a reusable `Vec<u8>` buffer,
@@ -540,73 +540,78 @@ pub enum Message {
 
 impl Message {
     /// Serializes to Gun.js wire format into a reusable buffer.
-///
-/// Dispatches to the variant's `to_writer` method. For `Message::Put`,
-/// checks the [`Put::raw`] cache first — if populated (by a prior
-/// [`Put::get_or_serialize`] call), the cached bytes are written directly
-/// without re-serializing. This mirrors Gun.js's `meta.raw` reuse.
-///
-/// Internal messages (`CheckQuorumTimeouts`, `RegisterQuorum`) are never
-/// serialized to wire — they produce sentinel strings for backwards
-/// compatibility.
-///
-/// After warmup, the buffer capacity is reused — zero allocations.
-pub fn to_writer(&self, buf: &mut Vec<u8>) {
-    match self {
-        Message::Put(put) => {
-            if let Some(cached) = put.raw.get() {
+    ///
+    /// Dispatches to the variant's `to_writer` method. For `Message::Put`,
+    /// checks the [`Put::raw`] cache first — if populated (by a prior
+    /// [`Put::get_or_serialize`] call), the cached bytes are written directly
+    /// without re-serializing. This mirrors Gun.js's `meta.raw` reuse.
+    ///
+    /// Internal messages (`CheckQuorumTimeouts`, `RegisterQuorum`) are never
+    /// serialized to wire — they produce sentinel strings for backwards
+    /// compatibility.
+    ///
+    /// After warmup, the buffer capacity is reused — zero allocations.
+    pub fn to_writer(&self, buf: &mut Vec<u8>) {
+        match self {
+            Message::Put(put) => {
+                if let Some(cached) = put.raw.get() {
+                    buf.clear();
+                    buf.extend_from_slice(cached);
+                } else {
+                    put.to_writer(buf);
+                }
+            }
+            Message::Get(get) => get.to_writer(buf),
+            Message::BatchPut(batch) => batch.to_writer(buf),
+            Message::Flush(flush) => {
                 buf.clear();
-                buf.extend_from_slice(cached);
-            } else {
-                put.to_writer(buf);
+                buf.extend_from_slice(b"{\"dam\":\"flush\",\"#\":");
+                write_json_str(buf, &flush.id);
+                buf.push(b'}');
             }
-        }
-        Message::Get(get) => get.to_writer(buf),
-        Message::BatchPut(batch) => batch.to_writer(buf),
-        Message::Flush(flush) => {
-            buf.clear();
-            buf.extend_from_slice(b"{\"dam\":\"flush\",\"#\":");
-            write_json_str(buf, &flush.id);
-            buf.push(b'}');
-        }
-        Message::Hi { from: _, peer_id, is_ack, msg_id: _ } => {
-            buf.clear();
-            match is_ack {
-                Some(ack_id) => {
-                    // dam: "?" ack response — completing the Gun.js PID exchange.
-                    // `ack_id` is the incoming message's `#` that we're acking.
-                    buf.extend_from_slice(b"{\"dam\":\"?\",\"pid\":");
-                    write_json_str(buf, peer_id);
-                    buf.extend_from_slice(b",\"@\":");
-                    write_json_str(buf, ack_id);
-                    buf.extend_from_slice(b",\"#\":");
-                    write_json_str(buf, &crate::utils::random_string(8));
-                    buf.push(b'}');
-                }
-                None => {
-                    // Initial dam: "?" with our PID — Gun.js will ack with dam: "?" + "@"
-                    buf.extend_from_slice(b"{\"dam\":\"?\",\"pid\":");
-                    write_json_str(buf, peer_id);
-                    buf.extend_from_slice(b",\"#\":");
-                    write_json_str(buf, &crate::utils::random_string(8));
-                    buf.push(b'}');
+            Message::Hi {
+                from: _,
+                peer_id,
+                is_ack,
+                msg_id: _,
+            } => {
+                buf.clear();
+                match is_ack {
+                    Some(ack_id) => {
+                        // dam: "?" ack response — completing the Gun.js PID exchange.
+                        // `ack_id` is the incoming message's `#` that we're acking.
+                        buf.extend_from_slice(b"{\"dam\":\"?\",\"pid\":");
+                        write_json_str(buf, peer_id);
+                        buf.extend_from_slice(b",\"@\":");
+                        write_json_str(buf, ack_id);
+                        buf.extend_from_slice(b",\"#\":");
+                        write_json_str(buf, &crate::utils::random_string(8));
+                        buf.push(b'}');
+                    }
+                    None => {
+                        // Initial dam: "?" with our PID — Gun.js will ack with dam: "?" + "@"
+                        buf.extend_from_slice(b"{\"dam\":\"?\",\"pid\":");
+                        write_json_str(buf, peer_id);
+                        buf.extend_from_slice(b",\"#\":");
+                        write_json_str(buf, &crate::utils::random_string(8));
+                        buf.push(b'}');
+                    }
                 }
             }
-        }
-        Message::RtcSignal(rtc) => rtc.to_writer(buf),
-        Message::CheckQuorumTimeouts => {
-            buf.clear();
-            buf.extend_from_slice(b"_tick_quorum");
-        }
-        Message::RegisterQuorum { put_id, .. } => {
-            debug!(
-                "internal RegisterQuorum({}) should not reach to_writer",
-                put_id
-            );
-            buf.clear();
+            Message::RtcSignal(rtc) => rtc.to_writer(buf),
+            Message::CheckQuorumTimeouts => {
+                buf.clear();
+                buf.extend_from_slice(b"_tick_quorum");
+            }
+            Message::RegisterQuorum { put_id, .. } => {
+                debug!(
+                    "internal RegisterQuorum({}) should not reach to_writer",
+                    put_id
+                );
+                buf.clear();
+            }
         }
     }
-}
 
     /// Serializes to Gun.js wire format as a `String`.
     ///
@@ -624,7 +629,9 @@ pub fn to_writer(&self, buf: &mut Vec<u8>) {
             Message::Put(put) => put.id.clone(),
             Message::BatchPut(batch) => batch.id.clone(),
             Message::Flush(flush) => flush.id.clone(),
-            Message::Hi { from: _, peer_id, .. } => peer_id.to_string(),
+            Message::Hi {
+                from: _, peer_id, ..
+            } => peer_id.to_string(),
             Message::RtcSignal(rtc) => rtc.id.clone(),
             Message::CheckQuorumTimeouts => "_tick_quorum".to_string(),
             Message::RegisterQuorum { put_id, .. } => put_id.clone(),
@@ -1325,11 +1332,17 @@ mod tests {
         let put = make_test_put();
         // Populate cache
         let _bytes = put.get_or_serialize();
-        assert!(put.raw.get().is_some(), "cache must be populated after get_or_serialize");
+        assert!(
+            put.raw.get().is_some(),
+            "cache must be populated after get_or_serialize"
+        );
 
         // Clone — cache should reset
         let cloned = put.clone();
-        assert!(cloned.raw.get().is_none(), "cache must reset to None on clone");
+        assert!(
+            cloned.raw.get().is_none(),
+            "cache must reset to None on clone"
+        );
     }
 
     #[test]
@@ -1338,11 +1351,18 @@ mod tests {
         // First call serializes and populates cache
         let bytes1 = put.get_or_serialize();
         assert!(!bytes1.is_empty(), "serialized bytes must not be empty");
-        assert!(put.raw.get().is_some(), "cache must be populated after first call");
+        assert!(
+            put.raw.get().is_some(),
+            "cache must be populated after first call"
+        );
 
         // Second call returns cached bytes — same content
         let bytes2 = put.get_or_serialize();
-        assert_eq!(bytes1.as_ref(), bytes2.as_ref(), "cached bytes must match first serialization");
+        assert_eq!(
+            bytes1.as_ref(),
+            bytes2.as_ref(),
+            "cached bytes must match first serialization"
+        );
     }
 
     #[test]
@@ -1358,7 +1378,10 @@ mod tests {
         let mut buf2 = Vec::new();
         msg.to_writer(&mut buf2);
 
-        assert_eq!(buf1, buf2, "second to_writer must produce identical bytes via cache");
+        assert_eq!(
+            buf1, buf2,
+            "second to_writer must produce identical bytes via cache"
+        );
     }
 
     #[test]
@@ -1390,7 +1413,10 @@ mod tests {
         if let Message::Put(ref put) = msg {
             let cached = put.get_or_serialize();
             let cached_str = String::from_utf8(cached.to_vec()).unwrap();
-            assert_eq!(direct, cached_str, "cached bytes must match direct serialization");
+            assert_eq!(
+                direct, cached_str,
+                "cached bytes must match direct serialization"
+            );
         }
     }
 
@@ -1422,7 +1448,11 @@ mod tests {
           }
         ]"##;
         let messages = Message::try_from(array_json, Addr::noop(), true).unwrap();
-        assert_eq!(messages.len(), 2, "array of 2 messages must parse to 2 Messages");
+        assert_eq!(
+            messages.len(),
+            2,
+            "array of 2 messages must parse to 2 Messages"
+        );
     }
 
     #[test]
@@ -1477,7 +1507,11 @@ mod tests {
 
         // Parse back — should get 2 messages
         let messages = Message::try_from(&array_str, Addr::noop(), true).unwrap();
-        assert_eq!(messages.len(), 2, "batched frame must roundtrip to 2 messages");
+        assert_eq!(
+            messages.len(),
+            2,
+            "batched frame must roundtrip to 2 messages"
+        );
     }
 
     #[test]
@@ -1495,6 +1529,10 @@ mod tests {
 
         let array_str = String::from_utf8(array).unwrap();
         let messages = Message::try_from(&array_str, Addr::noop(), true).unwrap();
-        assert_eq!(messages.len(), 1, "cached bytes in array must parse correctly");
+        assert_eq!(
+            messages.len(),
+            1,
+            "cached bytes in array must parse correctly"
+        );
     }
 }

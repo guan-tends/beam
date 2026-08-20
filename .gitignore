@@ -1,6 +1,7 @@
 /target
 .idea
 *_db
+radata/
 
 # Criterion benchmark persistent state
 benches/_data/

@@ -16,8 +16,8 @@
 //! nodes for discovering peers and relaying messages when direct
 //! connectivity is unavailable.
 
-use http::Uri;
 use crate::utils::FxHashMap;
+use http::Uri;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_websockets::ClientBuilder;

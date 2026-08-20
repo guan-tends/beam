@@ -115,11 +115,11 @@ export interface InitOutput {
     readonly beam_put_num: (a: number, b: number, c: number, d: number) => void;
     readonly beam_stop: (a: number) => void;
     readonly task_worker_entry_point: (a: number, b: number) => void;
-    readonly __wasm_bindgen_func_elem_1106: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_1120: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_229: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_229_2: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_229_3: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_1098: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_1112: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_224: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_224_2: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_224_3: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;

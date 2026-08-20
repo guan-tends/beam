@@ -1,6 +1,6 @@
 # BEAM Benchmark Results
 
-> **Hardware**: the test machine Oryx Pro (i7, the GPU Laptop 6GB), 32GB RAM, Linux
+> **Hardware**: Linux x86_64, 32GB RAM
 > **Date**: 2026-08-13
 > **Version**: v0.12.0 (branch `feature/v0.12.0-perf`)
 > **Build**: `--release` (LTO, opt-level 3, codegen-units=1)

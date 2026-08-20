@@ -430,7 +430,11 @@ async fn reconnection_sync() {
         .expect("timeout waiting for reconnection sync")
         .expect("channel closed");
 
-    assert_eq!(result, "second".into(), "reconnection sync should deliver phase2");
+    assert_eq!(
+        result,
+        "second".into(),
+        "reconnection sync should deliver phase2"
+    );
     beam2.stop();
 }
 

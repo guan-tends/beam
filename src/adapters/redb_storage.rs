@@ -212,14 +212,13 @@ impl RedbStorage {
                 continue;
             }
 
-            let mut children_for_node: Children =
-                match node_table.get(&**node_id)? {
-                    Some(access_guard) => {
-                        let bytes = access_guard.value();
-                        postcard::from_bytes(bytes).unwrap_or_default()
-                    }
-                    None => BTreeMap::default(),
-                };
+            let mut children_for_node: Children = match node_table.get(&**node_id)? {
+                Some(access_guard) => {
+                    let bytes = access_guard.value();
+                    postcard::from_bytes(bytes).unwrap_or_default()
+                }
+                None => BTreeMap::default(),
+            };
 
             for (child_id, child_data) in update_data {
                 let should_write = !matches!(

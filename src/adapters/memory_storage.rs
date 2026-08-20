@@ -22,8 +22,8 @@
 
 #![allow(clippy::mutable_key_type)] // Addr hashes by id field, not interior-mutable sender
 
-use arena_btreemap::BTreeMap;
 use crate::utils::{FxHashMap, FxHashSet};
+use arena_btreemap::BTreeMap;
 
 use crate::actor::{Actor, ActorContext};
 use crate::message::{BatchPut, Get, Message, Put};

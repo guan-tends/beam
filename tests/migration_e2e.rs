@@ -27,9 +27,9 @@
 
 #![cfg(feature = "persy")]
 
+use arena_btreemap::BTreeMap;
 use beam::migration::{Backend, MigrateOpts, migrate};
 use beam::types::{NodeData, Value};
-use arena_btreemap::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

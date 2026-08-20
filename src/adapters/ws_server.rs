@@ -21,8 +21,8 @@ use crate::adapters::ws_conn::WsConn;
 use crate::message::Message;
 use crate::metrics::Metrics;
 
-use async_trait::async_trait;
 use crate::utils::FxHashSet;
+use async_trait::async_trait;
 use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;

@@ -212,7 +212,7 @@ impl PersyStorage {
 
         let mut reply_nodes = BTreeMap::default();
         reply_nodes.insert(get.node_id.clone(), final_children);
-        let mut put = Put::new(reply_nodes, Some(get.id.clone()), ctx.addr.clone());
+        let put = Put::new(reply_nodes, Some(get.id.clone()), ctx.addr.clone());
         put.to_string(); // compute checksum
 
         let is_ack = put.in_response_to.is_some();
@@ -460,7 +460,7 @@ impl Actor for PersyStorage {
                 );
                 let mut ack_nodes = BTreeMap::default();
                 ack_nodes.insert("_ack".to_string(), ack_children);
-                let mut put = Put::new(ack_nodes, Some(flush_id), ctx_addr);
+                let put = Put::new(ack_nodes, Some(flush_id), ctx_addr);
                 put.to_string();
                 let _ = from_addr.send(Message::Put(put));
             }
