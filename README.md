@@ -46,7 +46,7 @@ BEAM is a maintained fork of [rod](https://github.com/mmalmi/rod) — a from-scr
 - **Real-time** — `on()` subscriptions deliver updates as they propagate through the mesh
 - **Eventually consistent** — last-write-wins conflict resolution via timestamps (matching Gun.js)
 - **Encrypted** — SEA layer provides Ed25519 signing, X25519 ECDH, and AES-256-GCM encryption
-- **Persistent** — `redb` embedded database for disk-backed storage, or `Persy` for high-concurrency workloads, or in-memory for ephemeral use
+- **Persistent** — `redb` embedded database (default), `fjall` LSM-tree (recommended for multi-node), `Persy` for high-concurrency, or in-memory for ephemeral use
 - **Multi-transport** — WebSocket (relay), UDP multicast (LAN discovery), WebRTC (direct P2P)
 - **Browser-ready** — compiles to WebAssembly via `wasm-pack`; same engine, same wire protocol, IndexedDB persistence
 
@@ -65,11 +65,14 @@ Or via the CLI:
 cargo add beamdb
 ```
 
-Feature flags (both off by default):
+Feature flags (all off by default):
 
 ```toml
 # WebRTC direct P2P support
 beamdb = { version = "0.16", features = ["webrtc"] }
+
+# Fjall LSM-tree storage backend (recommended for multi-node deployments)
+beamdb = { version = "0.16", features = ["fjall"] }
 
 # Persy storage backend (for high-concurrency workloads)
 beamdb = { version = "0.16", features = ["persy"] }
@@ -382,7 +385,8 @@ BEAM is built on an actor model with a central router. Every component — stora
                     │             │ │             │ │            │
                     │ MemoryStorage│ │ WsServer    │ │ WebRtcPeer │
                     │ RedbStorage │ │ WsClient    │ │ (str0m)    │
-                    │ PersyStorage│ │ Multicast   │ │            │
+                    │ FjallStorage│ │ Multicast   │ │            │
+                    │ PersyStorage│ │             │ │            │
                     └─────────────┘ └─────────────┘ └────────────┘
 ```
 
@@ -412,6 +416,7 @@ BEAM is built on an actor model with a central router. Every component — stora
 | `sea/session/` | Session persistence: `MemorySessionStorage` (ephemeral) and `EncryptedFileSessionStorage` (disk, AES-GCM) |
 | `adapters/memory_storage.rs` | In-memory `HashMap` storage (ephemeral, default for `Node::new()`) |
 | `adapters/redb_storage.rs` | Persistent storage via `redb` embedded database — `BatchPut` atomic transactions, flush ack |
+| `adapters/fjall_storage.rs` | Persistent storage via `fjall` LSM-tree database — WAL journalling, LZ4 compression, recommended for multi-node (feature-gated) |
 | `adapters/persy_storage.rs` | Persistent storage via `Persy` segment store — high-concurrency writes, optional `background_ops` |
 | `adapters/ws_server.rs` | WebSocket server: accepts inbound connections, spawns `WsConn` per connection, optional TLS, web UI on port+1 |
 | `adapters/ws_client.rs` | `OutgoingWebsocketManager` — connects to remote WebSocket peers with retry |
@@ -629,11 +634,11 @@ When `allow_public_space=false`, the node rejects unsigned puts to public space 
 
 ## Storage Backends
 
-BEAM supports two persistent storage backends for the embedded database layer. Both implement the same `Storage` trait, so the rest of the codebase is unaware of which one is active. The wire protocol is backend-agnostic — nodes with different storage choices converge via the standard mesh.
+BEAM supports three persistent storage backends for the embedded database layer. All implement the same `Actor` trait, so the rest of the codebase is unaware of which one is active. The wire protocol is backend-agnostic — nodes with different storage choices converge via the standard mesh.
 
 ### redb (Default)
 
-**What**: Embedded ACID database, single-writer, fsync on every Put.
+**What**: Embedded ACID B+tree database, single-writer, fsync on every Put.
 
 **When to use**:
 - Single-node deployments
@@ -643,16 +648,45 @@ BEAM supports two persistent storage backends for the embedded database layer. B
 
 **Trade-offs**:
 - ✅ Battle-tested, single-crate, well-understood
-- ✅ fsync before ack = bulletproof durability
+- ✅ fsync before ack = bulletproof durability — data survives power loss
+- ✅ Best read performance (mmap'd B+tree = direct memory access)
 - ❌ Single-writer serialization limits concurrent write throughput
 - ❌ Not ideal for high-fanout mesh workloads
+- ❌ Every Put = fsync (milliseconds, blocking)
+
+### fjall (Recommended for Multi-Node)
+
+**What**: Embedded LSM-tree (RocksDB-like) database in 100% safe Rust. WAL journalling with background compaction and built-in LZ4 compression.
+
+**When to use**:
+- Multi-node P2P deployments with high write fanout
+- Workloads where peers flood puts during resync
+- You want maximum write throughput
+
+**Trade-offs**:
+- ✅ 3–4× faster writes than redb (journal append vs fsync per write)
+- ✅ Built-in LZ4 compression (free, SSTable-level)
+- ✅ WriteBatch — single journal entry for atomic multi-put
+- ✅ 100% safe Rust, no unsafe blocks
+- ❌ ~1.4× slower random reads than redb (multi-level LSM lookup vs B+tree)
+- ❌ Not fsync'd per write — data is crash-safe (WAL) but a power loss may lose recent un-fsync'd writes
+- ❌ Background compaction causes read latency variance
+
+**Durability model**: fjall's default matches RocksDB — writes are crash-safe via WAL (survive process crash), but not fsync'd to disk until explicit `persist()`. For a P2P database where peers hold copies of the data, this is the correct trade-off: if one node loses its WAL on power failure, peers resync it. `Flush` triggers `persist(SyncAll)` for full durability.
+
+**Benchmarks** (see [`bench/RESULTS.md`](bench/RESULTS.md)):
+
+| Benchmark | redb | fjall |
+|---|---|---|
+| write_storm (sequential) | ~977 elem/s | ~3,000 elem/s |
+| concurrent_write_storm (4 tasks) | ~1,195 elem/s | ~4,836 elem/s |
+| read_storm (random) | ~610 elem/s | ~447 elem/s |
 
 ### Persy (Opt-In)
 
 **What**: Embedded segment-based store with per-transaction isolation and optional `background_ops` fsync offloading.
 
 **When to use**:
-- Multi-node meshes with high concurrent write fanout
 - Workloads where many writers hit disjoint keys simultaneously
 - You're benchmarking and Persy shows wins on your data
 
@@ -660,25 +694,59 @@ BEAM supports two persistent storage backends for the embedded database layer. B
 - ✅ Multiple writers proceed in parallel on disjoint keys
 - ✅ Optional `background_ops` for fsync offloading
 - ❌ Younger ecosystem, fewer Stack Overflow answers
-- ❌ Requires more careful substrate reading when debugging
+- ❌ Author has acknowledged crash-safety issues; development has slowed
+- ❌ No WASM path (native-only)
 - ❌ Performance characteristics need your own benchmarks
+
+### Comparison Summary
+
+| | redb | fjall | Persy |
+|---|---|---|---|
+| **Structure** | B+tree | LSM-tree | Segment store |
+| **Write path** | fsync per Put | WAL journal append | Per-tx isolation |
+| **Durability** | Bulletproof (fsync) | Crash-safe (WAL), not power-safe | Per-tx |
+| **Read speed** | Fastest (mmap) | Slower (multi-level) | Moderate |
+| **Write speed** | Slowest (fsync) | Fastest (journal) | Moderate |
+| **Concurrency** | Single-writer | Multi-writer | Multi-writer |
+| **Compression** | None | LZ4 (free) | None |
+| **WASM** | No | No | No |
+| **Maturity** | Most mature | Active dev | Slowing dev |
+| **Best for** | Single-node | Multi-node P2P | High-concurrency |
 
 ### Selection
 
-Persy is a **build-time** feature, not a runtime flag. Build with `--features persy` to enable Persy support in the migration subcommand:
+Storage backends are **build-time** features, not runtime flags:
 
 ```bash
 # Default build — redb only
 cargo build --release --bin beam
 
+# With fjall support
+cargo build --release --bin beam --features fjall
+
 # With Persy support (enables migration subcommand)
 cargo build --release --bin beam --features persy
 
 # Run with redb (default)
-cargo run --release --bin beam -- --port 4944
+cargo run --release --bin beam -- start --port 4944
 
 # In-memory only (no persistence)
-cargo run --release --bin beam -- --port 4944 --memory-storage true
+cargo run --release --bin beam -- start --port 4944 --memory-storage true
+```
+
+**Library usage** — use any backend programmatically (requires corresponding feature flags):
+
+```rust,ignore
+use beam::adapters::{FjallStorage, RedbStorage, MemoryStorage};
+
+// fjall (recommended for multi-node, requires --features fjall)
+let storage = FjallStorage::new_with_config(Config::default(), "beam.fjall");
+
+// redb (default, best for single-node)
+let storage = RedbStorage::new_with_config(Config::default(), "beam.redb", None);
+
+// in-memory (ephemeral)
+let storage = MemoryStorage::new();
 ```
 
 ### Migration Between Backends
@@ -706,7 +774,7 @@ Migration uses single-transaction-per-batch for safety and includes checksum ver
 
 ### Mixed Meshes
 
-Nodes with different storage backends interoperate transparently. A redb node, a Persy node, and an in-memory node form a valid mesh. The wire protocol carries the data; storage is a local choice.
+Nodes with different storage backends interoperate transparently. A redb node, a fjall node, a Persy node, and an in-memory node form a valid mesh. The wire protocol carries the data; storage is a local choice.
 
 **Cross-backend mesh verified** by `tests/cross_backend_mesh_e2e.rs`: 2 redb nodes + 1 Persy node converge correctly under the standard Put/Get protocol.
 
@@ -714,6 +782,7 @@ Nodes with different storage backends interoperate transparently. A redb node, a
 
 - The `beam_meta_v1` metadata table from redb (last-write timestamps) is not preserved when migrating redb → Persy. This metadata is not currently used by the actor framework, so the loss is cosmetic.
 - The migration tool is single-threaded per batch. For datasets larger than ~100k records, run during a maintenance window.
+- Migration to/from fjall is not yet supported. The fjall adapter uses an internal key encoding (`0x00` prefix) that differs from redb/Persy; migration would require prefix translation.
 
 ---
 
@@ -874,6 +943,12 @@ cargo test
 # With WebRTC tests
 cargo test --features webrtc
 
+# With fjall storage tests
+cargo test --features fjall
+
+# With Persy tests (includes migration tests)
+cargo test --features persy
+
 # Lint (zero warnings required)
 cargo clippy -- -D warnings
 
@@ -905,6 +980,7 @@ cargo test --test wire_live -- --ignored  # Layer 3: live integration (needs Nod
 | `redb_storage_persists` | Data survives restart with redb storage |
 | `redb_storage_flush_returns_ok` | Flush ack protocol |
 | `cross_backend_mesh_e2e` | 2 redb + 1 Persy nodes converge correctly |
+| `fjall_e2e` | 6 fjall storage tests: put-get, sequential, nested, LWW, flush, isolation (`--features fjall`) |
 | `wire_tests` | 36 golden JSON fixtures — wire protocol spec as tests |
 | `wire_live` | Live BEAM ↔ Gun.js bidirectional sync (4 scenarios) |
 
@@ -1008,8 +1084,14 @@ cargo test --release --test relay_throughput_bench -- --ignored --nocapture
 # Micro-benchmarks (hot-path components)
 cargo bench --bench my_benchmark -- "wire_|dup_check|actor_mailbox"
 
-# Storage benchmarks
+# Storage benchmarks (redb only by default)
 cargo bench --bench my_benchmark -- "write_storm|read_storm|mixed"
+
+# Storage benchmarks with fjall (head-to-head comparison)
+cargo bench --features fjall --bench my_benchmark -- "write_storm|read_storm|mixed"
+
+# Storage benchmarks with persy
+cargo bench --features persy --bench my_benchmark -- "write_storm|read_storm|mixed"
 
 # Live metrics endpoint (while relay is running)
 curl http://localhost:8080/metrics
@@ -1023,11 +1105,12 @@ methodology and analysis.
 | Feature | Default | Enables |
 |---------|---------|---------|
 | `webrtc` | No | `dep:str0m`, `dep:stun` — direct P2P connections via WebRTC data channels |
+| `fjall` | No | `dep:fjall` — LSM-tree storage backend (recommended for multi-node deployments) |
 | `persy` | No | `dep:persy` — Persy storage backend for high-concurrency workloads |
 
 Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (functions return `None`). Without `persy`, the `PersyStorage` adapter is not compiled in and migration to/from Persy is unavailable.
 
-**WASM**: When targeting `wasm32-unknown-unknown`, native-only modules (redb, Persy, tokio-tungstenite, multicast) are cfg-gated out. Browser adapters (`wasm_ws`, `wasm_idb`) are compiled in. Timer functions (`sleep`, `timeout`, `interval`) are provided by `tokio_with_wasm` via the `tokio_time` shim module instead of tokio's `time` feature (which panics on WASM). The `wasm.rs` module provides `#[wasm_bindgen]` JavaScript bindings. Build with `wasm-pack build --target web --release`.
+**WASM**: When targeting `wasm32-unknown-unknown`, native-only modules (redb, fjall, Persy, tokio-tungstenite, multicast) are cfg-gated out. Browser adapters (`wasm_ws`, `wasm_idb`) are compiled in. Timer functions (`sleep`, `timeout`, `interval`) are provided by `tokio_with_wasm` via the `tokio_time` shim module instead of tokio's `time` feature (which panics on WASM). The `wasm.rs` module provides `#[wasm_bindgen]` JavaScript bindings. Build with `wasm-pack build --target web --release`.
 
 ---
 

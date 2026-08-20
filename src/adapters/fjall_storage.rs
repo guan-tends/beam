@@ -333,7 +333,7 @@ impl FjallStorage {
     }
 
     /// Handles a BatchPut by read-merge-writing each put and committing
-    /// all writes atomically via [`fjall::WriteBatch`].
+    /// all writes atomically via a [`fjall::WriteBatch`].
     ///
     /// Each put in the batch requires a read-merge-write cycle (LWW
     /// conflict resolution). The reads happen against the live keyspace;
@@ -343,17 +343,6 @@ impl FjallStorage {
     ///
     /// Called directly from the async `handle()` — no `spawn_blocking`
     /// because `WriteBatch::commit()` is a journal append (microseconds).
-    /// Handles a BatchPut by read-merge-writing each put and committing
-    /// all writes atomically via a fjall write batch.
-    ///
-    /// Each put in the batch requires a read-merge-write cycle (LWW
-    /// conflict resolution). The reads happen against the live keyspace;
-    /// the merged writes are accumulated into a batch and committed
-    /// as a single journal entry — amortizing the WAL write across all
-    /// puts in the batch.
-    ///
-    /// Called directly from the async `handle()` — no `spawn_blocking`
-    /// because batch commit is a journal append (microseconds).
     fn apply_batch_put(&self, batch: &BatchPut) -> Result<(), String> {
         // Create an owned Database clone for the batch (Database: Clone).
         // The batch owns the Database handle for the duration of the commit.
