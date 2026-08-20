@@ -59,6 +59,7 @@ http = "1"
 oko-multicast-socket = { version = "0.5", features = ["tokio"] }
 redb = "4.1"
 persy = { version = "1.8", features = ["background_ops"], optional = true }
+fjall = { version = "2", optional = true }
 mimalloc = { version = "0.1.52", optional = true }
 env_logger = "0.11"
 dirs = "6.0"
@@ -80,6 +81,7 @@ default = ["native", "mimalloc"]
 webrtc = ["dep:str0m", "dep:stun"]
 native = []
 persy = ["dep:persy"]
+fjall = ["dep:fjall"]
 mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
