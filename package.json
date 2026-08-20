@@ -1,0 +1,15 @@
+{
+  "name": "beam",
+  "version": "0.16.0",
+  "private": true,
+  "description": "BEAM browser test dependencies",
+  "scripts": {
+    "test:browser": "playwright test tests/e2e/gun-beam-interop.spec.mjs --reporter=line",
+    "test:wasm:unit": "wasm-pack test --node --no-default-features",
+    "test:wasm:integration": "node tests/wasm-integration/node-integration.mjs",
+    "test:native": "cargo test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0"
+  }
+}

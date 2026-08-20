@@ -5,4 +5,7 @@
 pub use tokio::time::{interval, sleep, timeout};
 
 #[cfg(target_arch = "wasm32")]
-pub use tokio_with_wasm::time::{interval, sleep, timeout};
+pub use tokio_with_wasm::time::{sleep, timeout};
+#[cfg(target_arch = "wasm32")]
+#[allow(unused_imports)]
+pub use tokio_with_wasm::time::interval;

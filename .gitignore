@@ -18,3 +18,8 @@ perf.data.*
 heaptrack.*.gz
 dhat.out.*
 bench/results/
+
+# Node.js / Playwright
+node_modules/
+test-results/
+playwright-report/

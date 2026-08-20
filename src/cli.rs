@@ -170,9 +170,21 @@ pub struct MigrateArgs {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate process-wide env vars.
+    /// Without this, `env_var_peers` leaks `PEERS` into `start_with_defaults`
+    /// when tests run in parallel.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn start_with_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — no other test touches env vars.
+        unsafe {
+            std::env::remove_var("PEERS");
+            std::env::remove_var("PORT");
+        }
         let cli = Cli::parse_from(["beam", "start"]);
         match cli.command {
             Command::Start(args) => {
@@ -372,8 +384,9 @@ mod tests {
 
     #[test]
     fn env_var_port() {
-        // SAFETY: env vars are process-wide; we set/restore in the same test.
-        // Other tests in this module don't check PORT, so this is safe.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — no other test touches env vars
+        // while this test holds the lock.
         unsafe {
             std::env::set_var("PORT", "9999");
         }
@@ -389,6 +402,8 @@ mod tests {
 
     #[test]
     fn env_var_peers() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK.
         unsafe {
             std::env::set_var("PEERS", "wss://env-peer.example.com");
         }
@@ -406,6 +421,8 @@ mod tests {
 
     #[test]
     fn cli_flag_overrides_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK.
         unsafe {
             std::env::set_var("PORT", "9999");
         }

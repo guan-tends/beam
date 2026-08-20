@@ -855,12 +855,25 @@ impl Router {
             let _ = addr.send(Arc::clone(&relay_msg));
             already_sent_to.insert(addr.clone());
         }
-        // Mark all WsConn addrs as already-sent — the OutgoingWebsocketManager
-        // (in server_peers) will fan out to them. Without this, the
-        // subscribers and known_peers loops below would send duplicate
-        // copies (same message ID) to the WsConn, causing Gun.js dedup
-        // to drop the response.
+        // Send to all connected peer actors (WsConn, WasmWsConn) directly.
+        // On native, the OutgoingWebsocketManager (in server_peers) fans out
+        // to its child WsConn actors — but on WASM, WasmWsConn is a standalone
+        // actor in known_peers/peer_addrs with no manager to fan out to it.
+        // We must send directly here, then mark as already-sent to prevent
+        // duplicate delivery via the subscribers/known_peers loops below.
         for addr in self.peer_addrs.values() {
+            if put.from == *addr {
+                continue;
+            }
+            if let Some(pid) = self.addr_to_pid.get(addr) {
+                if relay_skip.contains(pid) {
+                    continue;
+                }
+            }
+            if already_sent_to.contains(addr) {
+                continue;
+            }
+            let _ = addr.send(Arc::clone(&relay_msg));
             already_sent_to.insert(addr.clone());
         }
 
