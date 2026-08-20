@@ -15,6 +15,17 @@
 //! [`Arc<Mutex<Vec>>`] until `onopen` fires, then flush. The actor's `pre_start`
 //! registers with the local router (using `ctx.addr`); `onopen` registers with
 //! the relay (the wire Hi format does not include the actor addr).
+//!
+//! # Send Strategy
+//!
+//! We use a "try-send, fallback to buffer" approach in `handle()`. Rather than
+//! checking `ready_state()` (which is unreliable in WASM — it may report
+//! `CONNECTING` even after `onopen` has fired), we call `send_with_str()`
+//! directly. If it returns `Err` (WebSocket still in CONNECTING state), the
+//! message is buffered to the outbox. The `onopen` callback flushes the outbox
+//! when the connection opens. After `onopen`, `send_with_str()` succeeds
+//! because the underlying WebSocket IS open, regardless of what `ready_state()`
+//! reports.
 
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::Message;
@@ -46,7 +57,7 @@ impl WasmWsConn {
         let peer_id = ctx.peer_id.read().clone();
         let router = ctx.router.read().clone();
         let addr = ctx.addr.clone();
-        let mut stop_ctx = ctx.clone();
+        let stop_ctx = ctx.clone();
 
         let outbox = Arc::new(Mutex::new(Vec::<String>::new()));
 
@@ -131,12 +142,14 @@ impl Actor for WasmWsConn {
         let mut buf = Vec::with_capacity(256);
         msg.to_writer(&mut buf);
         let text = std::str::from_utf8(&buf).unwrap_or("");
-        // Check readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
-        if self.ws.ready_state() == 1 {
-            let _ = self.ws.send_with_str(text);
-        } else {
-            // Buffer until onopen flushes.
-            self.outbox.lock().unwrap().push(text.to_string());
+        // Try to send directly. If the WebSocket isn't open (CONNECTING state),
+        // send_with_str throws InvalidStateError — buffer to outbox instead.
+        // The onopen callback flushes the outbox when the connection opens.
+        match self.ws.send_with_str(text) {
+            Ok(()) => {}
+            Err(_) => {
+                self.outbox.lock().unwrap().push(text.to_string());
+            }
         }
     }
 

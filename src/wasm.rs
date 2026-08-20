@@ -58,6 +58,12 @@ pub struct Beam {
     node: Node,
 }
 
+impl Default for Beam {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl Beam {
     /// Creates a new BEAM node with in-memory storage.

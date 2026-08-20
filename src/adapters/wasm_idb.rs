@@ -37,9 +37,7 @@ use crate::utils::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{
-    IdbDatabase, IdbOpenDbRequest, IdbRequest, IdbTransactionMode, IdbVersionChangeEvent,
-};
+use web_sys::{IdbDatabase, IdbRequest, IdbTransactionMode, IdbVersionChangeEvent};
 
 /// IndexedDB storage adapter for browser/WASM.
 ///
@@ -62,6 +60,12 @@ pub struct WasmIdbStorage {
     store_name: String,
     /// Flag to track if DB initialization is in progress.
     db_ready: bool,
+}
+
+impl Default for WasmIdbStorage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WasmIdbStorage {
@@ -88,37 +92,6 @@ impl WasmIdbStorage {
             store_name: "beam_data".to_string(),
             db_ready: false,
         }
-    }
-
-    /// Opens the IndexedDB database. Called from `pre_start`.
-    ///
-    /// Creates the database and object store if they don't exist.
-    fn open_db(&mut self) -> Result<IdbDatabase, String> {
-        let window = web_sys::window().ok_or("no window")?;
-        let request: IdbOpenDbRequest = window
-            .indexed_db()
-            .map_err(|e| format!("indexed_db error: {:?}", e))?
-            .ok_or("no indexed_db")?
-            .open_with_u32(&self.db_name, 1)
-            .map_err(|e| format!("open error: {:?}", e))?;
-
-        // On upgrade needed: create object store
-        let store_name = self.store_name.clone();
-        let onupgradeneeded: Closure<dyn FnMut(IdbVersionChangeEvent)> =
-            Closure::new(move |event: IdbVersionChangeEvent| {
-                let request: IdbRequest = event.target().unwrap().unchecked_into();
-                let db: IdbDatabase = request.result().unwrap().unchecked_into();
-                let _ = db.create_object_store(&store_name);
-                info!("WasmIdbStorage: created object store");
-            });
-        request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
-        onupgradeneeded.forget();
-
-        // We can't await the open request synchronously in WASM.
-        // Instead, we return a result based on immediate success.
-        // The DB handle will be available after the success callback fires.
-        // For now, return an error — the caller should use open_db_async.
-        Err("use open_db_async".to_string())
     }
 
     /// Asynchronously opens the database and calls the callback when ready.
@@ -332,6 +305,7 @@ impl WasmIdbStorage {
         };
         let mut reply_with_nodes = BTreeMap::default();
         reply_with_nodes.insert(get.node_id.clone(), reply_with_children);
+        #[allow(clippy::mutable_key_type)]
         let mut recipients = FxHashSet::default();
         recipients.insert(get.from.clone());
         let put = Put::new(reply_with_nodes, Some(get.id.clone()), ctx.addr.clone());
