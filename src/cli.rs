@@ -137,11 +137,11 @@ pub struct StartArgs {
 /// Arguments for the `migrate` subcommand.
 #[derive(Debug, Args)]
 pub struct MigrateArgs {
-    /// Source backend: 'redb' or 'persy'.
+    /// Source backend: 'redb', 'persy', or 'fjall'.
     #[arg(long = "from", value_name = "BACKEND")]
     pub from: String,
 
-    /// Target backend: 'redb' or 'persy'.
+    /// Target backend: 'redb', 'persy', or 'fjall'.
     #[arg(long = "to", value_name = "BACKEND")]
     pub to: String,
 
