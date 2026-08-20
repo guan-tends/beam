@@ -143,20 +143,43 @@ docs-audit:
 
 # ─── Stage 9: Benchmarks ────────────────────────────────────────────
 
-# Run all benchmarks (relay throughput + local put + Criterion micro-benchmarks)
+# Run all benchmarks 5x in isolation and compute averages.
+# Each benchmark suite runs 5 times sequentially to avoid noisy-neighbor effects.
+# Results are logged to bench/results/ with timestamps.
 benchmarks:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$HOME/.cargo/env"
+    mkdir -p bench/results
     echo "=== Building relay binary ==="
     cargo build --bin beam
-    echo "=== Local put benchmark (100k puts) ==="
-    cargo test --release --test local_put_bench -- --nocapture --ignored
-    echo "=== Relay throughput benchmarks ==="
-    cargo test --release --test relay_throughput_bench -- --nocapture --ignored --test-threads=1
-    echo "=== Criterion micro-benchmarks ==="
-    cargo bench
-    echo "=== BENCHMARKS COMPLETE — review results ==="
+    echo ""
+    echo "═══════════════════════════════════════════════════"
+    echo "  BENCHMARK SUITE — 5 RUNS IN ISOLATION"
+    echo "═══════════════════════════════════════════════════"
+    echo ""
+    # ── Local Put (5 runs) ──
+    for i in 1 2 3 4 5; do
+        echo "=== Local Put Run $i/5 ==="
+        cargo test --release --test local_put_bench -- --nocapture --ignored 2>&1 | tee "bench/results/local-put-run-${i}.log"
+        echo ""
+    done
+    # ── Relay Throughput (5 runs) ──
+    for i in 1 2 3 4 5; do
+        echo "=== Relay Throughput Run $i/5 ==="
+        cargo test --release --test relay_throughput_bench -- --nocapture --ignored --test-threads=1 2>&1 | tee "bench/results/relay-throughput-run-${i}.log"
+        echo ""
+    done
+    # ── Criterion (5 runs) ──
+    for i in 1 2 3 4 5; do
+        echo "=== Criterion Run $i/5 ==="
+        cargo bench 2>&1 | tee "bench/results/criterion-run-${i}.log"
+        echo ""
+    done
+    echo "═══════════════════════════════════════════════════"
+    echo "  BENCHMARKS COMPLETE — 5 runs each"
+    echo "  Results in bench/results/"
+    echo "═══════════════════════════════════════════════════"
 
 # ─── Stage 10: Profiling ────────────────────────────────────────────
 
