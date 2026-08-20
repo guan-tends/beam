@@ -207,12 +207,16 @@ impl FjallStorage {
         let db = Database::builder(&path).open().unwrap_or_else(|e| {
             panic!("Failed to create/open fjall at {}: {:?}", path, e);
         });
-        let nodes = db.keyspace(BEAM_NODES, KeyspaceCreateOptions::default).unwrap_or_else(|e| {
-            panic!("Failed to open beam_nodes_v1 keyspace: {:?}", e);
-        });
-        let meta = db.keyspace(BEAM_META, KeyspaceCreateOptions::default).unwrap_or_else(|e| {
-            panic!("Failed to open beam_meta_v1 keyspace: {:?}", e);
-        });
+        let nodes = db
+            .keyspace(BEAM_NODES, KeyspaceCreateOptions::default)
+            .unwrap_or_else(|e| {
+                panic!("Failed to open beam_nodes_v1 keyspace: {:?}", e);
+            });
+        let meta = db
+            .keyspace(BEAM_META, KeyspaceCreateOptions::default)
+            .unwrap_or_else(|e| {
+                panic!("Failed to open beam_meta_v1 keyspace: {:?}", e);
+            });
         Self {
             db: Arc::new(db),
             nodes,
@@ -231,16 +235,18 @@ impl FjallStorage {
     /// is suppressed (already sent) — unless this is an ack reply (those
     /// MUST always be sent, see the always-reply-when-ack invariant).
     fn handle_get(&self, get: &Get, ctx: &ActorContext) {
-        let children_for_node: Children = match self.nodes.get(encode_key(&get.node_id).as_slice()) {
-            Ok(Some(slice)) => {
-                match postcard::from_bytes(slice.as_ref()) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("fjall get: deserialize failed for node_id={}: {:?}", get.node_id, e);
-                        return;
-                    }
+        let children_for_node: Children = match self.nodes.get(encode_key(&get.node_id).as_slice())
+        {
+            Ok(Some(slice)) => match postcard::from_bytes(slice.as_ref()) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(
+                        "fjall get: deserialize failed for node_id={}: {:?}",
+                        get.node_id, e
+                    );
+                    return;
                 }
-            }
+            },
             Ok(None) => {
                 debug!("fjall get: no data for node_id={}", get.node_id);
                 // Empty set is still a valid reply — send sentinel so .map() listeners don't hang.
@@ -309,9 +315,7 @@ impl FjallStorage {
             // Read existing children (point lookup — no scan needed).
             let key = encode_key(node_id);
             let mut children_for_node: Children = match self.nodes.get(key.as_slice()) {
-                Ok(Some(slice)) => {
-                    postcard::from_bytes(slice.as_ref()).unwrap_or_default()
-                }
+                Ok(Some(slice)) => postcard::from_bytes(slice.as_ref()).unwrap_or_default(),
                 Ok(None) => BTreeMap::default(),
                 Err(e) => return Err(format!("fjall get for merge: {:?}", e)),
             };
@@ -381,9 +385,7 @@ impl FjallStorage {
                 // Read existing children (point lookup).
                 let key = encode_key(node_id);
                 let mut children_for_node: Children = match self.nodes.get(key.as_slice()) {
-                    Ok(Some(slice)) => {
-                        postcard::from_bytes(slice.as_ref()).unwrap_or_default()
-                    }
+                    Ok(Some(slice)) => postcard::from_bytes(slice.as_ref()).unwrap_or_default(),
                     Ok(None) => BTreeMap::default(),
                     Err(e) => return Err(format!("fjall get for batch merge: {:?}", e)),
                 };
@@ -411,7 +413,9 @@ impl FjallStorage {
             }
         }
 
-        write_batch.commit().map_err(|e| format!("fjall batch commit: {:?}", e))
+        write_batch
+            .commit()
+            .map_err(|e| format!("fjall batch commit: {:?}", e))
     }
 }
 
@@ -551,10 +555,7 @@ impl Actor for FjallStorage {
         if let Err(e) = self.db.persist(PersistMode::SyncAll) {
             error!("FjallStorage final persist failed: {:?}", e);
         }
-        info!(
-            "FjallStorage stopping at {} — journal persisted",
-            self.path
-        );
+        info!("FjallStorage stopping at {} — journal persisted", self.path);
     }
 
     async fn handle(&mut self, message: Arc<Message>, ctx: &ActorContext) {
@@ -696,7 +697,8 @@ mod tests {
             .get(encode_key("a").as_slice())
             .expect("get should not error")
             .expect("node 'a' should exist");
-        let result: Children = postcard::from_bytes(slice.as_ref()).expect("deserialize should work");
+        let result: Children =
+            postcard::from_bytes(slice.as_ref()).expect("deserialize should work");
         assert_eq!(result.len(), 1);
         let child = result.get("b").unwrap();
         match &child.value {
@@ -761,7 +763,10 @@ mod tests {
         let storage = create_test_storage("missing");
 
         // Direct keyspace read on empty db (using encode_key)
-        let result = storage.nodes.get(encode_key("nonexistent").as_slice()).unwrap();
+        let result = storage
+            .nodes
+            .get(encode_key("nonexistent").as_slice())
+            .unwrap();
         assert!(result.is_none(), "fresh db has no records");
 
         cleanup(&storage.path);
@@ -827,7 +832,9 @@ mod tests {
             .collect();
 
         let batch = BatchPut::new(puts, Addr::noop());
-        storage.apply_batch_put(&batch).expect("batch should succeed");
+        storage
+            .apply_batch_put(&batch)
+            .expect("batch should succeed");
 
         // Verify all 3 nodes are present
         for i in 0..3 {
@@ -861,7 +868,13 @@ mod tests {
             .unwrap();
 
         // Verify it exists
-        assert!(storage.nodes.get(encode_key("n1").as_slice()).unwrap().is_some());
+        assert!(
+            storage
+                .nodes
+                .get(encode_key("n1").as_slice())
+                .unwrap()
+                .is_some()
+        );
 
         // Overwrite with a newer child that has the same key but different value
         // Then delete by sending an empty update (updated_at newer but empty children)
@@ -881,7 +894,13 @@ mod tests {
         // The node should still exist because the existing child "x" @ t=100
         // is newer than the empty incoming update (default updated_at=0).
         // This is correct LWW behavior — empty updates don't delete newer data.
-        assert!(storage.nodes.get(encode_key("n1").as_slice()).unwrap().is_some());
+        assert!(
+            storage
+                .nodes
+                .get(encode_key("n1").as_slice())
+                .unwrap()
+                .is_some()
+        );
 
         cleanup(&storage.path);
     }

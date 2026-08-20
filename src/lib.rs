@@ -1,3 +1,5 @@
+#![allow(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
+
 // Global allocator — mimalloc.
 //
 // mimalloc is a compact general-purpose allocator by Microsoft with excellent

@@ -354,9 +354,8 @@ pub(crate) mod io {
     fn read_persy(path: &std::path::Path) -> Result<Vec<MigrationRecord>, MigrateError> {
         use crate::adapters::persy_storage::BEAM_NODES as PERSY_BEAM_NODES;
 
-        let db = persy::Persy::open(path, persy::Config::new()).map_err(|source| {
-            MigrateError::Persy(format!("{}: {}", path.display(), source))
-        })?;
+        let db = persy::Persy::open(path, persy::Config::new())
+            .map_err(|source| MigrateError::Persy(format!("{}: {}", path.display(), source)))?;
         let segment_id = db
             .solve_segment_id(PERSY_BEAM_NODES)
             .map_err(|e| MigrateError::Persy(format!("solve_segment_id: {}", e)))?;
@@ -384,21 +383,19 @@ pub(crate) mod io {
     /// and yields canonical `(node_id, children_bytes)`.
     #[cfg(feature = "fjall")]
     fn read_fjall(path: &std::path::Path) -> Result<Vec<MigrationRecord>, MigrateError> {
-        let db = fjall::Database::builder(path).open().map_err(|e| {
-            MigrateError::Fjall(format!("{}: {}", path.display(), e))
-        })?;
+        let db = fjall::Database::builder(path)
+            .open()
+            .map_err(|e| MigrateError::Fjall(format!("{}: {}", path.display(), e)))?;
         let keyspace = db
-            .keyspace("beam_nodes_v1", || {
-                fjall::KeyspaceCreateOptions::default()
-            })
+            .keyspace("beam_nodes_v1", fjall::KeyspaceCreateOptions::default)
             .map_err(|e| MigrateError::Fjall(format!("keyspace: {}", e)))?;
 
         let mut records = Vec::new();
         for item in keyspace.iter() {
             // Guard::into_inner() returns Result<KvPair> = Result<(Vec<u8>, Slice)>
-            let (key, value) = item.into_inner().map_err(|e| {
-                MigrateError::Fjall(format!("iter: {}", e))
-            })?;
+            let (key, value) = item
+                .into_inner()
+                .map_err(|e| MigrateError::Fjall(format!("iter: {}", e)))?;
             let node_id = fjall_key_to_node_id(&key)?;
             records.push(MigrationRecord {
                 node_id,
@@ -447,10 +444,12 @@ pub(crate) mod io {
                         }
                     })?;
                     for (k, v) in &batch {
-                        table.insert(*k, *v).map_err(|source| MigrateError::RedbTable {
-                            path: path.to_path_buf(),
-                            source: redb::TableError::Storage(source),
-                        })?;
+                        table
+                            .insert(*k, *v)
+                            .map_err(|source| MigrateError::RedbTable {
+                                path: path.to_path_buf(),
+                                source: redb::TableError::Storage(source),
+                            })?;
                     }
                 }
                 txn.commit().map_err(|source| MigrateError::RedbCommit {
@@ -469,17 +468,19 @@ pub(crate) mod io {
                 source,
             })?;
             {
-                let mut table = txn.open_table(REDB_BEAM_NODES).map_err(|source| {
-                    MigrateError::RedbTable {
-                        path: path.to_path_buf(),
-                        source,
-                    }
-                })?;
+                let mut table =
+                    txn.open_table(REDB_BEAM_NODES)
+                        .map_err(|source| MigrateError::RedbTable {
+                            path: path.to_path_buf(),
+                            source,
+                        })?;
                 for (k, v) in &batch {
-                    table.insert(*k, *v).map_err(|source| MigrateError::RedbTable {
-                        path: path.to_path_buf(),
-                        source: redb::TableError::Storage(source),
-                    })?;
+                    table
+                        .insert(*k, *v)
+                        .map_err(|source| MigrateError::RedbTable {
+                            path: path.to_path_buf(),
+                            source: redb::TableError::Storage(source),
+                        })?;
                 }
             }
             txn.commit().map_err(|source| MigrateError::RedbCommit {
@@ -520,13 +521,7 @@ pub(crate) mod io {
                 Ok(())
             },
         )
-        .map_err(|source| {
-            MigrateError::Persy(format!(
-                "{}: {}",
-                path.display(),
-                source
-            ))
-        })?;
+        .map_err(|source| MigrateError::Persy(format!("{}: {}", path.display(), source)))?;
 
         let target_seg = target_db
             .solve_segment_id(PERSY_BEAM_NODES)
@@ -560,13 +555,11 @@ pub(crate) mod io {
         path: &std::path::Path,
         records: &[MigrationRecord],
     ) -> Result<usize, MigrateError> {
-        let db = fjall::Database::builder(path).open().map_err(|e| {
-            MigrateError::Fjall(format!("{}: {}", path.display(), e))
-        })?;
+        let db = fjall::Database::builder(path)
+            .open()
+            .map_err(|e| MigrateError::Fjall(format!("{}: {}", path.display(), e)))?;
         let keyspace = db
-            .keyspace("beam_nodes_v1", || {
-                fjall::KeyspaceCreateOptions::default()
-            })
+            .keyspace("beam_nodes_v1", fjall::KeyspaceCreateOptions::default)
             .map_err(|e| MigrateError::Fjall(format!("keyspace: {}", e)))?;
 
         for record in records {

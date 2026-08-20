@@ -50,6 +50,35 @@ export class Beam {
      */
     static new_persistent(): Beam;
     /**
+     * Creates a new BEAM node with OPFS (Origin Private File System) persistent storage.
+     *
+     * Data is stored as postcard-serialized files in the browser's OPFS
+     * and survives page reloads and browser restarts. Requires a secure
+     * context (HTTPS or localhost). OPFS is available in all modern browsers
+     * (Chrome 102+, Firefox 111+, Safari 15.2+).
+     *
+     * The OPFS directory opens asynchronously — writes are buffered until
+     * the directory is ready, then flushed automatically.
+     *
+     * ```js
+     * import init, { Beam } from "./beam.js";
+     * await init();
+     * const beam = Beam.new_with_opfs();
+     * beam.connect("ws://relay.example.com");
+     * beam.put("chat.001", "hello");
+     * // Reload page — data is still there.
+     * ```
+     */
+    static new_with_opfs(): Beam;
+    /**
+     * Creates a new BEAM node with OPFS storage at a custom directory name.
+     *
+     * ```js
+     * const beam = Beam.new_with_opfs_name("myapp_data");
+     * ```
+     */
+    static new_with_opfs_name(name: string): Beam;
+    /**
      * Subscribes to child updates at the given path.
      *
      * Uses Gun.js `.on()` semantics: the callback fires for each child
@@ -108,6 +137,8 @@ export interface InitOutput {
     readonly beam_get: (a: number, b: number, c: number) => number;
     readonly beam_new: () => number;
     readonly beam_new_persistent: () => number;
+    readonly beam_new_with_opfs: () => number;
+    readonly beam_new_with_opfs_name: (a: number, b: number) => number;
     readonly beam_on: (a: number, b: number, c: number, d: number) => void;
     readonly beam_put: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly beam_put_bool: (a: number, b: number, c: number, d: number) => void;
@@ -115,11 +146,11 @@ export interface InitOutput {
     readonly beam_put_num: (a: number, b: number, c: number, d: number) => void;
     readonly beam_stop: (a: number) => void;
     readonly task_worker_entry_point: (a: number, b: number) => void;
-    readonly __wasm_bindgen_func_elem_1098: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_1112: (a: number, b: number, c: number, d: number) => void;
-    readonly __wasm_bindgen_func_elem_224: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_224_2: (a: number, b: number, c: number) => void;
-    readonly __wasm_bindgen_func_elem_224_3: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_1218: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_1232: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_252: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_252_2: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_252_3: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;
