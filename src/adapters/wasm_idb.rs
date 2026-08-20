@@ -7,7 +7,7 @@
 //! # Architecture
 //!
 //! - **Object store**: `beam_data` — key-value store where key = soul (node ID),
-//!   value = serialized `Children` (as JSON string)
+//!   value = serialized `Children` (postcard, base64-encoded)
 //! - **Database name**: `beam` (configurable via [`WasmIdbStorage::with_name`])
 //! - **Schema version**: 1
 //!
@@ -33,6 +33,7 @@ use crate::types::*;
 use crate::utils::{FxHashMap, FxHashSet};
 use arena_btreemap::BTreeMap;
 use async_trait::async_trait;
+use base64::Engine as _;
 use log::{error, info, warn};
 use std::sync::Arc;
 use wasm_bindgen::closure::Closure;
@@ -43,7 +44,7 @@ use web_sys::{IdbDatabase, IdbRequest, IdbTransactionMode, IdbVersionChangeEvent
 ///
 /// Persists graph data to the browser's IndexedDB. Each soul (node ID) is
 /// stored as a key-value entry in the `beam_data` object store. Values are
-/// serialized as JSON strings.
+/// serialized as postcard bytes (base64-encoded for IDB string storage).
 ///
 /// Created with [`WasmIdbStorage::new`] and registered as an actor via
 /// [`ActorContext::start_actor`].
@@ -161,31 +162,52 @@ impl WasmIdbStorage {
         onerror.forget();
     }
 
-    /// Serializes Children to a JSON string for IndexedDB storage.
+    /// Serializes Children to postcard bytes for IndexedDB storage.
+    ///
+    /// Uses the same postcard wire format as the Node.js fs and OPFS adapters
+    /// for cross-format consistency. Data is stored as a base64-encoded string
+    /// because IndexedDB string keys are more portable across browsers.
     fn serialize_children(children: &Children) -> String {
         // Convert BTreeMap<String, NodeData> to a serializable format
         let map: FxHashMap<String, (Value, f64)> = children
             .iter()
             .map(|(k, v)| (k.clone(), (v.value.clone(), v.updated_at)))
             .collect();
-        serde_json::to_string(&map).unwrap_or_default()
+        let bytes = postcard::to_allocvec(&map).unwrap_or_default();
+        // Encode as base64 for safe string storage in IndexedDB
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
     }
 
-    /// Deserializes Children from a JSON string.
-    fn deserialize_children(json: &str) -> Children {
-        if json.is_empty() {
+    /// Deserializes Children from a postcard-encoded base64 string.
+    ///
+    /// Falls back to JSON deserialization for backward compatibility with
+    /// databases created before the postcard migration.
+    fn deserialize_children(stored: &str) -> Children {
+        if stored.is_empty() {
             return BTreeMap::default();
         }
-        let map: FxHashMap<String, (Value, f64)> = match serde_json::from_str(json) {
-            Ok(m) => m,
+
+        // Try postcard (base64-encoded) first
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(stored) {
+            if let Ok(map) = postcard::from_bytes::<FxHashMap<String, (Value, f64)>>(&bytes) {
+                return map
+                    .into_iter()
+                    .map(|(k, (value, updated_at))| (k, NodeData { value, updated_at }))
+                    .collect();
+            }
+        }
+
+        // Fallback: try JSON for backward compatibility with old IDB databases
+        match serde_json::from_str::<FxHashMap<String, (Value, f64)>>(stored) {
+            Ok(map) => map
+                .into_iter()
+                .map(|(k, (value, updated_at))| (k, NodeData { value, updated_at }))
+                .collect(),
             Err(e) => {
                 warn!("WasmIdbStorage: deserialize error: {}", e);
-                return BTreeMap::default();
+                BTreeMap::default()
             }
-        };
-        map.into_iter()
-            .map(|(k, (value, updated_at))| (k, NodeData { value, updated_at }))
-            .collect()
+        }
     }
 
     /// Handles a Get request by checking the cache first, then IndexedDB.
@@ -254,8 +276,8 @@ impl WasmIdbStorage {
                         let _ = from.send(Message::Put(put));
                         return;
                     }
-                    let json = result.as_string().unwrap_or_default();
-                    let children = WasmIdbStorage::deserialize_children(&json);
+                    let stored = result.as_string().unwrap_or_default();
+                    let children = WasmIdbStorage::deserialize_children(&stored);
                     // Cache the result
                     cache.write().insert(node_id.clone(), children.clone());
                     // Reply
