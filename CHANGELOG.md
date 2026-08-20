@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — WASM Storage Adapters
+
+- **OPFS (Origin Private File System) storage adapter** (`WasmOpfsStorage`):
+  Browser-native file-based persistence using the OPFS API. Postcard-serialized
+  binary files, async via `spawn_local` + `Arc<AtomicBool>` signaling. Available
+  via `Beam.new_with_opfs()` and `Beam.new_with_opfs_name(name)`. Requires
+  Chrome 102+, Firefox 111+, or Safari 15.2+.
+- **Node.js filesystem storage adapter** (`WasmNodeFsStorage`):
+  Server-side WASM persistence for Node.js/Electron environments. Postcard-
+  serialized files, async via `spawn_local` + `JsFuture`. Available via
+  `Beam.new_with_node_fs()` and `Beam.new_with_node_fs_dir(dir)`. Requires
+  `--features node-fs`.
+- **Playwright OPFS persistence tests**: Browser tests verifying data survives
+  page reload and full browser context close.
+- **webServer config in `playwright.config.mjs`**: Auto-serves `browser-test/`
+  via `http-server` on port 8080.
+
+### Changed — IDB Refactor
+
+- **WasmIdbStorage serialization**: Migrated from JSON to postcard (base64-encoded)
+  for wire format consistency with OPFS and Node.js fs adapters. Includes
+  automatic JSON fallback for backward compatibility with pre-v0.17 databases.
+- **Unified WASM wire format**: All three WASM storage adapters (IDB, OPFS,
+  Node.js fs) now use postcard serialization for stored data.
+
 ## [0.16.0] — 2026-08-20 — Arena-Allocated Children + WASM Test Architecture + Reconnection Sync
 
 ### Changed — Architecture
