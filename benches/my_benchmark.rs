@@ -150,10 +150,7 @@ impl BackendKind {
         // the cfg-gated block becomes a no-op and the compiler correctly warns
         // about unused mutability. We silence the no-feature case because
         // removing `mut` would break the persy build (mutually-exclusive cfg).
-        #[cfg_attr(
-            not(any(feature = "persy", feature = "fjall")),
-            allow(unused_mut)
-        )]
+        #[cfg_attr(not(any(feature = "persy", feature = "fjall")), allow(unused_mut))]
         let mut out = vec![BackendKind::Redb];
         #[cfg(feature = "persy")]
         {
@@ -259,10 +256,8 @@ pub fn setup_node(group: &str, backend: BackendKind) -> Node {
             let path = dir.join("store.fjall");
             let path_str = path.to_string_lossy().into_owned();
             // FjallStorage uses a directory layout (not a single file)
-            let storage = beam::adapters::FjallStorage::new_with_config(
-                Config::default(),
-                &path_str,
-            );
+            let storage =
+                beam::adapters::FjallStorage::new_with_config(Config::default(), &path_str);
             Node::new_with_config(
                 Config::default(),
                 vec![Box::new(storage) as Box<dyn beam::actor::Actor>],

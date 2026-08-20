@@ -7,7 +7,7 @@
 //! # Security
 //!
 //! Private keys live in the process heap for the duration of the session.
-//! This is NOT suitable for production use — use [`super::EncryptedFileSessionStorage`]
+//! This is NOT suitable for production use — use `super::EncryptedFileSessionStorage`
 //! for persistent, encrypted session storage.
 
 use super::super::{KeyPair, SeaError, SessionStorage};

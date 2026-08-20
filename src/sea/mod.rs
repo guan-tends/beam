@@ -104,7 +104,7 @@ impl fmt::Display for SeaError {
 
 impl std::error::Error for SeaError {}
 
-/// Session state behind Arc<RwLock> for shared invalidation across clones
+/// Session state behind `Arc<RwLock>` for shared invalidation across clones
 #[derive(Clone, Debug)]
 pub struct SessionState {
     pub pair: KeyPair,

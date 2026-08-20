@@ -460,9 +460,7 @@ fn write_fjall_records(path: &std::path::Path, count: usize) -> Result<usize, St
         .open()
         .map_err(|e| format!("create: {:?}", e))?;
     let keyspace = db
-        .keyspace("beam_nodes_v1", || {
-            fjall::KeyspaceCreateOptions::default()
-        })
+        .keyspace("beam_nodes_v1", fjall::KeyspaceCreateOptions::default)
         .map_err(|e| format!("keyspace: {:?}", e))?;
 
     for i in 0..count {
@@ -493,9 +491,7 @@ fn count_fjall_records(path: &std::path::Path) -> Result<usize, String> {
         .open()
         .map_err(|e| format!("open: {:?}", e))?;
     let keyspace = db
-        .keyspace("beam_nodes_v1", || {
-            fjall::KeyspaceCreateOptions::default()
-        })
+        .keyspace("beam_nodes_v1", fjall::KeyspaceCreateOptions::default)
         .map_err(|e| format!("keyspace: {:?}", e))?;
     Ok(keyspace.iter().count())
 }
@@ -598,7 +594,10 @@ async fn e2e_redb_to_fjall_preserves_children() {
             },
         );
         table
-            .insert("root", postcard::to_allocvec(&root_children).unwrap().as_slice())
+            .insert(
+                "root",
+                postcard::to_allocvec(&root_children).unwrap().as_slice(),
+            )
             .expect("insert root");
 
         let mut l1_children: BTreeMap<String, NodeData> = BTreeMap::default();
@@ -713,7 +712,10 @@ async fn e2e_redb_to_fjall_dry_run() {
     assert!(report.dry_run);
 
     // Target should NOT exist after dry run
-    assert!(!target.exists(), "dry run should not create target directory");
+    assert!(
+        !target.exists(),
+        "dry run should not create target directory"
+    );
 
     cleanup(&source);
     cleanup_dir(&target);

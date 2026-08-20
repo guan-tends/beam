@@ -81,7 +81,7 @@ where
     /// `flush()` after all messages are queued.
     /// Serialize a message and feed it as a WS text frame into the sink.
     ///
-    /// For `Message::Put`, uses [`Put::get_or_serialize`] to cache the
+    /// For `Message::Put`, uses `Put::get_or_serialize` to cache the
     /// wire bytes on first serialization. When the same `Arc<Message>`
     /// is relayed to multiple peers, only the first WsConn serializes —
     /// subsequent peers receive cached bytes (refcount bump, zero-copy).
@@ -138,7 +138,7 @@ where
     ///
     /// # Serialized Message Cache (Sprint 1)
     ///
-    /// For `Message::Put`, uses [`Put::get_or_serialize`] to reuse
+    /// For `Message::Put`, uses `Put::get_or_serialize` to reuse
     /// cached wire bytes. When the same `Arc<Message>` is relayed to
     /// multiple peers, only the first WsConn serializes — subsequent
     /// peers get cached bytes (refcount bump).

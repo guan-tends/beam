@@ -147,7 +147,7 @@ pub struct Put {
     /// Mirrors Gun.js's `meta.raw` (`src/mesh.js`): serialize once, reuse
     /// for all peers. Behind [`OnceLock`] for lock-free interior
     /// mutability within `Arc<Put>`. The first [`Put::to_writer`] (or
-    /// [`Put::get_or_serialize`]) call populates this; subsequent calls
+    /// `Put::get_or_serialize`) call populates this; subsequent calls
     /// return the cached bytes without re-serializing.
     ///
     /// Reset to empty on [`Clone`] — each clone is a distinct message
@@ -543,7 +543,7 @@ impl Message {
     ///
     /// Dispatches to the variant's `to_writer` method. For `Message::Put`,
     /// checks the [`Put::raw`] cache first — if populated (by a prior
-    /// [`Put::get_or_serialize`] call), the cached bytes are written directly
+    /// `Put::get_or_serialize` call), the cached bytes are written directly
     /// without re-serializing. This mirrors Gun.js's `meta.raw` reuse.
     ///
     /// Internal messages (`CheckQuorumTimeouts`, `RegisterQuorum`) are never

@@ -1,11 +1,11 @@
 //! Session storage backends for SEA `recall()`.
 //!
 //! Session storage allows user keypairs to be persisted across restarts
-//! without requiring the user to re-enter their password. The [`SessionStorage`]
+//! without requiring the user to re-enter their password. The `SessionStorage`
 //! trait defines the interface; two backends are provided:
 //!
-//! - [`InMemorySessionStorage`] — ephemeral, for testing and short-lived processes
-//! - [`EncryptedFileSessionStorage`] — production-grade, AES-256-GCM encrypted files (native only)
+//! - `InMemorySessionStorage` — ephemeral, for testing and short-lived processes
+//! - `EncryptedFileSessionStorage` — production-grade, AES-256-GCM encrypted files (native only)
 //!
 //! # Security
 //!
