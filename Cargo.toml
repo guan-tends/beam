@@ -81,6 +81,9 @@ webrtc = ["dep:str0m", "dep:stun"]
 native = []
 persy = ["dep:persy"]
 mimalloc = ["dep:mimalloc"]
+# Node.js persistent storage via `node:fs/promises` (WASM only).
+# Build: wasm-pack build --target nodejs --features node-fs --no-default-features
+node-fs = []
 
 [dev-dependencies]
 

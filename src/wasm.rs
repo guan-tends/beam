@@ -26,6 +26,8 @@
 
 use crate::Config;
 use crate::adapters::WasmIdbStorage;
+#[cfg(feature = "node-fs")]
+use crate::adapters::WasmNodeFsStorage;
 use crate::node::Node;
 use crate::types::Value;
 use std::sync::OnceLock;
@@ -89,6 +91,51 @@ impl Beam {
             node: Node::new_with_config(
                 Config::default(),
                 vec![Box::new(WasmIdbStorage::new())],
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// Creates a new BEAM node with Node.js filesystem persistent storage.
+    ///
+    /// Data is stored as postcard-serialized files in `./beam_data/` and
+    /// survives process restarts. Requires the `node-fs` feature and a
+    /// Node.js runtime (`wasm-pack build --target nodejs --features node-fs`).
+    ///
+    /// ```js
+    /// import { Beam } from "./beam.js";
+    /// const beam = Beam.new_with_node_fs();
+    /// beam.connect("ws://relay.example.com");
+    /// beam.put("chat.001", "hello");
+    /// // Restart process — data is still there.
+    /// ```
+    #[cfg(feature = "node-fs")]
+    pub fn new_with_node_fs() -> Beam {
+        console_error_panic_hook::set_once();
+        let _guard = runtime().enter();
+        Beam {
+            node: Node::new_with_config(
+                Config::default(),
+                vec![Box::new(WasmNodeFsStorage::new())],
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// Creates a new BEAM node with Node.js filesystem storage at a custom
+    /// directory. Data survives process restarts.
+    ///
+    /// ```js
+    /// const beam = Beam.new_with_node_fs_dir("/var/lib/myapp/beam");
+    /// ```
+    #[cfg(feature = "node-fs")]
+    pub fn new_with_node_fs_dir(dir: &str) -> Beam {
+        console_error_panic_hook::set_once();
+        let _guard = runtime().enter();
+        Beam {
+            node: Node::new_with_config(
+                Config::default(),
+                vec![Box::new(WasmNodeFsStorage::with_dir(dir))],
                 Vec::new(),
             ),
         }
