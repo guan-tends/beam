@@ -192,6 +192,29 @@ cargo clippy --target wasm32-unknown-unknown --no-default-features
 
 ---
 
+## Using the Justfile
+
+The `justfile` in the repo root automates all test suites and the full release
+pipeline. Run `just --list` to see all available recipes.
+
+```bash
+# Run all tests (lint + native + WASM + examples)
+just test-all
+
+# Individual suites
+just test-native      # 358 native tests
+just test-wasm        # 15 WASM tests (requires NVM + Playwright)
+just test-fixtures    # 36 golden JSON wire format fixtures
+just test-examples    # Verify all examples compile
+
+# Full release pipeline (stages 1-16, stops before publish)
+just release
+```
+
+See `docs/PROFILING.md` for profiling tool usage.
+
+---
+
 ## Troubleshooting
 
 ### Port conflicts
