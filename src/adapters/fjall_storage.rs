@@ -98,13 +98,35 @@ const BEAM_META: &str = "beam_meta_v1";
 ///
 /// `\x00` is chosen because it sorts before all printable characters,
 /// preserving the natural lexicographic ordering of keyspace keys.
-const KEY_PREFIX: u8 = 0x00;
+///
+/// `pub(crate)` so [`crate::migration`] can reuse the encoding for
+/// key translation between fjall and other backends.
+pub(crate) const KEY_PREFIX: u8 = 0x00;
 
 /// Encodes a node_id string as a keyspace key (prefixed to avoid empty keys).
-fn encode_key(node_id: &str) -> Vec<u8> {
+///
+/// `pub(crate)` so [`crate::migration`] can reuse the encoding for
+/// key translation between fjall and other backends.
+pub(crate) fn encode_key(node_id: &str) -> Vec<u8> {
     let mut key = vec![KEY_PREFIX];
     key.extend_from_slice(node_id.as_bytes());
     key
+}
+
+/// Decodes a keyspace key back to a node_id string.
+///
+/// Strips the [`KEY_PREFIX`] byte and interprets the remaining bytes as UTF-8.
+/// Returns `None` if the key is empty, the prefix doesn't match, or the
+/// remaining bytes are not valid UTF-8.
+///
+/// Exposed as `pub(crate)` for potential use by the migration tool and
+/// future diagnostic tooling.
+#[allow(dead_code)] // used by migration via local FJALL_KEY_PREFIX copy
+pub(crate) fn decode_key(key: &[u8]) -> Option<String> {
+    if key.is_empty() || key[0] != KEY_PREFIX {
+        return None;
+    }
+    std::str::from_utf8(&key[1..]).ok().map(|s| s.to_string())
 }
 
 /// fjall-backed persistent storage adapter for BEAM.

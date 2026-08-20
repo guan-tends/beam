@@ -724,8 +724,9 @@ cargo build --release --bin beam
 # With fjall support
 cargo build --release --bin beam --features fjall
 
-# With Persy support (enables migration subcommand)
+# With Persy and/or fjall support (enables migration subcommand)
 cargo build --release --bin beam --features persy
+cargo build --release --bin beam --features fjall
 
 # Run with redb (default)
 cargo run --release --bin beam -- start --port 4944
@@ -751,17 +752,23 @@ let storage = MemoryStorage::new();
 
 ### Migration Between Backends
 
-The `beam migrate` subcommand converts between formats (requires `--features persy` for Persy support):
+The `beam migrate` subcommand converts between all supported storage formats (requires `--features persy` and/or `--features fjall`):
 
 ```bash
 # Preview without writing
 beam migrate --from redb --to persy --source ./data.redb --target ./data.persy --dry-run
 
-# Execute migration
+# redb ↔ persy
 beam migrate --from redb --to persy --source ./data.redb --target ./data.persy
-
-# Reverse direction
 beam migrate --from persy --to redb --source ./data.persy --target ./data.redb
+
+# redb ↔ fjall (fjall uses a directory path, not a file)
+beam migrate --from redb --to fjall --source ./data.redb --target ./data.fjall
+beam migrate --from fjall --to redb --source ./data.fjall --target ./data.redb
+
+# fjall ↔ persy
+beam migrate --from fjall --to persy --source ./data.fjall --target ./data.persy
+beam migrate --from persy --to fjall --source ./data.persy --target ./data.fjall
 
 # Overwrite existing target
 beam migrate --from redb --to persy --source ./data.redb --target ./data.persy --force
@@ -770,7 +777,7 @@ beam migrate --from redb --to persy --source ./data.redb --target ./data.persy -
 beam migrate --from redb --to persy --source ./data.redb --target ./data.persy --batch-size 5000
 ```
 
-Migration uses single-transaction-per-batch for safety and includes checksum verification. See `docs/migrations/migration-guide.md` for the full procedure including rollback.
+Migration uses a reader/writer architecture with a canonical intermediate format — each backend has one reader and one writer. Adding a new storage backend requires only two functions, not N² pairwise paths. See `docs/migrations/migration-guide.md` for the full procedure including rollback.
 
 ### Mixed Meshes
 
@@ -782,7 +789,7 @@ Nodes with different storage backends interoperate transparently. A redb node, a
 
 - The `beam_meta_v1` metadata table from redb (last-write timestamps) is not preserved when migrating redb → Persy. This metadata is not currently used by the actor framework, so the loss is cosmetic.
 - The migration tool is single-threaded per batch. For datasets larger than ~100k records, run during a maintenance window.
-- Migration to/from fjall is not yet supported. The fjall adapter uses an internal key encoding (`0x00` prefix) that differs from redb/Persy; migration would require prefix translation.
+- fjall uses a directory path for storage (LSM-tree), while redb and Persy use single files. Migration involving fjall creates a directory at the target path.
 
 ---
 
@@ -855,10 +862,10 @@ BEAM uses Gun.js's JSON wire format. Messages are JSON objects with these fields
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `--from` | Yes | Source backend: `redb` or `persy` |
-| `--to` | Yes | Target backend: `redb` or `persy` |
-| `--source` | Yes | Path to source database file |
-| `--target` | Yes | Path to target database file (will be created) |
+| `--from` | Yes | Source backend: `redb`, `persy`, or `fjall` |
+| `--to` | Yes | Target backend: `redb`, `persy`, or `fjall` |
+| `--source` | Yes | Path to source database (file for redb/persy, directory for fjall) |
+| `--target` | Yes | Path to target database (file for redb/persy, directory for fjall) |
 | `--batch-size` | No | Records per batch (default: 1000) |
 | `--force` | No | Overwrite target if it already exists |
 | `--dry-run` | No | Preview without writing |
@@ -946,8 +953,14 @@ cargo test --features webrtc
 # With fjall storage tests
 cargo test --features fjall
 
-# With Persy tests (includes migration tests)
+# With Persy tests (includes redb↔persy migration tests)
 cargo test --features persy
+
+# With fjall tests (includes redb↔fjall migration tests)
+cargo test --features fjall
+
+# With both (includes all migration path tests)
+cargo test --features fjall,persy
 
 # Lint (zero warnings required)
 cargo clippy -- -D warnings
@@ -1108,7 +1121,7 @@ methodology and analysis.
 | `fjall` | No | `dep:fjall` — LSM-tree storage backend (recommended for multi-node deployments) |
 | `persy` | No | `dep:persy` — Persy storage backend for high-concurrency workloads |
 
-Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (functions return `None`). Without `persy`, the `PersyStorage` adapter is not compiled in and migration to/from Persy is unavailable.
+Without `webrtc`, the `stun` module and `WebRtcPeer` adapter are stubbed out (functions return `None`). Without `persy`, the `PersyStorage` adapter is not compiled in and migration to/from Persy is unavailable. Without `fjall`, the `FjallStorage` adapter is not compiled in and migration to/from fjall is unavailable. Migration requires at least one of `persy` or `fjall` features.
 
 **WASM**: When targeting `wasm32-unknown-unknown`, native-only modules (redb, fjall, Persy, tokio-tungstenite, multicast) are cfg-gated out. Browser adapters (`wasm_ws`, `wasm_idb`) are compiled in. Timer functions (`sleep`, `timeout`, `interval`) are provided by `tokio_with_wasm` via the `tokio_time` shim module instead of tokio's `time` feature (which panics on WASM). The `wasm.rs` module provides `#[wasm_bindgen]` JavaScript bindings. Build with `wasm-pack build --target web --release`.
 
