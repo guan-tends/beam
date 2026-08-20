@@ -56,7 +56,7 @@ BEAM is a maintained fork of [rod](https://github.com/mmalmi/rod) — a from-scr
 
 ```toml
 [dependencies]
-beamdb = "0.8"
+beamdb = "0.16"
 ```
 
 Or via the CLI:
@@ -69,10 +69,10 @@ Feature flags (both off by default):
 
 ```toml
 # WebRTC direct P2P support
-beamdb = { version = "0.8", features = ["webrtc"] }
+beamdb = { version = "0.16", features = ["webrtc"] }
 
 # Persy storage backend (for high-concurrency workloads)
-beamdb = { version = "0.8", features = ["persy"] }
+beamdb = { version = "0.16", features = ["persy"] }
 ```
 
 ---
