@@ -13,4 +13,10 @@ export default defineConfig({
       use: { browserName: 'chromium' },
     },
   ],
+  webServer: {
+    command: 'npx http-server browser-test -p 8080 --cors',
+    port: 8080,
+    reuseExistingServer: true,
+    timeout: 15000,
+  },
 });
