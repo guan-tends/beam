@@ -860,26 +860,54 @@ impl Router {
             let _ = addr.send(Arc::clone(&relay_msg));
             already_sent_to.insert(addr.clone());
         }
-        // Send to all connected peer actors (WsConn, WasmWsConn) directly.
-        // On native, the OutgoingWebsocketManager (in server_peers) fans out
-        // to its child WsConn actors — but on WASM, WasmWsConn is a standalone
-        // actor in known_peers/peer_addrs with no manager to fan out to it.
-        // We must send directly here, then mark as already-sent to prevent
-        // duplicate delivery via the subscribers/known_peers loops below.
-        for addr in self.peer_addrs.values() {
-            if put.from == *addr {
-                continue;
+        // Peer delivery: native vs WASM.
+        //
+        // NATIVE (relay_servers non-empty): WsServer and/or
+        // OutgoingWebsocketManager are parent adapters that fan out to
+        // their child WsConn actors. Sending to peer_addrs directly here
+        // would duplicate that fan-out — each WsConn would receive the
+        // same relay_msg twice (once from the parent, once directly),
+        // wasting serialization + WebSocket bandwidth. The duplicate
+        // would be deduped on receipt (Gun.js DAM: dup.check on message
+        // ID), but the relay has already paid 2x serialization + send
+        // cost for no benefit.
+        //
+        // Instead, mark peer_addrs as already_sent_to so the
+        // subscribers and known_peers random-sample loops below skip
+        // them. The parent adapters handle delivery. This mirrors the
+        // Get path (handle_get), which does the same marking.
+        //
+        // WASM (relay_servers empty): WasmWsConn is a standalone actor
+        // in peer_addrs/known_peers with no parent adapter to fan out
+        // through. The direct-send path is the ONLY delivery mechanism.
+        //
+        // NOTE: HAM stale-data pre-filter and message-ID dedup are
+        // already honored upstream in handle_put before this function
+        // is called. Do NOT re-check here — the relay receives only
+        // non-stale, non-duplicate Puts.
+        if !self.relay_servers.is_empty() {
+            // Native: parent adapters cover all WsConns. Mark as sent
+            // to prevent duplicate delivery via subscribers/known_peers.
+            for addr in self.peer_addrs.values() {
+                already_sent_to.insert(addr.clone());
             }
-            if let Some(pid) = self.addr_to_pid.get(addr) {
-                if relay_skip.contains(pid) {
+        } else {
+            // WASM or pure-client: no parent adapter — send directly.
+            for addr in self.peer_addrs.values() {
+                if put.from == *addr {
                     continue;
                 }
+                if let Some(pid) = self.addr_to_pid.get(addr) {
+                    if relay_skip.contains(pid) {
+                        continue;
+                    }
+                }
+                if already_sent_to.contains(addr) {
+                    continue;
+                }
+                let _ = addr.send(Arc::clone(&relay_msg));
+                already_sent_to.insert(addr.clone());
             }
-            if already_sent_to.contains(addr) {
-                continue;
-            }
-            let _ = addr.send(Arc::clone(&relay_msg));
-            already_sent_to.insert(addr.clone());
         }
 
         // Relay to OutgoingWebsocketManager (server_peers minus
@@ -1545,6 +1573,94 @@ mod tests {
         // but we can verify the relay doesn't panic and metrics show relay happened.
         router.handle_put_relay(&put);
         assert_eq!(router.metrics.snapshot().messages_relayed, 1);
+    }
+
+    /// When  is non-empty (native),  must
+    /// NOT send directly to  — the parent adapter (WsServer)
+    /// already fans out to its child WsConn actors. Sending directly would
+    /// duplicate every relay message, causing 2x serialization and wasted
+    /// dedup on the receiving side.
+    ///
+    /// This test verifies that with a  entry present, the
+    /// peer_addrs entries are marked as  (no direct send)
+    /// by checking that the metrics show exactly one relay (the relay_server
+    /// send) and no subscriber fanout to the peer.
+    #[test]
+    fn relay_native_no_duplicate_to_peer_addrs() {
+        use crate::mailbox::mailbox;
+
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+
+        // Simulate a relay server (WsServer) — a parent adapter that fans out.
+        let (relay_sender, _relay_rx) = mailbox(16);
+        let relay_addr = Addr::new(relay_sender);
+        router.relay_servers.insert(relay_addr.clone());
+        router.server_peers.insert(relay_addr.clone());
+
+        // Simulate a connected peer (WsConn child of WsServer).
+        let (peer_sender, mut peer_rx) = mailbox(16);
+        let peer_addr = Addr::new(peer_sender);
+        let peer_id = "peer-A".to_string();
+        router.peer_addrs.insert(peer_id.clone(), peer_addr.clone());
+        router.addr_to_pid.insert(peer_addr.clone(), peer_id.clone());
+        router.known_peers.insert(peer_addr.clone());
+
+        // Relay a Put from a local sender (not a known peer).
+        let put = make_put("soul1", "key1", "hello", 100.0);
+        router.handle_put_relay(&put);
+
+        // The relay_server should have received exactly one message.
+        // The peer_addr should NOT have received anything directly —
+        // WsServer handles fan-out to its children.
+        let mut peer_received = 0;
+        while peer_rx.try_recv().is_some() {
+            peer_received += 1;
+        }
+        assert_eq!(
+            peer_received, 0,
+            "peer_addr must not receive direct send when relay_servers is non-empty "
+        );
+
+        // Metrics: one relay recorded (the relay_server send).
+        let snap = router.metrics.snapshot();
+        assert_eq!(snap.messages_relayed, 1);
+    }
+
+    /// When  is empty (WASM or pure-client), 
+    /// MUST send directly to  — there is no parent adapter to
+    /// fan out through. This guards the WASM  use case.
+    #[test]
+    fn relay_wasm_sends_directly_to_peer_addrs() {
+        use crate::mailbox::mailbox;
+
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+
+        // No relay_servers — WASM/pure-client scenario.
+        assert!(router.relay_servers.is_empty());
+
+        // Simulate a standalone peer (WasmWsConn).
+        let (peer_sender, mut peer_rx) = mailbox(16);
+        let peer_addr = Addr::new(peer_sender);
+        let peer_id = "wasm-peer".to_string();
+        router.peer_addrs.insert(peer_id.clone(), peer_addr.clone());
+        router.addr_to_pid.insert(peer_addr.clone(), peer_id);
+        router.known_peers.insert(peer_addr.clone());
+
+        // Relay a Put from a local sender.
+        let put = make_put("soul1", "key1", "hello", 100.0);
+        router.handle_put_relay(&put);
+
+        // The peer should have received exactly one message directly.
+        let mut peer_received = 0;
+        while peer_rx.try_recv().is_some() {
+            peer_received += 1;
+        }
+        assert_eq!(
+            peer_received, 1,
+            "peer_addr must receive direct send when relay_servers is empty "
+        );
     }
 
     /// Helper: build a QuorumEntry with custom required/timeout values.
