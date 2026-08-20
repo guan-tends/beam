@@ -1,7 +1,7 @@
 # BEAM Storage Backend Benchmarks — redb vs fjall
 
 **Date:** 2026-08-20
-**Hardware:** the test machine (the test machine Oryx Pro, the GPU Laptop)
+**Hardware:** test machine (Rust 2024, release profile)
 **BEAM version:** 0.16.0
 **Branch:** `feature/fjall-storage-adapter`
 
