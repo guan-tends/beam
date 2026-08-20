@@ -3,7 +3,18 @@
 **Branch:** `feature/fjall-storage-adapter`
 **Date:** 2026-08-20
 **Author:** Guan (Pema Lhamo)
-**Status:** Ready for implementation
+**Status:** ✅ IMPLEMENTED — code review complete, all tests green, pushed to Gitea
+
+### Implementation Corrections (post-build)
+
+The following details were discovered during implementation and differ from the original plan:
+
+1. **Fjall version**: Plan said v2; actual is **v3** (`fjall = { version = "3", optional = true }`). The v3 API is a full rewrite with different types.
+2. **Key encoding**: Plan said "no encoding layer, raw bytes." Actual implementation requires **`0x00` prefix** via `encode_key()` — fjall's LSM-tree panics on empty keys, and BEAM uses `""` as the root soul.
+3. **KeyspaceCreateOptions**: Plan showed `KeyspaceCreateOptions::default()` as a constructor call; actual API is `KeyspaceCreateOptions::default` (a function reference, not a `Default::default()` call).
+4. **Database::open**: Plan showed `Database::builder(&path).open()`; actual v3 API is `Database::builder(&path).open()` (same, confirmed).
+5. **WriteBatch**: Plan showed `db.batch()`; actual v3 API confirms `db.batch()` returns a `WriteBatch` that accepts `insert(&keyspace, key, value)` and `remove(&keyspace, key)`.
+6. **new_with_config**: Plan showed 3 params (config, path, max_size); actual implementation takes 2 params (config, path) — fjall manages its own cache/block settings via builder.
 
 ---
 
