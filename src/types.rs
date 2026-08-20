@@ -36,9 +36,9 @@
 //! assert!(node.value.is_null());
 //! ```
 
+use arena_btreemap::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as SerdeJsonValue, json};
-use arena_btreemap::BTreeMap;
 use std::convert::TryFrom;
 
 /// Branch node — a sorted map of child key to child data.

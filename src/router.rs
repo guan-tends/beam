@@ -51,10 +51,10 @@ use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::types::{Children, NodeData, Value};
 use crate::utils::{BoundedHashMap, FxHashMap, FxHashSet, try_send_or_log};
+use arena_btreemap::BTreeMap;
 use async_trait::async_trait;
 use log::{debug, error, info};
 use rand::{rng, seq::IteratorRandom};
-use arena_btreemap::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use web_time::Instant;
@@ -361,7 +361,12 @@ impl Actor for Router {
             }
             Message::Get(get) => self.handle_get(get),
             Message::Flush(flush) => self.handle_flush(flush),
-            Message::Hi { from, peer_id, is_ack, msg_id } => {
+            Message::Hi {
+                from,
+                peer_id,
+                is_ack,
+                msg_id,
+            } => {
                 // Register the peer in known_peers and PID mappings.
                 self.known_peers.insert(from.clone());
                 if !peer_id.is_empty() {
@@ -1420,8 +1425,14 @@ mod tests {
             HamFilterResult::PartiallyNew(filtered) => {
                 // Only key2 should be in the filtered result.
                 let children = filtered.get("soul1").expect("soul1 must exist");
-                assert!(children.contains_key("key2"), "key2 must be present (newer)");
-                assert!(!children.contains_key("key1"), "key1 must be absent (stale)");
+                assert!(
+                    children.contains_key("key2"),
+                    "key2 must be present (newer)"
+                );
+                assert!(
+                    !children.contains_key("key1"),
+                    "key1 must be absent (stale)"
+                );
             }
             other => panic!("expected PartiallyNew, got {:?}", other),
         }
@@ -1519,7 +1530,9 @@ mod tests {
         let (sender, _receiver) = mailbox(16);
         let peer_addr = Addr::new(sender);
         let peer_id = "peer123".to_string();
-        router.addr_to_pid.insert(peer_addr.clone(), peer_id.clone());
+        router
+            .addr_to_pid
+            .insert(peer_addr.clone(), peer_id.clone());
 
         // Create a put from this known peer
         let put = make_put("soul1", "key1", "hello", 100.0);

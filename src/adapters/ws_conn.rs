@@ -20,11 +20,11 @@
 
 use crate::actor::{Actor, ActorContext};
 use crate::message::Message;
+use bytes::Bytes;
 use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use bytes::Bytes;
 use std::sync::Arc;
 
 use async_trait::async_trait;

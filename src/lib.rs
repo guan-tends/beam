@@ -34,7 +34,7 @@ mod router;
 #[cfg(feature = "webrtc")]
 mod stun;
 pub mod types;
-mod utils;
+pub mod utils; // pub for benchmarking
 pub use dup::Dup;
 pub mod sea;
 pub use node::{Config, Node};

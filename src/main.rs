@@ -1,4 +1,3 @@
-
 //! BEAM — a Rust implementation of the Gun.js P2P synchronized graph database.
 //!
 //! This is the command-line entry point for running a BEAM node server. It
@@ -111,9 +110,9 @@ async fn main() {
     match cli.command {
         #[cfg(feature = "persy")]
         Command::Migrate(args) => {
-#[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(target_arch = "wasm32"))]
             use beam::migration::{Backend, MigrateOpts, migrate};
-#[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(target_arch = "wasm32"))]
             use std::path::PathBuf;
 
             let parse_backend = |s: &str| -> Result<Backend, String> {

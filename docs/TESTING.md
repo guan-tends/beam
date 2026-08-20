@@ -10,12 +10,12 @@ WASM network integration, and browser interop with Gun.js.
 | Native unit | 320 | Core logic (parsing, serialization, graph ops, actor model) | `cargo test --lib` |
 | Binary (CLI) | 21 | CLI argument parsing, env vars, subcommand dispatch | `cargo test --bin beam` |
 | Integration | 10 | Multi-node mesh, relay forwarding, quorum, shutdown | `cargo test --test integration` |
-| Wire live | 19 | Gun.js <-> BEAM interop over real WebSocket | `cargo test --test wire_live -- --test-threads=1` |
+| Wire live | 7 | Gun.js <-> BEAM interop over real WebSocket | `cargo test --test wire_live -- --ignored --test-threads=1` |
 | WASM unit | 5 | Pure WASM logic (parsing, serialization, local put/get) | `wasm-pack test --node --no-default-features` |
 | Node.js integration | 7 | WASM WebSocket networking in Node's real event loop | See below |
 | Browser (Playwright) | 3 | Gun.js <-> BEAM interop in Chromium browser | See below |
 
-**Total: 385 tests. All must pass before release.**
+**Total: 373 tests. All must pass before release.**
 
 ---
 
@@ -70,7 +70,8 @@ cargo test --test integration
 ### 4. Wire Live Tests (19) — Gun.js Interop
 ```bash
 # Must run single-threaded to avoid port conflicts
-cargo test --test wire_live -- --test-threads=1
+# Tests are #[ignore] by default — requires Node.js + Gun.js in tests/wire-live/
+cargo test --test wire_live -- --ignored --test-threads=1
 ```
 
 ### 5. All Native Tests (one command)

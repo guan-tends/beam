@@ -30,10 +30,10 @@
 use crate::actor::{Actor, ActorContext};
 use crate::message::{BatchPut, Get, Message, Put};
 use crate::types::*;
+use crate::utils::{FxHashMap, FxHashSet};
+use arena_btreemap::BTreeMap;
 use async_trait::async_trait;
 use log::{error, info, warn};
-use arena_btreemap::BTreeMap;
-use crate::utils::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
@@ -164,7 +164,7 @@ impl WasmIdbStorage {
     /// Serializes Children to a JSON string for IndexedDB storage.
     fn serialize_children(children: &Children) -> String {
         // Convert BTreeMap<String, NodeData> to a serializable format
-        let map: FxHashMap<String, (Value, f64)> =children
+        let map: FxHashMap<String, (Value, f64)> = children
             .iter()
             .map(|(k, v)| (k.clone(), (v.value.clone(), v.updated_at)))
             .collect();
@@ -176,7 +176,7 @@ impl WasmIdbStorage {
         if json.is_empty() {
             return BTreeMap::default();
         }
-        let map: FxHashMap<String, (Value, f64)> =match serde_json::from_str(json) {
+        let map: FxHashMap<String, (Value, f64)> = match serde_json::from_str(json) {
             Ok(m) => m,
             Err(e) => {
                 warn!("WasmIdbStorage: deserialize error: {}", e);

@@ -40,12 +40,12 @@ use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::metrics::Metrics;
 use crate::router::Router;
 use crate::types::{Children, NodeData, Value};
+use crate::utils::FxHashMap;
 use crate::utils::random_string;
+use arena_btreemap::BTreeMap;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
-use arena_btreemap::BTreeMap;
-use crate::utils::FxHashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::sync::{broadcast, oneshot};
@@ -295,10 +295,10 @@ impl Node {
         // needing get_mut. The addr and router fields on NodeInner are also
         // RwLock, so they're set through .write() too.
         *node.inner.actor_context.node.write() = Some(node.clone());
-        let addr = node.inner.actor_context.start_actor_bounded(
-            Box::new(node.clone()),
-            config.mailbox_capacity,
-        );
+        let addr = node
+            .inner
+            .actor_context
+            .start_actor_bounded(Box::new(node.clone()), config.mailbox_capacity);
         *node.inner.addr.write() = Some(addr);
 
         let router = Box::new(Router::new(
@@ -306,10 +306,10 @@ impl Node {
             network_adapters,
             node.inner.metrics.clone(),
         ));
-        let router_addr = node.inner.actor_context.start_router_bounded(
-            router,
-            config.mailbox_capacity,
-        );
+        let router_addr = node
+            .inner
+            .actor_context
+            .start_router_bounded(router, config.mailbox_capacity);
         *node.inner.actor_context.router.write() = router_addr.clone();
         *node.inner.router.write() = Some(router_addr);
 
@@ -516,10 +516,10 @@ impl Node {
                 shutdown_tx: self.inner.shutdown_tx.clone(),
             }),
         };
-        let addr = self.inner.actor_context.start_actor_bounded(
-            Box::new(node.clone()),
-            self.inner.child_mailbox_capacity,
-        );
+        let addr = self
+            .inner
+            .actor_context
+            .start_actor_bounded(Box::new(node.clone()), self.inner.child_mailbox_capacity);
         *node.inner.addr.write() = Some(addr);
         let mut guard = self.inner.children.write();
         guard.insert(key, node.clone());

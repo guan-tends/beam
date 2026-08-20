@@ -310,7 +310,10 @@ mod tests {
         let layout = Layout::from_size_align(128, 8).unwrap();
         let ptr = arena.allocate_zeroed(layout).unwrap();
         let slice = unsafe { ptr.as_ref() };
-        assert!(slice.iter().all(|&b| b == 0), "allocate_zeroed returned non-zero memory");
+        assert!(
+            slice.iter().all(|&b| b == 0),
+            "allocate_zeroed returned non-zero memory"
+        );
     }
 
     #[test]
@@ -379,9 +382,16 @@ mod tests {
         }
 
         // All pointers should be distinct
-        let addrs: Vec<usize> = ptrs.iter().map(|p| p.cast::<u8>().as_ptr() as usize).collect();
+        let addrs: Vec<usize> = ptrs
+            .iter()
+            .map(|p| p.cast::<u8>().as_ptr() as usize)
+            .collect();
         let unique: std::collections::HashSet<_> = addrs.iter().collect();
-        assert_eq!(unique.len(), 1000, "all 1000 allocations should be at distinct addresses");
+        assert_eq!(
+            unique.len(),
+            1000,
+            "all 1000 allocations should be at distinct addresses"
+        );
     }
 
     #[test]
@@ -432,8 +442,10 @@ mod tests {
                         ptrs.push(arena.allocate(layout).unwrap());
                     }
                     // Verify all allocations are distinct
-                    let addrs: Vec<usize> =
-                        ptrs.iter().map(|p| p.cast::<u8>().as_ptr() as usize).collect();
+                    let addrs: Vec<usize> = ptrs
+                        .iter()
+                        .map(|p| p.cast::<u8>().as_ptr() as usize)
+                        .collect();
                     let unique: std::collections::HashSet<_> = addrs.iter().collect();
                     assert_eq!(unique.len(), 100);
                 })
