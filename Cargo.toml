@@ -83,6 +83,9 @@ native = []
 persy = ["dep:persy"]
 fjall = ["dep:fjall"]
 mimalloc = ["dep:mimalloc"]
+# Node.js persistent storage via `node:fs/promises` (WASM only).
+# Build: wasm-pack build --target nodejs --features node-fs --no-default-features
+node-fs = []
 
 [dev-dependencies]
 
@@ -159,6 +162,17 @@ features = [
     "IdbVersionChangeEvent",
     "IdbOpenDbRequest",
     "DomStringList",
+    # OPFS (Origin Private File System) — browser persistent storage
+    "StorageManager",
+    "Navigator",
+    "FileSystemDirectoryHandle",
+    "FileSystemFileHandle",
+    "FileSystemWritableFileStream",
+    "FileSystemGetFileOptions",
+    "FileSystemGetDirectoryOptions",
+    "FileSystemRemoveOptions",
+    "File",
+    "Blob",
 ]
 
 [target.wasm32-unknown-unknown.dependencies.wasm-bindgen]

@@ -69,15 +69,12 @@ test-wasm:
     cargo build --bin beam
     echo "=== Node.js WASM integration tests ==="
     node tests/wasm-integration/node-integration.mjs
-    echo "=== Building WASM (web target) ==="
-    wasm-pack build --target web --no-default-features
+    echo "=== Building WASM (web target, release) ==="
+    wasm-pack build --target web --release --no-default-features
     cp pkg/beam_bg.wasm pkg/beam.js pkg/beam.d.ts browser-test/
-    echo "=== Playwright browser tests ==="
-    tmux new-session -d -s http 'cd browser-test && python3 -m http.server 8080'
-    sleep 1
-    npx playwright test tests/e2e/gun-beam-interop.spec.mjs --reporter=line
-    tmux kill-session -t http 2>/dev/null || true
-    echo "=== WASM TESTS PASS ✅ (15 tests) ==="
+    echo "=== Playwright browser tests (gun-beam interop + OPFS persistence) ==="
+    npx playwright test --reporter=line
+    echo "=== WASM TESTS PASS ✅ (9 unit + 8 node integration + 5 playwright) ==="
 
 # ─── Stage 4: Fixture Tests ─────────────────────────────────────────
 

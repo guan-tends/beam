@@ -115,7 +115,8 @@ await init();
 
 // Create a BEAM node
 const beam = new Beam();                        // in-memory (lost on reload)
-// or: const beam = Beam.new_persistent();   // IndexedDB (survives reload)
+// or: const beam = Beam.new_persistent();      // IndexedDB (survives reload)
+// or: const beam = Beam.new_with_opfs();       // OPFS (survives reload, faster)
 
 // Connect to a relay server
 beam.connect("wss://relay.example.com/ws");
@@ -226,17 +227,26 @@ compatible WebSocket peer.
 | Backend | Persistent | Browser API | Use Case |
 |---------|-----------|-------------|----------|
 | `MemoryStorage` | No (lost on reload) | Default | Ephemeral data, testing |
-| `WasmIdbStorage` | Yes (IndexedDB) | Opt-in | Production browser apps |
+| `WasmIdbStorage` | Yes (IndexedDB) | Opt-in via `new_persistent()` | Production browser apps |
+| `WasmOpfsStorage` | Yes (OPFS) | Opt-in via `new_with_opfs()` | Modern browsers (Chrome 102+, Firefox 111+, Safari 15.2+) |
+| `WasmNodeFsStorage` | Yes (Node.js fs) | Node.js only (`--features node-fs`) | Server-side WASM, Electron |
 
-`WasmIdbStorage` uses a write-through cache: writes go to an in-memory `HashMap`
+**WasmIdbStorage** uses a write-through cache: writes go to an in-memory `HashMap`
 (fast reads) and are simultaneously written through to IndexedDB (persistence).
+Data is serialized as postcard bytes (base64-encoded for IDB string storage),
+with automatic JSON fallback for backward compatibility with pre-v0.17 databases.
 On page reload, data is read back from IndexedDB into the cache.
+
+**WasmOpfsStorage** uses the Origin Private File System for file-based persistence.
+Data is stored as postcard-serialized binary files in OPFS, offering better
+performance than IndexedDB for larger datasets. Requires a secure context
+(HTTPS or localhost).
 
 ### Browser Constraints
 
 - **Single-threaded** — all async work runs on the browser's main thread
 - **Client-only** — connects to relays, does not accept inbound connections
-- **No file system** — uses IndexedDB instead of redb/Persy
+- **No native file system** — uses IndexedDB or OPFS instead of redb/Persy
 - **WebSocket only** — no UDP multicast or WebRTC (browser sandbox limitations)
 
 ### Interop with Gun.js
