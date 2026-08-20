@@ -122,13 +122,15 @@ use tokio::time::Duration;
 // Backend Harness — used by every storage benchmark group
 // =====================================================================================
 
-/// Storage backend selector. The `Persy` variant is only available with the
-/// `--features persy` cargo flag.
+/// Storage backend selector. The `Persy` and `Fjall` variants are only
+/// available with their respective `--features` cargo flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackendKind {
     Redb,
     #[cfg(feature = "persy")]
     Persy,
+    #[cfg(feature = "fjall")]
+    Fjall,
 }
 
 impl BackendKind {
@@ -137,6 +139,8 @@ impl BackendKind {
             BackendKind::Redb => "redb",
             #[cfg(feature = "persy")]
             BackendKind::Persy => "persy",
+            #[cfg(feature = "fjall")]
+            BackendKind::Fjall => "fjall",
         }
     }
 
@@ -146,11 +150,18 @@ impl BackendKind {
         // the cfg-gated block becomes a no-op and the compiler correctly warns
         // about unused mutability. We silence the no-feature case because
         // removing `mut` would break the persy build (mutually-exclusive cfg).
-        #[cfg_attr(not(feature = "persy"), allow(unused_mut))]
+        #[cfg_attr(
+            not(any(feature = "persy", feature = "fjall")),
+            allow(unused_mut)
+        )]
         let mut out = vec![BackendKind::Redb];
         #[cfg(feature = "persy")]
         {
             out.push(BackendKind::Persy);
+        }
+        #[cfg(feature = "fjall")]
+        {
+            out.push(BackendKind::Fjall);
         }
         out
     }
@@ -200,6 +211,13 @@ fn clean_storage_file(group: &str, backend: BackendKind) {
                 let _ = std::fs::remove_file(&path);
             }
         }
+        #[cfg(feature = "fjall")]
+        BackendKind::Fjall => {
+            let path = dir.join("store.fjall");
+            if path.exists() {
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
     }
 }
 
@@ -230,6 +248,21 @@ pub fn setup_node(group: &str, backend: BackendKind) -> Node {
             let path_str = path.to_string_lossy().into_owned();
             // PersyStorage::new_with_path expects a file path (not a directory)
             let storage = beam::adapters::PersyStorage::new_with_path(&path_str);
+            Node::new_with_config(
+                Config::default(),
+                vec![Box::new(storage) as Box<dyn beam::actor::Actor>],
+                vec![],
+            )
+        }
+        #[cfg(feature = "fjall")]
+        BackendKind::Fjall => {
+            let path = dir.join("store.fjall");
+            let path_str = path.to_string_lossy().into_owned();
+            // FjallStorage uses a directory layout (not a single file)
+            let storage = beam::adapters::FjallStorage::new_with_config(
+                Config::default(),
+                &path_str,
+            );
             Node::new_with_config(
                 Config::default(),
                 vec![Box::new(storage) as Box<dyn beam::actor::Actor>],
