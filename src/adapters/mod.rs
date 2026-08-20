@@ -7,6 +7,7 @@
 //!
 //! - [`MemoryStorage`] — in-memory `HashMap`-backed storage (default)
 //! - [`RedbStorage`] — persistent embedded storage via [`redb`] (native only)
+//! - [`FjallStorage`] — persistent LSM-tree storage via [`fjall`] (native only, feature-gated)
 //!
 //! # Storage Read/Write Split
 //!
@@ -17,6 +18,9 @@
 //!
 //! - [`RedbStorage`] splits — the write actor's `spawn_blocking` fsync no
 //!   longer blocks the read actor's concurrent `Get` queries.
+//! - [`FjallStorage`] splits — though less critical than redb (fjall's writes
+//!   are journal appends, not fsyncs), the split still provides backpressure
+//!   isolation.
 //! - [`MemoryStorage`] does not split — in-memory writes are synchronous
 //!   (no fsync), so splitting provides no benefit and would break
 //!   read-after-write ordering.
@@ -44,6 +48,9 @@ mod multicast;
 
 #[cfg(feature = "persy")]
 pub mod persy_storage;
+
+#[cfg(feature = "fjall")]
+mod fjall_storage;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod redb_storage;
@@ -73,6 +80,9 @@ pub use multicast::Multicast;
 
 #[cfg(feature = "persy")]
 pub use persy_storage::PersyStorage;
+
+#[cfg(feature = "fjall")]
+pub use fjall_storage::FjallStorage;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use redb_storage::RedbStorage;

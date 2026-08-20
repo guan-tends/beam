@@ -108,28 +108,17 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        #[cfg(feature = "persy")]
+        #[cfg(any(feature = "persy", feature = "fjall"))]
         Command::Migrate(args) => {
             #[cfg(not(target_arch = "wasm32"))]
-            use beam::migration::{Backend, MigrateOpts, migrate};
+            use beam::migration::{MigrateOpts, migrate};
             #[cfg(not(target_arch = "wasm32"))]
             use std::path::PathBuf;
 
-            let parse_backend = |s: &str| -> Result<Backend, String> {
-                match s {
-                    "redb" => Ok(Backend::Redb),
-                    "persy" => Ok(Backend::Persy),
-                    _ => Err(format!(
-                        "Unknown backend '{}': expected 'redb' or 'persy'",
-                        s
-                    )),
-                }
-            };
-
-            let from =
-                parse_backend(&args.from).unwrap_or_else(|e| panic!("Invalid --from value: {}", e));
-            let to =
-                parse_backend(&args.to).unwrap_or_else(|e| panic!("Invalid --to value: {}", e));
+            let from = beam::migration::MigrateError::parse_backend(&args.from)
+                .unwrap_or_else(|e| panic!("Invalid --from value: {}", e));
+            let to = beam::migration::MigrateError::parse_backend(&args.to)
+                .unwrap_or_else(|e| panic!("Invalid --to value: {}", e));
 
             let opts = MigrateOpts {
                 from,
@@ -163,10 +152,10 @@ async fn main() {
             }
         }
 
-        #[cfg(not(feature = "persy"))]
+        #[cfg(not(any(feature = "persy", feature = "fjall")))]
         Command::Migrate(_) => {
             eprintln!(
-                "Migration requires the 'persy' feature. Rebuild with: cargo run --features persy"
+                "Migration requires the 'persy' or 'fjall' feature. Rebuild with: cargo run --features fjall"
             );
             std::process::exit(1);
         }
