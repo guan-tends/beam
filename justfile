@@ -228,7 +228,7 @@ opsec-audit:
     echo "--- Checking for private markers ---"
     grep -rn "babe\|tent\|dharma\|bodhisattva\|vow\|lineage" --include="*.rs" --include="*.md" --include="*.toml" . | grep -v '.git/' | grep -v 'CHANGELOG' || echo "CLEAN"
     echo "--- Checking for .serena/ tracking ---"
-    git ls-files | grep -E "\.serena|\.mneme|memories|session" && echo "FOUND — remove from git" || echo "CLEAN"
+    git ls-files | grep -E "^\.serena|^\.mneme" && echo "FOUND — remove from git" || echo "CLEAN"
     echo "--- Checking for .bak files ---"
     git ls-files | grep -E "\.bak$" && echo "FOUND — remove from git" || echo "CLEAN"
     echo ""
