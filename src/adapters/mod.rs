@@ -7,6 +7,8 @@
 //!
 //! - [`MemoryStorage`] — in-memory `HashMap`-backed storage (default)
 //! - [`RedbStorage`] — persistent embedded storage via [`redb`] (native only)
+//! - [`WasmIdbStorage`] — persistent IndexedDB storage (browser/WASM only)
+//! - [`WasmNodeFsStorage`] — persistent `node:fs/promises` storage (Node.js WASM, `node-fs` feature)
 //!
 //! # Storage Read/Write Split
 //!
@@ -66,6 +68,9 @@ mod wasm_ws;
 #[cfg(target_arch = "wasm32")]
 mod wasm_idb;
 
+#[cfg(all(target_arch = "wasm32", feature = "node-fs"))]
+mod wasm_node_fs;
+
 pub use memory_storage::MemoryStorage;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -91,6 +96,9 @@ pub use wasm_ws::WasmWsConn;
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_idb::WasmIdbStorage;
+
+#[cfg(all(target_arch = "wasm32", feature = "node-fs"))]
+pub use wasm_node_fs::WasmNodeFsStorage;
 
 #[cfg(feature = "webrtc")]
 pub use webrtc::{WebRtcPeer, WebRtcRole};
