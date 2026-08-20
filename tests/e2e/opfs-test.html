@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BEAM OPFS Persistence Test</title>
+</head>
+<body>
+  <div id="status">idle</div>
+  <div id="data">{}</div>
+  <script type="module">
+    import init, { Beam } from "./beam.js";
+    await init();
+
+    // Create BEAM node with OPFS storage (no relay — purely local)
+    const beam = Beam.new_with_opfs();
+
+    // Expose to Playwright
+    window.beamPut = (path, value) => {
+      beam.put(path, value);
+    };
+    window.beamGet = async (path) => {
+      try {
+        const result = await beam.get(path);
+        return result;
+      } catch (e) {
+        return null;
+      }
+    };
+    window.beamReady = true;
+    document.getElementById("status").textContent = "ready";
+  </script>
+</body>
+</html>

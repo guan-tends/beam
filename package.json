@@ -10,6 +10,7 @@
     "test:native": "cargo test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.40.0"
+    "@playwright/test": "^1.40.0",
+    "http-server": "^14.1.1"
   }
 }

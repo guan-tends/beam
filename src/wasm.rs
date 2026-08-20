@@ -28,6 +28,7 @@ use crate::Config;
 use crate::adapters::WasmIdbStorage;
 #[cfg(feature = "node-fs")]
 use crate::adapters::WasmNodeFsStorage;
+use crate::adapters::WasmOpfsStorage;
 use crate::node::Node;
 use crate::types::Value;
 use std::sync::OnceLock;
@@ -136,6 +137,53 @@ impl Beam {
             node: Node::new_with_config(
                 Config::default(),
                 vec![Box::new(WasmNodeFsStorage::with_dir(dir))],
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// Creates a new BEAM node with OPFS (Origin Private File System) persistent storage.
+    ///
+    /// Data is stored as postcard-serialized files in the browser's OPFS
+    /// and survives page reloads and browser restarts. Requires a secure
+    /// context (HTTPS or localhost). OPFS is available in all modern browsers
+    /// (Chrome 102+, Firefox 111+, Safari 15.2+).
+    ///
+    /// The OPFS directory opens asynchronously — writes are buffered until
+    /// the directory is ready, then flushed automatically.
+    ///
+    /// ```js
+    /// import init, { Beam } from "./beam.js";
+    /// await init();
+    /// const beam = Beam.new_with_opfs();
+    /// beam.connect("ws://relay.example.com");
+    /// beam.put("chat.001", "hello");
+    /// // Reload page — data is still there.
+    /// ```
+    pub fn new_with_opfs() -> Beam {
+        console_error_panic_hook::set_once();
+        let _guard = runtime().enter();
+        Beam {
+            node: Node::new_with_config(
+                Config::default(),
+                vec![Box::new(WasmOpfsStorage::new())],
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// Creates a new BEAM node with OPFS storage at a custom directory name.
+    ///
+    /// ```js
+    /// const beam = Beam.new_with_opfs_name("myapp_data");
+    /// ```
+    pub fn new_with_opfs_name(name: &str) -> Beam {
+        console_error_panic_hook::set_once();
+        let _guard = runtime().enter();
+        Beam {
+            node: Node::new_with_config(
+                Config::default(),
+                vec![Box::new(WasmOpfsStorage::with_name(name))],
                 Vec::new(),
             ),
         }

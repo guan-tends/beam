@@ -9,6 +9,7 @@
 //! - [`RedbStorage`] — persistent embedded storage via [`redb`] (native only)
 //! - [`WasmIdbStorage`] — persistent IndexedDB storage (browser/WASM only)
 //! - [`WasmNodeFsStorage`] — persistent `node:fs/promises` storage (Node.js WASM, `node-fs` feature)
+//! - [`WasmOpfsStorage`] — persistent OPFS storage (browser/WASM only)
 //!
 //! # Storage Read/Write Split
 //!
@@ -71,6 +72,9 @@ mod wasm_idb;
 #[cfg(all(target_arch = "wasm32", feature = "node-fs"))]
 mod wasm_node_fs;
 
+#[cfg(target_arch = "wasm32")]
+mod wasm_opfs;
+
 pub use memory_storage::MemoryStorage;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -99,6 +103,9 @@ pub use wasm_idb::WasmIdbStorage;
 
 #[cfg(all(target_arch = "wasm32", feature = "node-fs"))]
 pub use wasm_node_fs::WasmNodeFsStorage;
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm_opfs::WasmOpfsStorage;
 
 #[cfg(feature = "webrtc")]
 pub use webrtc::{WebRtcPeer, WebRtcRole};

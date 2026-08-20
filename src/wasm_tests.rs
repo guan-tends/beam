@@ -174,3 +174,97 @@ mod node_fs_tests {
         assert_eq!(storage.base_dir_str(), "beam_data");
     }
 }
+
+/// OPFS postcard serialization tests.
+///
+/// OPFS uses the same postcard wire format as the Node.js fs adapter.
+/// These tests verify serialization consistency in the WASM environment.
+/// Actual OPFS persistence is tested via Playwright browser tests (see
+/// tests/wasm-integration/opfs-persistence.spec.mjs) — OPFS requires
+/// browser APIs (`navigator.storage.getDirectory()`) not available in Node.js.
+#[cfg(test)]
+mod opfs_tests {
+    use super::*;
+    use crate::types::*;
+    use arena_btreemap::BTreeMap;
+
+    /// T5a: Postcard serialization roundtrip with Children (OPFS uses same format).
+    #[wasm_bindgen_test]
+    fn opfs_postcard_roundtrip() {
+        let mut children: Children = BTreeMap::default();
+        children.insert(
+            "soul1".to_string(),
+            NodeData {
+                value: Value::Text("hello".to_string()),
+                updated_at: 100.0,
+            },
+        );
+        children.insert(
+            "soul2".to_string(),
+            NodeData {
+                value: Value::Number(42.0),
+                updated_at: 200.0,
+            },
+        );
+        let bytes = postcard::to_allocvec(&children).expect("serialize");
+        assert!(!bytes.is_empty(), "postcard bytes should not be empty");
+
+        let deserialized: Children = postcard::from_bytes(&bytes).expect("deserialize");
+        assert_eq!(deserialized.len(), 2);
+        assert_eq!(
+            deserialized.get("soul1").unwrap().value,
+            Value::Text("hello".to_string())
+        );
+        assert_eq!(
+            deserialized.get("soul2").unwrap().value,
+            Value::Number(42.0)
+        );
+    }
+
+    /// T5b: Empty Children postcard serialize/deserialize.
+    #[wasm_bindgen_test]
+    fn opfs_postcard_empty() {
+        let children: Children = BTreeMap::default();
+        let bytes = postcard::to_allocvec(&children).expect("serialize empty");
+        let deserialized: Children = postcard::from_bytes(&bytes).expect("deserialize empty");
+        assert!(deserialized.is_empty());
+    }
+
+    /// T5c: Postcard roundtrip with Value::Bit (boolean) — wire compatibility.
+    #[wasm_bindgen_test]
+    fn opfs_postcard_bit_roundtrip() {
+        let mut children: Children = BTreeMap::default();
+        children.insert(
+            "flag".to_string(),
+            NodeData {
+                value: Value::Bit(true),
+                updated_at: 1.0,
+            },
+        );
+        let bytes = postcard::to_allocvec(&children).expect("serialize");
+        let deserialized: Children = postcard::from_bytes(&bytes).expect("deserialize");
+        assert_eq!(deserialized.len(), 1);
+        assert_eq!(deserialized.get("flag").unwrap().value, Value::Bit(true));
+        assert_eq!(deserialized.get("flag").unwrap().updated_at, 1.0);
+    }
+
+    /// T5d: Postcard roundtrip with Value::Link — soul reference wire format.
+    #[wasm_bindgen_test]
+    fn opfs_postcard_link_roundtrip() {
+        let mut children: Children = BTreeMap::default();
+        children.insert(
+            "ref".to_string(),
+            NodeData {
+                value: Value::Link("node/abc".to_string()),
+                updated_at: 99.0,
+            },
+        );
+        let bytes = postcard::to_allocvec(&children).expect("serialize");
+        let deserialized: Children = postcard::from_bytes(&bytes).expect("deserialize");
+        assert_eq!(deserialized.len(), 1);
+        assert_eq!(
+            deserialized.get("ref").unwrap().value,
+            Value::Link("node/abc".to_string())
+        );
+    }
+}
