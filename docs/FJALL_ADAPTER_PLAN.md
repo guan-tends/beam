@@ -124,10 +124,12 @@ let db = fjall::Database::builder(&path)
 ### 3.1 Schema
 
 Two keyspaces within one `Database`:
-- `beam_nodes_v1`: key = `node_id` (as bytes), value = `postcard::to_allocvec(Children)` bytes
-- `beam_meta_v1`: key = metadata key (as bytes), value = `u64` timestamp (as bytes)
+- `beam_nodes_v1`: key = `encode_key(node_id)` (0x00-prefixed bytes), value = `postcard::to_allocvec(Children)` bytes
+- `beam_meta_v1`: key = metadata key (bytes), value = `u64` timestamp (as bytes)
 
-This mirrors redb's two-table schema exactly. Keyspace names match the existing wire-format identifier convention (DO NOT CHANGE).
+**Key encoding:** Fjall's LSM-tree panics on empty keys. BEAM uses `""` (empty string) as the root soul. All keys are prefixed with `0x00` via `encode_key()` to prevent panics while preserving lexicographic sort order. This encoding is internal to the adapter — transparent to the rest of the system.
+
+This mirrors redb's two-table schema. Keyspace names match the existing wire-format identifier convention (DO NOT CHANGE).
 
 ### 3.2 Async Pattern
 
