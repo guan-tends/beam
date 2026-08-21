@@ -885,14 +885,41 @@ impl Router {
         // already honored upstream in handle_put before this function
         // is called. Do NOT re-check here — the relay receives only
         // non-stale, non-duplicate Puts.
+
+        // Whether this Put originated from a remote peer (via WsConn).
+        // Used to gate server_peers delivery (prevent echo-back) and
+        // to determine if peer_addrs direct-send is needed.
+        let from_remote_peer = self.known_peers.contains(&put.from);
+
         if !self.relay_servers.is_empty() {
-            // Native: parent adapters cover all WsConns. Mark as sent
-            // to prevent duplicate delivery via subscribers/known_peers.
+            // Native: WsServer (relay_servers) and/or OutgoingWebsocketManager
+            // (server_peers) are parent adapters that fan out to their child
+            // WsConn actors. Mark peer_addrs as already_sent_to to prevent
+            // duplicate delivery via subscribers/known_peers.
+            for addr in self.peer_addrs.values() {
+                already_sent_to.insert(addr.clone());
+            }
+        } else if !self.server_peers.is_empty() && !from_remote_peer {
+            // Client with OutgoingWebsocketManager (OWM) but no WsServer:
+            // The OWM (in server_peers) was already sent the Put above and
+            // fans out to its child WsConn actors. Mark peer_addrs as
+            // already_sent_to to prevent the direct-send loop below from
+            // sending a duplicate to the same WsConn.
+            //
+            // This mirrors the native path: the parent adapter handles
+            // delivery, so direct sends to child WsConns are redundant.
+            //
+            // Only applies when !from_remote_peer (local Put) — when
+            // from_remote_peer is true, the server_peers block above was
+            // skipped, so the OWM was NOT sent the Put, and peer_addrs
+            // direct-send is the only delivery path.
             for addr in self.peer_addrs.values() {
                 already_sent_to.insert(addr.clone());
             }
         } else {
-            // WASM or pure-client: no parent adapter — send directly.
+            // WASM, pure-client, or remote-peer-origin Put where
+            // server_peers were skipped: no parent adapter covers
+            // delivery — send directly to peer_addrs.
             for addr in self.peer_addrs.values() {
                 if put.from == *addr {
                     continue;
@@ -914,7 +941,6 @@ impl Router {
         // relay_servers) only if the message did NOT come from a
         // remote peer. This prevents echo-back: a client receiving
         // a Put from the relay must not send it back.
-        let from_remote_peer = self.known_peers.contains(&put.from);
         if !from_remote_peer {
             for addr in self.server_peers.iter() {
                 if self.relay_servers.contains(addr) {
@@ -959,15 +985,18 @@ impl Router {
         }
 
         // Random sampling from known_peers (Gun.js mesh fallback path).
-        if already_sent_to.len() < 4 {
+        // Skip when no peers are eligible (all already sent to) to avoid
+        // wasting CPU on random selection that will never send.
+        let eligible = self.known_peers.len().saturating_sub(already_sent_to.len());
+        if eligible > 0 && already_sent_to.len() < 4 {
             let mut rng = rng();
             let mut errored = FxHashSet::default();
             while let Some(addr) = self.known_peers.iter().choose(&mut rng) {
-                sent_to += 1;
-                if sent_to >= 4 {
-                    break;
-                }
                 if already_sent_to.contains(addr) {
+                    sent_to += 1;
+                    if sent_to >= 4 {
+                        break;
+                    }
                     continue;
                 }
                 already_sent_to.insert(addr.clone());
