@@ -130,11 +130,21 @@ docs-audit:
     #!/usr/bin/env bash
     set -euo pipefail
     source "$HOME/.cargo/env"
-    echo "=== Documentation Audit ==="
-    echo "Reviewing all changes since last tag..."
+    echo "=== Documentation & Release Audit ==="
     LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "HEAD~20")
-    echo "Changes since $LAST_TAG:"
+    echo ""
+    echo "=== Commit history since $LAST_TAG ==="
+    echo "--- Non-merge commits ---"
+    git log "$LAST_TAG"..HEAD --oneline --no-merges
+    echo "--- Merge commits ---"
+    git log "$LAST_TAG"..HEAD --oneline --merges
+    echo ""
+    echo "=== Files changed since $LAST_TAG ==="
     git diff --name-only "$LAST_TAG"..HEAD
+    echo ""
+    echo "=== CHANGELOG completeness check ==="
+    echo "Cross-reference: every feat:, fix:, refactor: commit should have a CHANGELOG entry."
+    echo "Missing features = CHANGELOG gap that must be fixed before release."
     echo ""
     echo "=== Checking cargo doc for warnings ==="
     RUSTDOCFLAGS='-Dwarnings' cargo doc --workspace --all-features --no-deps 2>&1 || true

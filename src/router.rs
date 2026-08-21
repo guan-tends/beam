@@ -1632,7 +1632,9 @@ mod tests {
         let peer_addr = Addr::new(peer_sender);
         let peer_id = "peer-A".to_string();
         router.peer_addrs.insert(peer_id.clone(), peer_addr.clone());
-        router.addr_to_pid.insert(peer_addr.clone(), peer_id.clone());
+        router
+            .addr_to_pid
+            .insert(peer_addr.clone(), peer_id.clone());
         router.known_peers.insert(peer_addr.clone());
 
         // Relay a Put from a local sender (not a known peer).
@@ -1656,7 +1658,7 @@ mod tests {
         assert_eq!(snap.messages_relayed, 1);
     }
 
-    /// When  is empty (WASM or pure-client), 
+    /// When  is empty (WASM or pure-client),
     /// MUST send directly to  — there is no parent adapter to
     /// fan out through. This guards the WASM  use case.
     #[test]
