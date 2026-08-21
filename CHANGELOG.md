@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-08-21 — Fjall Storage Backend + WASM Storage Adapters + Relay Dedup Fixes
+
+### Added — Fjall Storage Backend
+
+- **`FjallStorage` adapter** (`adapters/fjall_storage.rs`, 907 lines):
+  LSM-tree storage backend using `fjall` v3. WAL journalling with LZ4
+  compression — writes are journal appends to OS page cache (microseconds),
+  no `fsync` until explicit `Flush` triggers `persist(SyncAll)`. Recommended
+  for multi-node deployments where peers hold copies of data.
+  Feature-gated behind `--features fjall`. Available via
+  `FjallStorage::new()` and `FjallStorage::new_with_config()`.
+- **Empty key encoding**: Fjall LSM-tree panics on empty keys (`""` root soul).
+  Fixed with `encode_key()` using `0x00` prefix — preserves lexicographic sort
+  order (root sorts first).
+- **Fjall e2e tests** (`tests/fjall_e2e.rs`, 6 tests): Round-trip put/get,
+  batch operations, concurrent access, large value handling, key encoding.
+- **Fjall vs redb benchmarks** (`bench/RESULTS.md`):
+  | Benchmark | redb | fjall | Winner |
+  |---|---|---|---|
+  | write_storm (sequential) | 977 elem/s | 2,999 elem/s | fjall 3.1× |
+  | concurrent_write_storm (4 tasks) | 1,195 elem/s | 4,836 elem/s | fjall 4.0× |
+  | read_storm (random) | 610 elem/s | 447 elem/s | redb 1.4× |
+
+### Added — Universal Migration Tool
+
+- **`beam migrate` subcommand**: Converts between all supported storage
+  formats (redb ↔ fjall ↔ Persy). Batch processing with checksum
+  verification. Reader/writer abstraction pattern — each backend implements
+  `MigrationReader`/`MigrationWriter` traits.
+- **Migration e2e tests** (`tests/migration_e2e.rs`, expanded to 425 lines):
+  All format combinations, large datasets, checksum verification, progress
+  reporting.
+
 ### Added — WASM Storage Adapters
 
 - **OPFS (Origin Private File System) storage adapter** (`WasmOpfsStorage`):
@@ -34,6 +67,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unified WASM wire format**: All three WASM storage adapters (IDB, OPFS,
   Node.js fs) now use postcard serialization for stored data.
 
+### Fixed — Relay Dedup
+
+- **Sender double-send bug**: When a sender had both `server_peers` (OWM) and
+  `peer_addrs` (WsConn children of OWM), Puts were sent twice — once via the
+  OWM fan-out path and once via the direct `peer_addrs` path. Fixed by marking
+  `peer_addrs` as `already_sent_to` when OWM was sent the Put (commit 856f24d).
+- **`subscriber_fanout` counter spin**: Random sampling loop incremented
+  `sent_to` before checking `already_sent_to`, spinning 4× per Put with zero
+  sends. Fixed by guarding when `known_peers.len() - already_sent_to.len() == 0`.
+- **Duplicate fan-out in `handle_put_relay`**: WsConn actors received duplicate
+  messages via two independent Router paths (`server_peers` + `known_peers`).
+  Fixed by adding `peer_addrs.values()` to `already_sent_to` in both
+  `handle_get` and `handle_put_relay` (commit c925c75).
+
+### Fixed — Supply Chain
+
+- **`time` crate RUSTSEC-2026-0009**: Patched `time` from 0.3.45 → 0.3.47
+  (DoS via stack exhaustion).
+
+### Benchmark Results (v0.17.0, 5× isolation)
+
+| Benchmark | Avg Throughput | Dedup | Status |
+|-----------|---------------|-------|--------|
+| Local Put 10K | 42,685 puts/sec | n/a | ✅ clean |
+| Local Put 100K | 41,795 puts/sec | n/a | ✅ clean |
+| Relay 1×10K | 5,163 msgs/sec | 0 | ✅ zero waste |
+| Relay 1×50K | 8,725 msgs/sec | 0 | ✅ zero waste |
+| Relay 10×5K | 2,934 msgs/sec | ~449K | ⚠️ topological (10-node mesh amplification) |
 ## [0.16.0] — 2026-08-20 — Arena-Allocated Children + WASM Test Architecture + Reconnection Sync
 
 ### Changed — Architecture
