@@ -891,10 +891,21 @@ impl Router {
         if !self.relay_servers.is_empty() {
             // Native: WsServer (relay_servers) and/or OutgoingWebsocketManager
             // (server_peers) are parent adapters that fan out to their child
-            // WsConn actors. Mark peer_addrs as already_sent_to to prevent
-            // duplicate delivery via subscribers/known_peers.
+            // WsConn actors. Mark peer_addrs AND subscribers as
+            // already_sent_to to prevent duplicate delivery — the WsServer
+            // fans out to ALL connected WsConns, which includes both
+            // handshake-completed peers and raw subscribers.
             for addr in self.peer_addrs.values() {
                 already_sent_to.insert(addr.clone());
+            }
+            // Also mark subscribers — WsServer delivers to them via fan-out.
+            for node_id in put.updated_nodes.keys() {
+                let topic = node_id.split("/").next().unwrap_or("");
+                if let Some(topic_subscribers) = self.subscribers_by_topic.get(topic) {
+                    for addr in topic_subscribers.iter() {
+                        already_sent_to.insert(addr.clone());
+                    }
+                }
             }
         } else if !self.server_peers.is_empty() && !from_remote_peer {
             // Client with OutgoingWebsocketManager (OWM) but no WsServer:
@@ -912,6 +923,15 @@ impl Router {
             // direct-send is the only delivery path.
             for addr in self.peer_addrs.values() {
                 already_sent_to.insert(addr.clone());
+            }
+            // Also mark subscribers — OWM delivers to them via fan-out.
+            for node_id in put.updated_nodes.keys() {
+                let topic = node_id.split("/").next().unwrap_or("");
+                if let Some(topic_subscribers) = self.subscribers_by_topic.get(topic) {
+                    for addr in topic_subscribers.iter() {
+                        already_sent_to.insert(addr.clone());
+                    }
+                }
             }
         } else {
             // WASM, pure-client, or remote-peer-origin Put where
