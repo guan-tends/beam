@@ -512,9 +512,6 @@ impl Router {
     /// Storage adapters are queried first, then server peers, then a random
     /// sample of up to 4 known subscribers/peers (MANET-style).
     fn handle_get(&mut self, get: &Get) {
-        if !get.id.chars().all(char::is_alphanumeric) {
-            error!("id {}", get.id);
-        }
         if self.is_message_seen(&get.id) {
             return;
         }
