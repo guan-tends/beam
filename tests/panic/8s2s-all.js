@@ -73,9 +73,13 @@ describe('8. s2s-all: data syncs between two peered relays', function () {
       });
 
       ws.on('message', (raw) => {
-        const m = JSON.parse(raw.toString());
-        if (m['@'] && m['@'].startsWith('s2sput')) {
-          acked++;
+        let msgs;
+        try { msgs = JSON.parse(raw.toString()); } catch (e) { return; }
+        if (!Array.isArray(msgs)) msgs = [msgs];
+        for (const m of msgs) {
+          if (m['@'] && m['@'].startsWith('s2sput')) {
+            acked++;
+          }
         }
         if (acked >= souls.length) {
           ws.close();
@@ -98,11 +102,15 @@ describe('8. s2s-all: data syncs between two peered relays', function () {
       const received = {};
 
       ws.on('message', (raw) => {
-        const m = JSON.parse(raw.toString());
-        if (m.put) {
-          for (const soul of souls) {
-            if (m.put[soul] && m.put[soul].val) {
-              received[soul] = m.put[soul].val;
+        let msgs;
+        try { msgs = JSON.parse(raw.toString()); } catch (e) { return; }
+        if (!Array.isArray(msgs)) msgs = [msgs];
+        for (const m of msgs) {
+          if (m.put) {
+            for (const soul of souls) {
+              if (m.put[soul] && m.put[soul].val) {
+                received[soul] = m.put[soul].val;
+              }
             }
           }
         }
