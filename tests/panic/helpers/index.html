@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BEAM PANIC Test Client</title>
+</head>
+<body>
+  <h1>BEAM PANIC Test Client</h1>
+  <div id="log"></div>
+
+  <!-- Panic client auto-connects to the panic-server -->
+  <script src="/panic.js"></script>
+  <script>
+    // Auto-connect to whichever server served this page
+    panic.server(location.origin);
+    document.getElementById('log').textContent = 'Connected to panic-server';
+  </script>
+
+  <!-- BEAM WASM module (loaded on demand by test code via .run()) -->
+  <script type="module">
+    // Pre-load BEAM WASM so it's available when test code calls .run()
+    try {
+      const wasm = await import('/beam.js');
+      window.BEAM = wasm;
+      window.BEAM_READY = true;
+      document.getElementById('log').textContent += ' | BEAM WASM loaded';
+    } catch (e) {
+      window.BEAM_ERROR = e.message;
+      document.getElementById('log').textContent += ' | BEAM load failed: ' + e.message;
+    }
+  </script>
+</body>
+</html>

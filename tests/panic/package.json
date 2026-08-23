@@ -1,0 +1,19 @@
+{
+  "name": "beam-panic-tests",
+  "private": true,
+  "description": "Distributed multi-client convergence tests using Gun.js PANIC framework",
+  "scripts": {
+    "test": "mocha *.js --timeout 10m"
+  },
+  "dependencies": {
+    "ip": "^2.0.0",
+    "panic-server": "^1.1.1",
+    "panic-manager": "^1.2.0",
+    "panic-client": "^1.0.2"
+  },
+  "devDependencies": {
+    "mocha": "^11.0.0",
+    "chai": "^5.0.0",
+    "puppeteer": "^23.0.0"
+  }
+}
