@@ -26,14 +26,13 @@ const config = {
   beamPath: process.env.BEAM_PATH || path.resolve(__dirname, '../../target/release/beam'),
 };
 
-// ─── Static file routes (served by panic-server) ─────────────────────
+// ─── Static file routes (served by panic-server for browser clients) ──
 
 const routes = {
   '/': __dirname + '/helpers/index.html',
   '/panic.js': require.resolve('panic-client'),
 };
 
-// Resolve BEAM WASM files for browser clients (if they exist)
 const beamWasmDir = path.resolve(__dirname, '../../browser-test');
 if (fs.existsSync(path.join(beamWasmDir, 'beam.js'))) {
   routes['/beam.js'] = path.join(beamWasmDir, 'beam.js');
@@ -45,14 +44,13 @@ if (fs.existsSync(path.join(beamWasmDir, 'beam.js'))) {
 const srv = panic.server();
 
 // Only intercept requests for known static routes.
-// Panic-server handles socket.io and its own internal requests internally;
-// trying to respond to those causes ERR_HTTP_HEADERS_SENT.
+// Panic-server handles socket.io internally; responding to those
+// causes ERR_HTTP_HEADERS_SENT.
 srv.on('request', (req, res) => {
   const filePath = routes[req.url];
   if (filePath && !res.headersSent) {
     fs.createReadStream(filePath).pipe(res);
   }
-  // Unknown routes: let panic-server handle them (or drop silently)
 });
 
 srv.listen(config.panicPort, () => {
@@ -68,8 +66,8 @@ manager.start({
 });
 
 const clients = panic.clients;
-const alice = clients.pluck(1); // first client to join
-const dave = clients.excluding(alice).pluck(1); // second client
+const alice = clients.pluck(1);
+const dave = clients.excluding(alice).pluck(1);
 
 // ─── Tests ───────────────────────────────────────────────────────────
 
@@ -83,72 +81,74 @@ describe('1. Put → Ack → Get', function () {
   it('BEAM relay started', function () {
     this.timeout(10 * 1000);
     startRelay({ binPath: config.beamPath, port: config.beamPort });
-    // Give the relay time to bind
     return new Promise((resolve) => setTimeout(resolve, 2000));
   });
 
-  it('Alice connects to BEAM relay and puts data', function () {
+  it('Alice puts data through BEAM relay', function () {
     return alice.run(function (test) {
       test.async();
-      const { beamPort } = test.props;
       const WebSocket = require('ws');
-      const ws = new WebSocket(`ws://localhost:${beamPort}`);
+      const ws = new WebSocket(`ws://localhost:${test.props.beamPort}`);
+      let msgs = 0;
 
       ws.on('open', () => {
         const soul = 'panic/put-ack-get';
-        const putMsg = JSON.stringify({
-          '#': 'put-1',
+        ws.send(JSON.stringify({
+          '#': 'put1',
           put: {
             [soul]: {
               _: { '#': soul, '>': { hello: Date.now() } },
               hello: 'world',
             },
           },
-        });
-        ws.send(putMsg);
-        // Wait a moment for the relay to process, then signal ready
-        setTimeout(() => {
-          global.__ws = ws;
-          test.done();
-        }, 500);
-      });
-
-      ws.on('error', (err) => test.fail('WebSocket error: ' + err.message));
-      setTimeout(() => test.fail('timeout connecting to relay'), 5000);
-    }, { beamPort: config.beamPort });
-  });
-
-  it('Dave connects to BEAM relay and gets Alice\'s data', function () {
-    return dave.run(function (test) {
-      test.async();
-      const { beamPort } = test.props;
-      const WebSocket = require('ws');
-      const ws = new WebSocket(`ws://localhost:${beamPort}`);
-
-      ws.on('open', () => {
-        const soul = 'panic/put-ack-get';
-        const getMsg = JSON.stringify({
-          '#': 'get-1',
-          get: { '#': soul },
-        });
-        ws.send(getMsg);
+        }));
       });
 
       ws.on('message', (raw) => {
-        const msg = JSON.parse(raw);
-        // Look for a put response containing our data
-        if (msg.put) {
-          const soul = 'panic/put-ack-get';
-          const node = msg.put[soul];
-          if (node && node.hello === 'world') {
-            ws.close();
-            test.done();
-          }
+        msgs++;
+        const msg = JSON.parse(raw.toString());
+        // Wait for the ack from storage (has @ field matching our put id)
+        if (msg['@'] === 'put1') {
+          console.log('[alice] ack received, closing');
+          ws.close();
+          test.done();
         }
       });
 
       ws.on('error', (err) => test.fail('WebSocket error: ' + err.message));
-      setTimeout(() => test.fail('no response within 5s'), 5000);
+      setTimeout(() => test.fail('timeout — no ack in 5s'), 5000);
+    }, { beamPort: config.beamPort });
+  });
+
+  it('Dave gets Alice\'s data through BEAM relay', function () {
+    return dave.run(function (test) {
+      test.async();
+      const WebSocket = require('ws');
+      const ws = new WebSocket(`ws://localhost:${test.props.beamPort}`);
+      let msgs = 0;
+
+      ws.on('open', () => {
+        const soul = 'panic/put-ack-get';
+        ws.send(JSON.stringify({
+          '#': 'get1',
+          get: { '#': soul },
+        }));
+      });
+
+      ws.on('message', (raw) => {
+        msgs++;
+        const msg = JSON.parse(raw.toString());
+        // The Get response has a `put` field with the soul data
+        const soul = 'panic/put-ack-get';
+        if (msg.put && msg.put[soul] && msg.put[soul].hello === 'world') {
+          console.log('[dave] ✅ received data: hello=world');
+          ws.close();
+          test.done();
+        }
+      });
+
+      ws.on('error', (err) => test.fail('WebSocket error: ' + err.message));
+      setTimeout(() => test.fail(`timeout — no data in 5s (received ${msgs} messages)`), 5000);
     }, { beamPort: config.beamPort });
   });
 
