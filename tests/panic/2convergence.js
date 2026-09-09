@@ -27,7 +27,7 @@ const config = {
   ip: 'localhost',
   panicPort: 8765,
   beamPort: 9000,
-  beamPath: process.env.BEAM_PATH || path.resolve(__dirname, '../../target/release/beam'),
+  beamPath: process.env.BEAM_PATH || path.resolve(__dirname, '../../target/debug/beam'),
 };
 
 // ─── Static file routes ──────────────────────────────────────────────

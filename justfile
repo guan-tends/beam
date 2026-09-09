@@ -380,11 +380,11 @@ test-panic target="":
     [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
     cd tests/panic
     if [ -n "{{ target }}" ]; then
-      npx mocha --spec "{{ target }}"*.js --reporter spec --timeout 60000
+      npx mocha --exit --spec "{{ target }}"*.js --reporter spec --timeout 60000
     else
-      for f in [0-9]*.js; do
+      for f in $(ls [0-9]*.js | sort -V); do
         echo "=== Running $f ==="
-        npx mocha --spec "$f" --reporter spec --timeout 60000 || { echo "FAIL: $f"; exit 1; }
+        npx mocha --exit --spec "$f" --reporter spec --timeout 60000 || { echo "FAIL: $f"; exit 1; }
         fuser -k 8765/tcp 8766/tcp 8767/tcp 8768/tcp 8769/tcp 8770/tcp 9100/tcp 9101/tcp 2>/dev/null || true
         sleep 1
       done
