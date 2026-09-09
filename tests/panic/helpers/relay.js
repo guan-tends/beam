@@ -48,6 +48,48 @@ function stopRelay(port) {
 }
 
 /**
+ * Wait until a TCP port is free (no listener).
+ *
+ * BEAM binds two ports per relay (ws on `port`, web UI on `port + 1`).
+ * After stopRelay(), the kernel may keep the socket in a lingering state
+ * briefly; restarting too fast causes an AddrInUse panic in the web UI
+ * thread. This helper polls both ports until neither accepts connections.
+ *
+ * @param {number} port - WebSocket port (port and port+1 are both checked).
+ * @param {number} [timeoutMs] - Max wait (default 10000).
+ * @returns {Promise<void>} Resolves when both ports are free; rejects on timeout.
+ */
+function waitForPortFree(port, timeoutMs = 10000) {
+  const net = require('net');
+  const deadline = Date.now() + timeoutMs;
+
+  function portOpen(p) {
+    return new Promise((resolve) => {
+      const sock = net.connect({ port: p, host: '127.0.0.1' });
+      const done = (open) => {
+        sock.destroy();
+        resolve(open);
+      };
+      sock.once('connect', () => done(true));
+      sock.once('error', () => done(false));
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const attempt = async () => {
+      const wsOpen = await portOpen(port);
+      const uiOpen = await portOpen(port + 1);
+      if (!wsOpen && !uiOpen) return resolve();
+      if (Date.now() > deadline) {
+        return reject(new Error(`waitForPortFree: ports ${port}/${port + 1} still in use after ${timeoutMs}ms`));
+      }
+      setTimeout(attempt, 250);
+    };
+    attempt();
+  });
+}
+
+/**
  * Stop all tracked relays.
  */
 function stopAll() {
@@ -57,4 +99,4 @@ function stopAll() {
   relays.clear();
 }
 
-module.exports = { startRelay, stopRelay, stopAll };
+module.exports = { startRelay, stopRelay, stopAll, waitForPortFree };
