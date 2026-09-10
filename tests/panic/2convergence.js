@@ -26,7 +26,10 @@ const { assert } = require('chai');
 const config = {
   ip: 'localhost',
   panicPort: 8765,
-  beamPort: 9000,
+  // 9100 = the shared relay port convention used by every other PANIC test
+  // (helpers/relay.js consumers). Avoids Penpot's permanent 9001 listener
+  // and the APK server's 9000.
+  beamPort: 9100,
   beamPath: process.env.BEAM_PATH || path.resolve(__dirname, '../../target/debug/beam'),
 };
 
@@ -107,10 +110,16 @@ describe('2. Convergence: multi-client write/fan-out', function () {
       });
 
       ws.on('message', (raw) => {
-        const msg = JSON.parse(raw.toString());
-        if (msg['@'] === 'putconv') {
-          ws.close();
-          test.done();
+        // BEAM batches WebSocket messages into JSON arrays when several
+        // are ready in the same tick — always unwrap arrays (standing rule).
+        let msgs = JSON.parse(raw.toString());
+        if (!Array.isArray(msgs)) msgs = [msgs];
+        for (const msg of msgs) {
+          if (msg['@'] === 'putconv') {
+            ws.close();
+            test.done();
+            return;
+          }
         }
       });
 
@@ -129,9 +138,14 @@ describe('2. Convergence: multi-client write/fan-out', function () {
       let gotData = null;
 
       ws.on('message', (raw) => {
-        const msg = JSON.parse(raw.toString());
-        if (msg.put && msg.put[test.props.soul] && msg.put[test.props.soul].hello) {
-          gotData = msg.put[test.props.soul].hello;
+        // BEAM batches WebSocket messages into JSON arrays when several
+        // are ready in the same tick — always unwrap arrays (standing rule).
+        let msgs = JSON.parse(raw.toString());
+        if (!Array.isArray(msgs)) msgs = [msgs];
+        for (const msg of msgs) {
+          if (msg.put && msg.put[test.props.soul] && msg.put[test.props.soul].hello) {
+            gotData = msg.put[test.props.soul].hello;
+          }
         }
       });
 
