@@ -152,7 +152,7 @@ impl MemoryStorage {
         match result {
             Ok(()) => {
                 ack_children.insert(
-                    "_ack".to_string(),
+                    crate::sentinel::ACK.to_string(),
                     NodeData {
                         value: Value::Text("ok".to_string()),
                         updated_at: web_time::SystemTime::now()
@@ -164,7 +164,7 @@ impl MemoryStorage {
             }
             Err(msg) => {
                 ack_children.insert(
-                    "_err".to_string(),
+                    crate::sentinel::ERR.to_string(),
                     NodeData {
                         value: Value::Text(msg.clone()),
                         updated_at: web_time::SystemTime::now()
@@ -176,7 +176,7 @@ impl MemoryStorage {
             }
         }
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), ack_children);
+        nodes.insert(crate::sentinel::ACK.to_string(), ack_children);
         let ack = Put::new(nodes, Some(put.id.clone()), ctx.addr.clone());
         let _ = put.from.send(Message::Put(ack));
     }
@@ -213,7 +213,7 @@ impl MemoryStorage {
         match result {
             Ok(()) => {
                 ack_children.insert(
-                    "_ack".to_string(),
+                    crate::sentinel::ACK.to_string(),
                     NodeData {
                         value: Value::Text("ok".to_string()),
                         updated_at: web_time::SystemTime::now()
@@ -225,7 +225,7 @@ impl MemoryStorage {
             }
             Err(msg) => {
                 ack_children.insert(
-                    "_err".to_string(),
+                    crate::sentinel::ERR.to_string(),
                     NodeData {
                         value: Value::Text(msg.clone()),
                         updated_at: web_time::SystemTime::now()
@@ -237,7 +237,7 @@ impl MemoryStorage {
             }
         }
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), ack_children);
+        nodes.insert(crate::sentinel::ACK.to_string(), ack_children);
         // Send as Put ack keyed on batch.id so Node::handle_put drains it.
         let ack = Put::new(nodes, Some(batch.id.clone()), ctx.addr.clone());
         let _ = batch.from.send(Message::Put(ack));
@@ -271,7 +271,7 @@ impl Actor for MemoryStorage {
                     },
                 );
                 let mut nodes = BTreeMap::default();
-                nodes.insert("_ack".to_string(), ack);
+                nodes.insert(crate::sentinel::ACK.to_string(), ack);
                 let put = Put::new(nodes, Some(flush.id.clone()), ctx.addr.clone());
                 put.to_string(); // compute checksum
                 let _ = flush.from.send(Message::Put(put));

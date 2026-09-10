@@ -33,7 +33,8 @@
 //! // sub.recv().await == Some(Value::Text("Hello World!"))
 //! ```
 
-use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL, ReplicationStatus};
+use crate::ack::{AckPolicy, ReplicationStatus};
+use crate::sentinel::QUORUM_MET;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::MemoryStorage;
 use crate::message::{BatchPut, Flush, Get, Message, Put};
@@ -424,7 +425,7 @@ impl Node {
                 }
                 if is_replay {
                     if let Some(sender) = self.inner.map_sender.read().as_ref() {
-                        let _ = sender.send(("__beam_replay_complete__".to_string(), Value::Null));
+                        let _ = sender.send((crate::sentinel::REPLAY_COMPLETE.to_string(), Value::Null));
                     }
                 }
             } else {
@@ -855,6 +856,7 @@ impl Node {
     /// 2. Send `Message::Put` to the router
     /// 3. Storage adapter commits, then sends
     ///    `Put { in_response_to: Some(id), updated_nodes: { "_ack": { "_ack"|"_err": ... } } }`
+    ///    (the child keys are [`crate::sentinel::ACK`] / [`crate::sentinel::ERR`])
     ///    back to this node's `addr` directly (NOT through the router)
     /// 4. `Node::handle_put` drains `pending_puts` and resolves the oneshot
     ///
@@ -879,6 +881,7 @@ impl Node {
     /// 5. Router's `handle_put` ack branch counts each peer ack in the QuorumEntry
     /// 6. When `acked_by >= policy.quorum`, Router sends a sentinel
     ///    `Put { @: put_id, updated_nodes: { "__quorum_met__": ack_count } }`
+    ///    (the node ID is [`crate::sentinel::QUORUM_MET`])
     ///    back to this Node
     /// 7. This Node's `handle_put` drain decodes the sentinel via
     ///    [`Node::decode_quorum_payload`] and resolves the oneshot with the
@@ -1250,13 +1253,13 @@ impl Node {
     /// by the awaiting caller via `crate::tokio_time::timeout`.
     fn decode_put_ack_payload(put: &Put) -> Result<(), String> {
         for (_node_id, children) in put.updated_nodes.iter().rev() {
-            if let Some(node_data) = children.get("_err") {
+            if let Some(node_data) = children.get(crate::sentinel::ERR) {
                 if let Value::Text(msg) = &node_data.value {
                     return Err(msg.clone());
                 }
                 return Err("storage put commit failed (non-text _err payload)".to_string());
             }
-            if children.contains_key("_ack") {
+            if children.contains_key(crate::sentinel::ACK) {
                 return Ok(());
             }
         }
@@ -1281,7 +1284,7 @@ impl Node {
     ///
     /// ```text
     /// updated_nodes = {
-    ///     "__quorum_met__" => {
+    ///     "__quorum_met__" => {   // == crate::sentinel::QUORUM_MET
     ///         "_" => NodeData { value: Number(ack_count), updated_at: 0.0 }
     ///     }
     /// }
@@ -1303,7 +1306,7 @@ impl Node {
     /// entire drain with an `Instant`.
     fn decode_quorum_payload(put: &Put) -> Option<Result<ReplicationStatus, String>> {
         let started_at = web_time::Instant::now();
-        let children = put.updated_nodes.get(QUORUM_MET_SENTINEL)?;
+        let children = put.updated_nodes.get(QUORUM_MET)?;
         let node_data = children.get("_")?;
         match &node_data.value {
             Value::Number(n) => {
@@ -1569,7 +1572,7 @@ mod tests {
         children.insert(
             sentinel.to_string(),
             NodeData {
-                value: Value::Text(if sentinel == "_err" {
+                value: Value::Text(if sentinel == crate::sentinel::ERR {
                     "test error".to_string()
                 } else {
                     "ok".to_string()
@@ -1578,7 +1581,7 @@ mod tests {
             },
         );
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), children);
+        nodes.insert(crate::sentinel::ACK.to_string(), children);
         let put = Put::new(nodes, Some(put_id.to_string()), Addr::noop());
         // Compute checksum so callers can serialize.
         put.to_string();
@@ -1587,14 +1590,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_decode_put_ack_payload_success() {
-        let ack = make_ack_put("put-1", "_ack");
+        let ack = make_ack_put("put-1", crate::sentinel::ACK);
         let result = Node::decode_put_ack_payload(&ack);
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
     }
 
     #[tokio::test]
     async fn test_decode_put_ack_payload_error_carries_message() {
-        let ack = make_ack_put("put-2", "_err");
+        let ack = make_ack_put("put-2", crate::sentinel::ERR);
         let result = Node::decode_put_ack_payload(&ack);
         assert!(result.is_err(), "expected Err");
         let err = result.unwrap_err();
@@ -1611,14 +1614,14 @@ mod tests {
         // presence is the signal. This matches the documented fallback.
         let mut children = BTreeMap::default();
         children.insert(
-            "_ack".to_string(),
+            crate::sentinel::ACK.to_string(),
             NodeData {
                 value: Value::Null,
                 updated_at: 0.0,
             },
         );
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), children);
+        nodes.insert(crate::sentinel::ACK.to_string(), children);
         let put = Put::new(nodes, Some("put-3".to_string()), Addr::noop());
         let result = Node::decode_put_ack_payload(&put);
         assert!(result.is_ok(), "no-sentinel ack should be success");
@@ -1649,7 +1652,7 @@ mod tests {
         node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
         // Build ack message
-        let ack = make_ack_put(&put_id, "_ack");
+        let ack = make_ack_put(&put_id, crate::sentinel::ACK);
 
         // Inject via the actor handle
         let ctx = ActorContext::new("test-peer".to_string());
@@ -1676,7 +1679,7 @@ mod tests {
         let put_id = "test-pending-err".to_string();
         node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
-        let ack = make_ack_put(&put_id, "_err");
+        let ack = make_ack_put(&put_id, crate::sentinel::ERR);
 
         let ctx = ActorContext::new("test-peer".to_string());
         node.handle(Arc::new(Message::Put(ack)), &ctx).await;
@@ -1700,7 +1703,7 @@ mod tests {
         node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
         // Different ack id
-        let ack = make_ack_put("different-id", "_ack");
+        let ack = make_ack_put("different-id", crate::sentinel::ACK);
 
         let ctx = ActorContext::new("test-peer".to_string());
         node.handle(Arc::new(Message::Put(ack)), &ctx).await;
@@ -1825,7 +1828,7 @@ mod tests {
                 updated_at: 0.0,
             },
         );
-        let mut put = Put::new_from_kv(QUORUM_MET_SENTINEL.to_string(), children, Addr::noop());
+        let mut put = Put::new_from_kv(QUORUM_MET.to_string(), children, Addr::noop());
         put.id = "test_put_id".to_string();
         put.in_response_to = Some("test_put_id".to_string());
         put
@@ -1906,7 +1909,7 @@ mod tests {
                 updated_at: 0.0,
             },
         );
-        let put = Put::new_from_kv(QUORUM_MET_SENTINEL.to_string(), children, Addr::noop());
+        let put = Put::new_from_kv(QUORUM_MET.to_string(), children, Addr::noop());
         let result = Node::decode_quorum_payload(&put);
         assert!(result.is_none(), "missing _ key → None");
     }
