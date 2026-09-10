@@ -1341,12 +1341,54 @@ impl Node {
     ///
     /// * url - WebSocket URL (e.g. wss://relay.example.com/ws)
     #[cfg(target_arch = "wasm32")]
+    /// Connects to a remote relay via WebSocket (WASM/browser) with
+    /// automatic reconnection.
+    ///
+    /// Mirrors the native [`Self::connect_peer`]: a child task owns the
+    /// connection lifecycle — construct the socket, start the
+    /// [`WasmWsConn`] actor, await its termination (its `onclose`/`onerror`
+    /// stop the actor, resolving the handle), then reconnect with
+    /// exponential backoff (1s → 60s). Each respawn's `pre_start` sends a
+    /// fresh `Hi`, which the Router uses to re-issue the node's local
+    /// subscriptions (resubscribe-on-reconnect) — the full reconnect chain
+    /// mirrors Gun.js's mesh behavior on browsers.
+    ///
+    /// The loop task is aborted on `node.stop()`; no zombie reconnects.
     pub fn connect_peer_wasm(&self, url: &str) {
         use crate::adapters::WasmWsConn;
         let ctx = self.inner.actor_context.clone();
-        let conn = WasmWsConn::new(url, &ctx, self.inner.allow_public_space);
-        ctx.start_actor(Box::new(conn));
-        info!("BEAM browser node connecting to relay: {}", url);
+        let ctx_for_loop = ctx.clone();
+        let url = url.to_string();
+        let allow_public_space = self.inner.allow_public_space;
+        ctx.child_task(async move {
+            let ctx = ctx_for_loop;
+            let mut backoff = Duration::from_secs(1);
+            let max_backoff = Duration::from_secs(60);
+            loop {
+                match WasmWsConn::try_new(&url, &ctx, allow_public_space) {
+                    Ok(conn) => {
+                        info!("BEAM browser node connecting to relay: {}", url);
+                        let (_addr, handle) = ctx.start_actor_with_handle(Box::new(conn));
+                        // Await the WsConn lifecycle: onclose/onerror stop
+                        // the actor → run loop breaks → handle resolves.
+                        // Resumption here IS the disconnect signal — the
+                        // loop re-enters and reconnects immediately (native
+                        // connect_peer semantics).
+                        let _ = handle.await;
+                        warn!("BEAM browser peer {} disconnected; reconnecting", url);
+                        backoff = Duration::from_secs(1);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "BEAM browser WebSocket to {} failed: {:?}. retry in {:?}",
+                            url, e, backoff
+                        );
+                        crate::tokio_time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(max_backoff);
+                    }
+                }
+            }
+        });
     }
 }
 

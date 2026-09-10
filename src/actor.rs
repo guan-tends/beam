@@ -328,9 +328,28 @@ impl ActorContext {
     /// Spawns a child async task (non-blocking).
     ///
     /// The task's `JoinHandle` is tracked so it can be aborted on stop.
+    ///
+    /// On native, tasks must be `Send` (multi-threaded scheduler). On
+    /// WASM, futures are `!Send` by design — they run on the single-threaded
+    /// browser event loop via `spawn_local` (see `crate::tokio_spawn`), so
+    /// the `Send` bound is dropped there. All existing callers compile
+    /// unchanged on both targets (`Send` futures satisfy the weaker bound).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn child_task<T>(&self, task: T)
     where
         T: Future<Output = ()> + Send + 'static,
+    {
+        let handle = crate::tokio_spawn::spawn(task);
+        self.task_handles.write().push(handle);
+    }
+
+    /// WASM variant of [`child_task`](Self::child_task) — same behavior,
+    /// without the `Send` bound (browser futures are `!Send`; see
+    /// [`crate::tokio_spawn`]).
+    #[cfg(target_arch = "wasm32")]
+    pub fn child_task<T>(&self, task: T)
+    where
+        T: Future<Output = ()> + 'static,
     {
         let handle = crate::tokio_spawn::spawn(task);
         self.task_handles.write().push(handle);
