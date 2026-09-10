@@ -86,6 +86,11 @@ mimalloc = ["dep:mimalloc"]
 # Node.js persistent storage via `node:fs/promises` (WASM only).
 # Build: wasm-pack build --target nodejs --features node-fs --no-default-features
 node-fs = []
+# Strict message ID validation (alphanumeric, max 32 chars).
+# OFF by default for Gun.js wire compatibility. Gun.js accepts any string
+# as a message ID and generates one if missing via String.random(9).
+# Enable for environments that want stricter validation.
+strict-msg-id = []
 
 [dev-dependencies]
 

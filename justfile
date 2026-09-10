@@ -366,6 +366,40 @@ smoke-test:
     echo "=== SMOKE TEST PASS ✅ ==="
     rm -rf "$TMPDIR"
 
+
+# ─── PANIC Tests ───────────────────────────────────────────────────
+
+# Run PANIC distributed tests (one at a time to avoid port conflicts).
+# Usage: just test-panic          # run all PANIC tests
+#        just test-panic 7        # run specific test by number
+test-panic target="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$HOME/.cargo/env"
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+    cd tests/panic
+    if [ -n "{{ target }}" ]; then
+      npx mocha --exit --spec "{{ target }}"*.js --reporter spec --timeout 60000
+    else
+      # Expand the file list via glob (no ls subprocess/pipe to lose output),
+      # sort version-style, and print the count so a partial run is
+      # immediately visible in the log instead of passing silently.
+      shopt -s nullglob
+      files=()
+      while IFS= read -r f; do files+=("$f"); done < <(printf '%s\n' [0-9]*.js | sort -V)
+      if [ ${#files[@]} -eq 0 ]; then
+        echo "FAIL: no panic test files found in $(pwd)"; exit 1
+      fi
+      echo "=== ${#files[@]} PANIC test files ==="
+      for f in "${files[@]}"; do
+        echo "=== Running $f ==="
+        npx mocha --exit --spec "$f" --reporter spec --timeout 60000 || { echo "FAIL: $f"; exit 1; }
+        fuser -k 8765/tcp 8766/tcp 8767/tcp 8768/tcp 8769/tcp 8770/tcp 8771/tcp 9100/tcp 9101/tcp 2>/dev/null || true
+        sleep 1
+      done
+      echo "=== ALL ${#files[@]} PANIC TEST FILES PASS ✅ ==="
+    fi
 # ─── All Tests ───────────────────────────────────────────────────────
 
 # Run ALL test suites (native + WASM + fixtures + examples)
