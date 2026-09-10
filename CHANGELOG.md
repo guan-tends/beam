@@ -9,6 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-10 — PANIC Distributed Test Suite + Gun.js Wire Compatibility Fixes
+
+### Added — PANIC Distributed Test Suite (18 test files, all green)
+
+- **PANIC harness scaffold** (`tests/panic/`, commit c4ecd7d): distributed
+  testing infrastructure using panic-server/panic-manager — real multi-client
+  WebSocket meshes against the BEAM relay, replacing in-process simulation.
+- **Sprint 1 — wire correctness** (`1put-ack-get`): Put → storage ack → Get
+  round-trip; cross-client reads; ack-before-close discipline.
+- **Sprint 1 — convergence** (`2convergence`): 2 clients converge on shared
+  state through a relay.
+- **Sprint 2 — partition recovery** (`3partition-recovery`): client
+  disconnect → reconnect → state resync verified.
+- **Sprint 2 — mixed mesh** (`4mixed-mesh`): hub topologies with mixed
+  client/relay roles, 5/5 green.
+- **Sprint 3 — cross-relay sync** (`8s2s-all`): relay-to-relay sync, 4/4
+  green after relay gap fix; `9delayed-peer` (late joiner syncs, 5/5);
+  `10on-recovery` (subscription survives disconnect, both green);
+  `11no-override` (older writes don't clobber newer, both green).
+- **Sprint 4 — load & latency** (`12load`, `13latency`) + harness hardening
+  (full-suite runner: version sort, `mocha --exit`, unified debug binary).
+- **Sprint 5 — bulk import** (`14bulkimport`, `15large-nodes`): large-node
+  handling and bulk put ingestion through the wire.
+- **Sprint 6 — SEA user accounts** (`16users`, `17user-paste`, `18who`):
+  full Gun SEA lifecycle through BEAM — signed `~pubkey` souls,
+  alias/pub indirection, shared-credential cross-session reads (vanishing
+  property), `~@alias` reverse-index discovery, `set()` dynamic lists,
+  and re-auth session sync. Every SEA criterion runs through BEAM.
+- **Gun parity calibration** (`parity/12load-gun.js`): identical load test
+  against reference Gun.js — Gun fails 6 clients × 200 all-verify-all
+  (600/1200); BEAM passes the same criteria verbatim (1200/1200 @ ~224ms).
+  Gun is the calibration floor; test criteria are never bent for BEAM.
+- **`helpers/gunboot.js`**: DRY Gun+SEA bootstrap for headless client tests
+  (dynamic import, forced `mesh.hi`, `Gun.window.WebSocket` shim).
+
+### Fixed — Gun.js Wire Compatibility
+
+- **Relaxed `msg_id` validation** (c8e8268): BEAM accepted only alphanumeric
+  message IDs ≤32 chars; Gun.js accepts any string and generates random IDs
+  when missing. BEAM now matches Gun.js behavior (any string accepted,
+  9-char random ID generated when absent). Stricter validation remains
+  available behind the opt-in `strict-msg-id` feature flag.
+- **Subscriber dedup in WsServer fan-out** (02723f6): Put messages arriving
+  from a relay were fanned out to subscribers AND echoed back through the
+  sender path, producing duplicate deliveries. Relay-origin Puts no longer
+  duplicate to subscribers.
+- **Graceful web UI degradation** (30197e7): when the web UI port (relay
+  port + 1) is unavailable, the relay now degrades gracefully instead of
+  disrupting router acking — WebSocket operation is unaffected.
+
+### Fixed — Test Infrastructure
+
+- **Playwright browser pinning** (9913526): CI browser tests pin Playwright
+  chromium build 1148 via `executablePath` — the default CFT 151
+  headless-shell silently kills pages running wasm async runtimes ~1s after
+  `init()`. Full chromium under headless CI launches with
+  `xvfb-run -a dbus-run-session --` (session bus required or SIGABRT).
+- **Headless CI GPU** (ebff3fe): `--disable-gpu` for deterministic software
+  compositing; browser bundle rebuilt.
+
+### Internal
+
+- 36 files changed, +6,763/−43 lines since v0.17.0. Test suite totals:
+  450+ tests across native/WASM/browser/fjall layers, zero failures; PANIC
+  suite 18/18 files green.
+
 ## [0.17.0] — 2026-08-21 — Fjall Storage Backend + WASM Storage Adapters + Relay Dedup Fixes
 
 ### Added — Fjall Storage Backend
