@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Future Work — Absence Signaling (NACK)
+
+- **Documented limitation:** BEAM has no protocol-level "not found" (NACK) signal.
+  `Node::once()` therefore returns `None` after a bounded wait (Gun.js-parity
+  behavior — Gun's own `once()` is timer-based and its source notes at
+  `src/root.js` that "not found is a sensitive issue... should probably be
+  handled more carefully"; it never was).
+- **Path forward:** a feature-gated NACK extension (precedent: the
+  `strict-msg-id` feature flag) would let consumers distinguish
+  "confirmed absent" from "timed out." Deferred until a real consumer
+  need appears — wire parity with Gun.js is the standing rule, and a NACK
+  would be a BEAM-only wire extension Gun.js ignores.
+
 ## [0.18.0] — 2026-09-10 — PANIC Distributed Test Suite + Gun.js Wire Compatibility Fixes
 
 ### Added — PANIC Distributed Test Suite (18 test files, all green)
