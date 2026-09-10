@@ -685,12 +685,20 @@ impl Node {
                     Ok(stream) => match ClientBuilder::from_uri(uri).connect_on(stream).await {
                         Ok((socket, _)) => {
                             let conn = crate::adapters::WsConn::new(socket, allow_public_space);
-                            let addr = ctx.start_actor(Box::new(conn));
+                            let (addr, handle) = ctx.start_actor_with_handle(Box::new(conn));
                             info!("BEAM connected to peer {} (addr: {})", url, addr);
                             backoff = Duration::from_secs(1);
-                            // Stay alive; WsConn runs until disconnect.
-                            // TODO: detect disconnect for faster reconnect loop.
-                            crate::tokio_time::sleep(Duration::from_secs(3600)).await;
+                            // Await the WsConn actor's lifecycle: its receive
+                            // loop ends when the WebSocket closes (peer close
+                            // frame, TCP reset, or relay shutdown), which
+                            // triggers ctx.stop() → the actor's run loop
+                            // breaks → this handle resolves. Resumption here
+                            // IS the disconnect signal — the loop re-enters
+                            // and reconnects immediately.
+                            // (Was: sleep(3600s) — reconnect latency up to
+                            // one hour after a mid-session disconnect.)
+                            let _ = handle.await;
+                            warn!("BEAM peer {} disconnected; reconnecting", url);
                         }
                         Err(e) => {
                             warn!(
