@@ -212,21 +212,24 @@ profiling:
     fi
     echo "Binary: $BINARY"
     echo ""
+    # --ignored is REQUIRED: the benchmarks are #[ignore]d tests. Without it
+    # the harness exits after ~2ms having profiled nothing but startup
+    # (empty flamegraph/heaptrack/dhat — caught in the v0.18.0 release lap).
     echo "=== 1/4: perf stat ==="
     perf stat -e cycles,instructions,cache-misses,context-switches,page-faults,cpu-migrations \
-        "$BINARY" --bench 2>&1 | tee bench/results/perf-stat-$(date +%FT%H-%M).txt
+        "$BINARY" --bench --ignored 2>&1 | tee bench/results/perf-stat-$(date +%FT%H-%M).txt
     echo ""
     echo "=== 2/4: Flame graph (perf record + inferno) ==="
-    perf record -F 999 -g --call-graph dwarf -o /tmp/beam-perf.data "$BINARY" --bench
+    perf record -F 999 -g --call-graph dwarf -o /tmp/beam-perf.data "$BINARY" --bench --ignored
     perf script -i /tmp/beam-perf.data | inferno-collapse-perf > bench/results/flamegraph-$(date +%FT%H-%M).svg
     echo "Flame graph: bench/results/flamegraph-*.svg"
     echo ""
     echo "=== 3/4: Heaptrack ==="
-    heaptrack -o bench/results/heaptrack-$(date +%FT%H-%M) "$BINARY" --bench --no-default-features 2>&1 | tail -20
+    heaptrack -o bench/results/heaptrack-$(date +%FT%H-%M) "$BINARY" --bench --ignored --no-default-features 2>&1 | tail -20
     echo "Heaptrack data: bench/results/heaptrack-*.zst"
     echo ""
     echo "=== 4/4: DHAT ==="
-    valgrind --tool=dhat "$BINARY" --bench 2>&1 | tee bench/results/dhat-$(date +%FT%H-%M).txt
+    valgrind --tool=dhat "$BINARY" --bench --ignored 2>&1 | tee bench/results/dhat-$(date +%FT%H-%M).txt
     echo "DHAT data: bench/results/dhat-*"
     echo ""
     echo "=== PROFILING COMPLETE — review bench/results/ ==="
