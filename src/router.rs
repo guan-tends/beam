@@ -47,9 +47,9 @@
 
 use crate::Dup;
 use crate::ack::AckPolicy;
-use crate::sentinel::QUORUM_MET;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
+use crate::sentinel::QUORUM_MET;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::{BoundedHashMap, FxHashMap, FxHashSet, try_send_or_log};
 use arena_btreemap::BTreeMap;
@@ -385,9 +385,11 @@ impl Actor for Router {
                 // (Gun mesh.js parity — each side owns its node.ask registry).
                 if !self.known_peers.contains(&get.from) {
                     let topic = get.node_id.split("/").next().unwrap_or("").to_string();
-                    debug!("Router recording local ask for {} (topic {})", get.node_id, topic);
-                    self.local_asks
-                        .insert(get.node_id.clone(), (*get).clone());
+                    debug!(
+                        "Router recording local ask for {} (topic {})",
+                        get.node_id, topic
+                    );
+                    self.local_asks.insert(get.node_id.clone(), (*get).clone());
                 }
                 self.handle_get(get);
             }
@@ -752,11 +754,8 @@ impl Router {
                                 updated_at: 0.0, // sentinel reply — actual timestamp tracked elsewhere
                             },
                         )]);
-                        let mut reply = Put::new_from_kv(
-                            QUORUM_MET.to_string(),
-                            children,
-                            put.from.clone(),
-                        );
+                        let mut reply =
+                            Put::new_from_kv(QUORUM_MET.to_string(), children, put.from.clone());
                         reply.in_response_to = Some(in_response_to.clone());
                         debug!("quorum met for {} ({} acks)", in_response_to, count);
                         try_send_or_log(
@@ -1205,11 +1204,8 @@ impl Router {
                     updated_at: 0.0,
                 },
             );
-            let mut reply = Put::new_from_kv(
-                QUORUM_MET.to_string(),
-                children,
-                entry.requester.clone(),
-            );
+            let mut reply =
+                Put::new_from_kv(QUORUM_MET.to_string(), children, entry.requester.clone());
             reply.in_response_to = Some(put_id.clone());
             try_send_or_log(
                 &entry.requester,
@@ -1477,7 +1473,9 @@ mod tests {
         let local = Addr::noop(); // not in known_peers → local origin
         let get = t4_get(local, "soul/a");
 
-        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+        router
+            .handle(Arc::new(Message::Get(get)), &test_ctx())
+            .await;
         assert!(router.local_asks.get(&"soul/a".to_string()).is_some());
     }
 
@@ -1490,10 +1488,14 @@ mod tests {
         let local = Addr::noop();
 
         let first = t4_get(local.clone(), "soul/a");
-        router.handle(Arc::new(Message::Get(first)), &test_ctx()).await;
+        router
+            .handle(Arc::new(Message::Get(first)), &test_ctx())
+            .await;
         let second = t4_get(local.clone(), "soul/a");
         let second_id = second.id.clone();
-        router.handle(Arc::new(Message::Get(second)), &test_ctx()).await;
+        router
+            .handle(Arc::new(Message::Get(second)), &test_ctx())
+            .await;
 
         assert_eq!(router.local_asks.len(), 1, "one ask per soul");
         let recorded = router.local_asks.get(&"soul/a".to_string()).unwrap();
@@ -1520,8 +1522,13 @@ mod tests {
 
         // Its Gets must not be recorded as local asks.
         let get = t4_get(ws_conn, "soul/a");
-        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
-        assert!(router.local_asks.is_empty(), "remote Gets are not local asks");
+        router
+            .handle(Arc::new(Message::Get(get)), &test_ctx())
+            .await;
+        assert!(
+            router.local_asks.is_empty(),
+            "remote Gets are not local asks"
+        );
     }
 
     /// Hi (initial contact) re-issues recorded local asks with FRESH ids
@@ -1536,7 +1543,9 @@ mod tests {
 
         let get = t4_get(local, "soul/a");
         let original_id = get.id.clone();
-        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+        router
+            .handle(Arc::new(Message::Get(get)), &test_ctx())
+            .await;
 
         // A peer connects (initial Hi, is_ack = None).
         let hi = Message::Hi {
@@ -1550,13 +1559,11 @@ mod tests {
         // The re-issued Get went through handle_get: it is seen under a
         // NEW id (the original would have been dropped as a dupe), and
         // the topic subscription is registered.
-        let seen_ids: Vec<&String> = router
-            .seen_get_messages
-            .iter()
-            .map(|(id, _)| id)
-            .collect();
+        let seen_ids: Vec<&String> = router.seen_get_messages.iter().map(|(id, _)| id).collect();
         assert!(
-            seen_ids.iter().any(|id| id.as_str() != original_id.as_str()),
+            seen_ids
+                .iter()
+                .any(|id| id.as_str() != original_id.as_str()),
             "re-issued Get must carry a fresh id; seen: {seen_ids:?}"
         );
         assert!(
@@ -1577,7 +1584,9 @@ mod tests {
         let mut router = Router::new(vec![], vec![], metrics);
         let local = Addr::noop();
 
-        router.handle(Arc::new(Message::Get(t4_get(local, "soul/a"))), &test_ctx()).await;
+        router
+            .handle(Arc::new(Message::Get(t4_get(local, "soul/a"))), &test_ctx())
+            .await;
 
         // Count seen entries attributable to re-issue (none yet beyond the
         // original Get's own registration).
@@ -1607,10 +1616,12 @@ mod tests {
         let local = Addr::noop();
 
         for i in 0..(SEEN_MSGS_MAX_SIZE + 50) {
-            router.handle(
-                Arc::new(Message::Get(t4_get(local.clone(), &format!("soul{i}")))),
-                &test_ctx(),
-            ).await;
+            router
+                .handle(
+                    Arc::new(Message::Get(t4_get(local.clone(), &format!("soul{i}")))),
+                    &test_ctx(),
+                )
+                .await;
         }
         assert_eq!(
             router.local_asks.len(),
@@ -1619,10 +1630,12 @@ mod tests {
         );
         // Oldest souls evicted; newest retained.
         assert!(router.local_asks.get(&"soul0".to_string()).is_none());
-        assert!(router
-            .local_asks
-            .get(&format!("soul{}", SEEN_MSGS_MAX_SIZE + 49))
-            .is_some());
+        assert!(
+            router
+                .local_asks
+                .get(&format!("soul{}", SEEN_MSGS_MAX_SIZE + 49))
+                .is_some()
+        );
     }
 
     /// Minimal ActorContext for driving `Router::handle` directly in tests.
@@ -1691,12 +1704,16 @@ mod tests {
         let (ws_peer, ws_log) = start_recording_peer("wsconn").await;
 
         // Simulate the WsConn's Hi registration (peer_id → addr + known peer).
-        router.peer_addrs.insert("ws-peer".to_string(), ws_peer.clone());
+        router
+            .peer_addrs
+            .insert("ws-peer".to_string(), ws_peer.clone());
         router.known_peers.insert(ws_peer.clone());
 
         let get = t4_get(Addr::noop(), "soul/a"); // from = local node actor
         let get_id = get.id.clone();
-        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+        router
+            .handle(Arc::new(Message::Get(get)), &test_ctx())
+            .await;
 
         let got = wait_for_gets(&ws_log, 1).await;
         assert_eq!(
@@ -1718,12 +1735,16 @@ mod tests {
 
         // OWM is a server peer; its child WsConn is in peer_addrs.
         router.server_peers.insert(owm.clone());
-        router.peer_addrs.insert("ws-peer".to_string(), ws_peer.clone());
+        router
+            .peer_addrs
+            .insert("ws-peer".to_string(), ws_peer.clone());
         router.known_peers.insert(ws_peer.clone());
 
         let get = t4_get(Addr::noop(), "soul/a");
         let get_id = get.id.clone();
-        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+        router
+            .handle(Arc::new(Message::Get(get)), &test_ctx())
+            .await;
 
         let owm_got = wait_for_gets(&owm_log, 1).await;
         assert_eq!(

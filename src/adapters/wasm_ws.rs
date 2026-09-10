@@ -83,11 +83,7 @@ impl WasmWsConn {
     /// returns the actor. Split from [`Self::new`] so the reconnect loop
     /// in `connect_peer_wasm` can feed in a fresh socket per attempt
     /// (closure wiring written once — DRY).
-    pub fn from_socket(
-        ws: WebSocket,
-        ctx: &ActorContext,
-        allow_public_space: bool,
-    ) -> Self {
+    pub fn from_socket(ws: WebSocket, ctx: &ActorContext, allow_public_space: bool) -> Self {
         let peer_id = ctx.peer_id.read().clone();
         let router = ctx.router.read().clone();
         let addr = ctx.addr.clone();
