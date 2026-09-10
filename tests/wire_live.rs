@@ -432,12 +432,14 @@ async fn resubscribe_after_reconnect() {
     // arrives either as the Get response body (if the re-issue landed
     // after the put) or as Gun's live put fan-out (if before) — both
     // paths flow through the same re-established transport.
-    relay2
-        .api_post(
-            "/put",
-            r#"{"soul":"beamtest/resub","key":"live","value":"after"}"#,
-        )
-        .await;
+    //
+    // The /put is (re-)issued inside the drain loop below: Gun only
+    // relays puts to peers whose ask it has registered, so if a slow
+    // reconnect puts our re-issued Get BEHIND this put, that put is
+    // silently not fanned out to us. Re-posting on each drain iteration
+    // guarantees a put fires AFTER the ask is registered, whatever the
+    // reconnect latency (Gun's HAM treats each fresh-timestamp post as
+    // a new write).
 
     // THE assertion: the ORIGINAL receiver gets the post-restart value
     // with no new on() call. Without resubscribe-on-reconnect the node's
@@ -451,6 +453,15 @@ async fn resubscribe_after_reconnect() {
     let deadline = std::time::Instant::now() + Duration::from_secs(45);
     let mut got_after = false;
     while std::time::Instant::now() < deadline {
+        // Re-post the put each iteration (see note above the loop): the
+        // write that lands AFTER the relay has our re-issued ask is the
+        // one Gun fans out to the persistent subscription.
+        relay2
+            .api_post(
+                "/put",
+                r#"{"soul":"beamtest/resub","key":"live","value":"after"}"#,
+            )
+            .await;
         match timeout(Duration::from_secs(10), sub.recv()).await {
             Ok(Ok(v)) if v == "after".into() => {
                 got_after = true;
