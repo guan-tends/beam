@@ -46,7 +46,8 @@
 //! 2. Ack + hash (`@` + `##` fields) — deduplicates identical responses
 
 use crate::Dup;
-use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL};
+use crate::ack::AckPolicy;
+use crate::sentinel::QUORUM_MET;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::types::{Children, NodeData, Value};
@@ -681,7 +682,7 @@ impl Router {
                             },
                         )]);
                         let mut reply = Put::new_from_kv(
-                            QUORUM_MET_SENTINEL.to_string(),
+                            QUORUM_MET.to_string(),
                             children,
                             put.from.clone(),
                         );
@@ -1134,7 +1135,7 @@ impl Router {
                 },
             );
             let mut reply = Put::new_from_kv(
-                QUORUM_MET_SENTINEL.to_string(),
+                QUORUM_MET.to_string(),
                 children,
                 entry.requester.clone(),
             );
