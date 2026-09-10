@@ -39,7 +39,7 @@ pub mod types;
 pub mod utils; // pub for benchmarking
 pub use dup::Dup;
 pub mod sea;
-pub use node::{Config, Node};
+pub use node::{Config, Node, DEFAULT_ONCE_WAIT};
 pub use types::Value;
 
 #[cfg(target_arch = "wasm32")]

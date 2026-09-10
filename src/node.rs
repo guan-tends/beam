@@ -53,6 +53,23 @@ use tokio::sync::{broadcast, oneshot};
 use tokio_websockets::ClientBuilder;
 use web_time::{Duration, SystemTime};
 
+/// Default wait for [`Node::once`] when no explicit timeout is given.
+///
+/// **99ms, matching Gun.js's `once()` default** (`opt.wait || 99`,
+/// `src/on.js:66` in the reference implementation). The previous BEAM
+/// default was 66ms with a doc comment claiming to "match Gun.js's
+/// `opt.wait`" — that value was never Gun's; this constant fixes both
+/// the number and the claim.
+///
+/// Semantics: this is a **liveness bound, not a correctness signal**.
+/// Gun's wire protocol has no "not found" (NACK) response, so absence
+/// cannot be positively acked — the bounded wait is what bounds the
+/// search (Gun's own `once()` is timer-based for exactly this reason).
+/// Local/likely-cached reads resolve well within 99ms; raise it per-call
+/// (`once(Some(Duration::from_millis(1000)))`) when waiting on remote
+/// peers over slow links.
+pub const DEFAULT_ONCE_WAIT: Duration = Duration::from_millis(99);
+
 /// Configuration for a [`Node`] and its associated adapters.
 ///
 /// Controls public space access, broadcast channel sizing,
@@ -566,18 +583,58 @@ impl Node {
     /// Reads the node's value once, or `None` if not found within the timeout.
     ///
     /// This is a convenience wrapper around [`Node::on`] with a timeout.
-    /// The default timeout is 66ms (matching Gun.js's `opt.wait`).
+    /// The default timeout is [`DEFAULT_ONCE_WAIT`] (99ms, matching Gun.js's
+    /// `once()` default — `opt.wait || 99`, `src/on.js:66` in the reference).
+    ///
+    /// # Why a timeout?
+    ///
+    /// Gun's wire protocol has no "not found" (NACK) signal — the reference
+    /// implementation notes at `src/root.js` that "not found is a sensitive
+    /// issue" and solves it with a timer, not an ack. BEAM mirrors that
+    /// contract: sentinels (`_ack`/`_err`) confirm *writes*; a bounded wait
+    /// bounds the search for data that may simply not exist. See
+    /// [`DEFAULT_ONCE_WAIT`] for tuning guidance.
     ///
     /// # Arguments
     ///
-    /// * `wait` - Optional timeout. Defaults to 66ms.
+    /// * `wait` - Optional timeout. Defaults to [`DEFAULT_ONCE_WAIT`] (99ms).
+    ///
+    /// # Errors
+    ///
+    /// Returns `None` on timeout or if the subscription channel closes
+    /// before a value arrives. On [`tokio::sync::broadcast::error::RecvError::Lagged`]
+    /// (bounded-buffer overflow during a replay burst), the wait continues
+    /// with the next retained value rather than panicking.
     pub async fn once(&mut self, wait: Option<Duration>) -> Option<Value> {
-        let val =
-            crate::tokio_time::timeout(wait.unwrap_or(Duration::from_millis(66)), self.on().recv())
-                .await
-                .ok()?
-                .expect("recv error??");
-        Some(val)
+        // Budget computed once so `Lagged` retries share the caller's
+        // original timeout — lag recovery must not extend the wait.
+        // (Remaining-budget pattern: portable `timeout` + `web_time::Instant`
+        // on both native and WASM — tokio_with_wasm has no `timeout_at`.)
+        let deadline = web_time::Instant::now() + wait.unwrap_or(DEFAULT_ONCE_WAIT);
+        loop {
+            let remaining = deadline.saturating_duration_since(web_time::Instant::now());
+            match crate::tokio_time::timeout(remaining, self.on().recv()).await {
+                // Budget exhausted waiting for a value — the Gun-parity
+                // "not found" outcome (no NACK in the protocol; see doc
+                // comment above).
+                Err(_) => return None,
+                // Subscription channel closed (node stopped) — no value
+                // will ever arrive.
+                Ok(Err(
+                    tokio::sync::broadcast::error::RecvError::Closed,
+                )) => return None,
+                // Bounded-buffer overflow during a replay burst: the receiver
+                // skipped `n` values but resumes at the oldest retained one.
+                // Log and keep waiting — the next delivered value satisfies
+                // `once()` just as well, and panicking here would turn a
+                // routine burst into a node crash (was: `.expect("recv error??")`).
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                    warn!("once() receiver lagged, {} values skipped; continuing", n);
+                    continue;
+                }
+                Ok(Ok(val)) => return Some(val),
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1361,6 +1418,64 @@ mod tests {
         let child1 = node.get("key");
         let child2 = node.get("key");
         assert_eq!(child1.id(), child2.id());
+    }
+
+    // ── once() default wait (T1: Gun.js parity) ────────────────────────
+
+    /// Rename-guard: the default wait MUST be 99ms — Gun.js's `once()`
+    /// default is `opt.wait || 99` (`src/on.js:66`). The pre-hardening
+    /// value was 66ms with a doc comment falsely claiming to match Gun;
+    /// this assertion fails loudly if anyone regresses it.
+    #[test]
+    fn default_once_wait_matches_gun_js() {
+        assert_eq!(
+            DEFAULT_ONCE_WAIT,
+            Duration::from_millis(99),
+            "DEFAULT_ONCE_WAIT must equal Gun.js's once() default (opt.wait || 99)"
+        );
+    }
+
+    /// once() with the default wait returns None for a key that has no
+    /// value — the Gun-parity "not found" outcome (bounded wait, no panic,
+    /// no NACK in the protocol).
+    #[tokio::test]
+    async fn once_default_wait_returns_none_for_missing_value() {
+        let mut node = Node::new();
+        let start = std::time::Instant::now();
+        let result = node.get("nonexistent_key").once(None).await;
+        let elapsed = start.elapsed();
+        assert_eq!(result, None, "missing value must resolve to None");
+        // Must actually wait ~DEFAULT_ONCE_WAIT, not return instantly
+        // (instant None would mean the timeout envelope is broken).
+        assert!(
+            elapsed >= Duration::from_millis(90),
+            "once(None) must respect DEFAULT_ONCE_WAIT; resolved in {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "once(None) must not hang; resolved in {:?}",
+            elapsed
+        );
+    }
+
+    /// once() resolves quickly when the value exists locally — the happy
+    /// path must not be slowed by the default-wait change (99ms is an
+    /// upper bound for absence, not a floor for presence).
+    #[tokio::test]
+    async fn once_resolves_immediately_for_local_value() {
+        let mut node = Node::new();
+        node.get("present")
+            .put("value".into())
+            .await
+            .expect("put should succeed");
+        let start = std::time::Instant::now();
+        let result = node.get("present").once(None).await;
+        assert_eq!(result, Some("value".into()));
+        assert!(
+            start.elapsed() < Duration::from_millis(90),
+            "local value should resolve well before the default wait elapses"
+        );
     }
 
     #[tokio::test]
