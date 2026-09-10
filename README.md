@@ -56,7 +56,7 @@ BEAM is a maintained fork of [rod](https://github.com/mmalmi/rod) — a from-scr
 
 ```toml
 [dependencies]
-beamdb = "0.16"
+beamdb = "0.18"
 ```
 
 Or via the CLI:
@@ -64,6 +64,12 @@ Or via the CLI:
 ```bash
 cargo add beamdb
 ```
+
+> **Note on the name:** the crates.io package is **`beamdb`** (the `beam` package name
+> was already taken when we first published), but the library crate itself is named
+> **`beam`** — so in your code you `use beam::…` while your `Cargo.toml` depends on
+> `beamdb`. The npm WASM package (`beamdb`) follows the same convention; its JS glue
+> exports the `Beam` class.
 
 Feature flags (all off by default):
 
