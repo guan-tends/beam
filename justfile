@@ -367,7 +367,10 @@ smoke-test:
     cd "$TMPDIR"
     cargo init --name beam-smoke
     cargo add beamdb
-    echo 'fn main() { let _ = beamdb::Node::new(); }' > src/main.rs
+    # NOTE: the published crate is named `beamdb` but its [lib] name is `beam`
+    # (Cargo.toml override) — consumers import it as `beam::`. Verified live
+    # against the actual registry artifact in the v0.18.0 smoke lap.
+    echo 'fn main() { let _ = beam::Node::new(); }' > src/main.rs
     cargo build
     echo "=== SMOKE TEST PASS ✅ ==="
     rm -rf "$TMPDIR"
