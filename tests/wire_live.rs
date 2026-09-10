@@ -356,6 +356,119 @@ async fn bidirectional_convergence() {
     beam.stop();
 }
 
+/// Test 8: Resubscribe-on-reconnect — a persistent `on()` subscription
+/// survives a relay restart and receives post-restart data **without a
+/// new `on()` call** (Gun mesh.js `'hi'` re-ask parity).
+///
+/// This exercises the full hardening chain end-to-end:
+///
+/// 1. [`Node::connect_peer`] (native reconnect loop) detects the relay
+///    death — the `WsConn` actor's receive loop ends on socket close,
+///    stopping the actor; the awaited lifecycle handle resolves and the
+///    loop re-enters (T3).
+/// 2. On reconnect the fresh `WsConn` sends `Hi`; the Router — after the
+///    `dam:"?"` ack — re-issues the node's recorded local asks with
+///    FRESH message IDs so the dedup registry cannot eat them (T4).
+/// 3. The relay's custom Get handler responds with the current graph
+///    data, which is relayed into the pre-existing broadcast receiver.
+///
+/// Unlike `reconnection_sync` (test 4 — a NEW node reconnects), this
+/// proves the SAME node's subscription stays live across a relay
+/// restart with zero user action.
+///
+/// Transport note: this test drives `Node::connect_peer` directly — the
+/// `OutgoingWebsocketManager` adapter used by other tests in this file
+/// connects once and does not respawn dead `WsConn` actors, so it cannot
+/// model a same-node reconnect.
+#[tokio::test]
+#[ignore = "requires Node.js + Gun.js installed in tests/wire-live/"]
+async fn resubscribe_after_reconnect() {
+    let relay = GunRelay::spawn(9899);
+    relay.wait_for_ready(10000).await;
+
+    let mut beam = Node::new_with_config(
+        Config::default(),
+        vec![Box::new(MemoryStorage::new())],
+        vec![], // no OWM — the reconnecting transport is connect_peer
+    );
+    // Allow generous time for connect + dam:"?" handshake (5s, matching
+    // reconnection_sync's allowance for the async PID-exchange chain).
+    beam.connect_peer(&format!("ws://127.0.0.1:{}/gun", relay.ws_port));
+    sleep(Duration::from_secs(5)).await;
+
+    // Subscribe BEFORE the disconnect — this exact receiver must still be
+    // alive at the end of the test.
+    let mut sub = beam.get("beamtest/resub").get("live").on();
+    beam.get("beamtest/resub")
+        .get("live")
+        .put("before".into())
+        .await
+        .unwrap();
+    sleep(Duration::from_secs(2)).await;
+
+    // Confirm the subscription is live pre-restart (also proves the soul
+    // is registered as a local ask for the T4 re-issue later).
+    let before = timeout(Duration::from_secs(10), sub.recv())
+        .await
+        .expect("timeout waiting for initial value")
+        .expect("subscription channel closed");
+    assert_eq!(before, "before".into());
+
+    // Kill the relay — a real TCP disconnect, not a graceful stop.
+    drop(relay);
+    // Allow the disconnect to propagate: socket close → receive loop end →
+    // actor stop → lifecycle handle resolves → reconnect loop re-enters.
+    sleep(Duration::from_secs(2)).await;
+
+    // Restart the relay on the SAME port. The reconnect loop dials it
+    // within ~1s (backoff reset on success), then Hi → ack → re-issue.
+    let relay2 = GunRelay::spawn(9899);
+    relay2.wait_for_ready(10000).await;
+    // Let the reconnect + handshake + re-issued Get settle against the
+    // fresh (empty) relay before the new value exists.
+    sleep(Duration::from_secs(5)).await;
+
+    // The fresh relay now has data for the soul we re-asked. Delivery
+    // arrives either as the Get response body (if the re-issue landed
+    // after the put) or as Gun's live put fan-out (if before) — both
+    // paths flow through the same re-established transport.
+    relay2
+        .api_post(
+            "/put",
+            r#"{"soul":"beamtest/resub","key":"live","value":"after"}"#,
+        )
+        .await;
+
+    // THE assertion: the ORIGINAL receiver gets the post-restart value
+    // with no new on() call. Without resubscribe-on-reconnect the node's
+    // live subscription would stall here and no "after" would ever arrive.
+    //
+    // The re-issued Get legitimately re-delivers the locally-known value
+    // first (handle_get consults local read adapters AND the relay), so
+    // drain echo values until the post-restart value arrives. Data reaches
+    // the receiver via whichever path wins the race: the re-issued Get's
+    // relay leg (response body) or Gun's put fan-out to registered askers.
+    let deadline = std::time::Instant::now() + Duration::from_secs(45);
+    let mut got_after = false;
+    while std::time::Instant::now() < deadline {
+        match timeout(Duration::from_secs(10), sub.recv()).await {
+            Ok(Ok(v)) if v == "after".into() => {
+                got_after = true;
+                break;
+            }
+            Ok(Ok(_echo)) => continue, // local echo (e.g. "before")
+            Ok(Err(_closed)) => panic!("subscription channel closed"),
+            Err(_) => continue, // per-recv timeout — keep polling to the deadline
+        }
+    }
+    assert!(
+        got_after,
+        "persistent on() must deliver post-restart data without re-subscribing"
+    );
+
+    beam.stop();
+}
+
 /// Test 4: Reconnection — disconnect BEAM, reconnect, verify sync resumes.
 #[tokio::test]
 #[ignore = "requires Node.js + Gun.js installed in tests/wire-live/"]

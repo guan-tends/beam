@@ -605,12 +605,24 @@ impl Router {
             let _ = addr.send(Message::Get(get.clone()));
             already_sent_to.insert(addr.clone());
         }
-        // Mark all known peer addrs (WsConn children) as already-sent.
-        // The OutgoingWebsocketManager will forward to them; sending
-        // directly via known_peers would duplicate the Get with the
-        // same message ID, causing Gun.js dedup to drop the response.
-        for addr in self.peer_addrs.values() {
-            already_sent_to.insert(addr.clone());
+        // Mark known peer addrs (WsConn children) as already-sent — but
+        // ONLY when a server peer (OWM/WsServer) exists to fan the Get out
+        // to them. The marking assumes "the OutgoingWebsocketManager will
+        // forward to them"; that assumption holds for OWM/WsServer-managed
+        // connections but NOT for pure-client topologies (Node::connect_peer
+        // spawns WsConn actors directly, with no OWM parent). Blanket-marking
+        // in that topology suppressed the ONLY path a Get had to the relay —
+        // connect_peer clients could push data but never fetch it (relay-side
+        // wire traces confirmed zero Gets arriving). Gun.js parity: mesh.say
+        // delivers to all peers; BEAM's direct clients must too.
+        //
+        // Hybrid topologies (OWM + connect_peer simultaneously) keep the
+        // marking — connect_peer WsConns there are Get-suppressed, a
+        // documented pre-existing limitation; the OWM path carries the Get.
+        if !self.server_peers.is_empty() {
+            for addr in self.peer_addrs.values() {
+                already_sent_to.insert(addr.clone());
+            }
         }
 
         // Ask network subscribers
@@ -1616,6 +1628,115 @@ mod tests {
     /// Minimal ActorContext for driving `Router::handle` directly in tests.
     fn test_ctx() -> ActorContext {
         ActorContext::new("router-test".to_string())
+    }
+
+    // ── Get fan-out topology tests (connect_peer Get-suppression fix) ────
+
+    /// A peer actor that records the IDs of every Get it receives.
+    struct RecordingPeer {
+        received: Arc<std::sync::RwLock<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Actor for RecordingPeer {
+        async fn handle(&mut self, msg: Arc<Message>, _ctx: &ActorContext) {
+            if let Message::Get(get) = &*msg {
+                self.received
+                    .write()
+                    .expect("recording peer lock")
+                    .push(get.id.clone());
+            }
+        }
+    }
+
+    /// Starts a RecordingPeer and returns (addr, received-log handle).
+    async fn start_recording_peer(name: &str) -> (Addr, Arc<std::sync::RwLock<Vec<String>>>) {
+        let ctx = ActorContext::new(format!("{name}-host"));
+        let received = Arc::new(std::sync::RwLock::new(Vec::new()));
+        let (addr, _handle) = ctx.start_actor_with_handle(Box::new(RecordingPeer {
+            received: received.clone(),
+        }));
+        // Allow the actor to enter its run loop before the router sends to it.
+        crate::tokio_time::sleep(web_time::Duration::from_millis(50)).await;
+        (addr, received)
+    }
+
+    /// Polls the recording log until it holds `expected` entries or the
+    /// budget (1s) expires; returns a snapshot of what arrived.
+    async fn wait_for_gets(
+        received: &Arc<std::sync::RwLock<Vec<String>>>,
+        expected: usize,
+    ) -> Vec<String> {
+        for _ in 0..50 {
+            {
+                let log = received.read().expect("recording peer lock");
+                if log.len() >= expected {
+                    return log.clone();
+                }
+            }
+            crate::tokio_time::sleep(web_time::Duration::from_millis(20)).await;
+        }
+        received.read().expect("recording peer lock").clone()
+    }
+
+    /// Pure-client topology (Node::connect_peer, no OWM/WsServer): a Get
+    /// MUST reach the connected WsConn peer. The old blanket peer_addrs
+    /// marking assumed an OWM parent would forward — with none present the
+    /// Get was suppressed entirely and connect_peer clients could push but
+    /// never fetch (relay-side wire traces: zero Gets arriving).
+    #[tokio::test]
+    async fn get_fanout_pure_client_reaches_known_peer() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let (ws_peer, ws_log) = start_recording_peer("wsconn").await;
+
+        // Simulate the WsConn's Hi registration (peer_id → addr + known peer).
+        router.peer_addrs.insert("ws-peer".to_string(), ws_peer.clone());
+        router.known_peers.insert(ws_peer.clone());
+
+        let get = t4_get(Addr::noop(), "soul/a"); // from = local node actor
+        let get_id = get.id.clone();
+        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+
+        let got = wait_for_gets(&ws_log, 1).await;
+        assert_eq!(
+            got,
+            vec![get_id],
+            "pure-client topology: the Get must be delivered to the connected peer"
+        );
+    }
+
+    /// OWM/WsServer topology: server_peers fan out to their children, so
+    /// the blanket peer_addrs marking stays — the Get reaches the server
+    /// peer (OWM) and is NOT duplicated to the child WsConn directly.
+    #[tokio::test]
+    async fn get_fanout_owm_topology_no_direct_duplicate() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let (owm, owm_log) = start_recording_peer("owm").await;
+        let (ws_peer, ws_log) = start_recording_peer("wsconn").await;
+
+        // OWM is a server peer; its child WsConn is in peer_addrs.
+        router.server_peers.insert(owm.clone());
+        router.peer_addrs.insert("ws-peer".to_string(), ws_peer.clone());
+        router.known_peers.insert(ws_peer.clone());
+
+        let get = t4_get(Addr::noop(), "soul/a");
+        let get_id = get.id.clone();
+        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+
+        let owm_got = wait_for_gets(&owm_log, 1).await;
+        assert_eq!(
+            owm_got,
+            vec![get_id],
+            "OWM topology: the Get must be delivered via the server peer"
+        );
+        // Give the child a fair window — it must NOT receive a direct copy.
+        crate::tokio_time::sleep(web_time::Duration::from_millis(300)).await;
+        assert!(
+            ws_log.read().expect("recording peer lock").is_empty(),
+            "OWM topology: child WsConn must not get a duplicate direct send"
+        );
     }
 
     // ========================================================================
