@@ -975,17 +975,21 @@ impl Message {
                 return Err("not a json object");
             }
         };
+        // Gun.js accepts any string as a message ID and generates one if
+        // missing via String.random(9). BEAM follows the same convention for
+        // wire compatibility. Enable `strict-msg-id` feature for validation.
         let msg_id = match obj.get("#").and_then(|v| v.as_str()) {
-            Some(str) => str.to_string(),
-            _ => {
-                return Err("msg id not a string");
-            }
+            Some(str) if !str.is_empty() => str.to_string(),
+            _ => crate::utils::random_string(9),
         };
-        if msg_id.len() > 32 {
-            return Err("msg id too long (> 32)");
-        }
-        if !msg_id.chars().all(char::is_alphanumeric) {
-            return Err("msg_id must be alphanumeric");
+        #[cfg(feature = "strict-msg-id")]
+        {
+            if msg_id.len() > 32 {
+                return Err("msg id too long (> 32)");
+            }
+            if !msg_id.chars().all(char::is_alphanumeric) {
+                return Err("msg_id must be alphanumeric");
+            }
         }
         if obj.contains_key("put") {
             Self::from_put_obj(json, json_str, msg_id, from, allow_public_space)

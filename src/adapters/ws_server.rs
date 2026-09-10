@@ -150,9 +150,21 @@ impl WsServer {
                 tokio_native_tls::native_tls::TlsAcceptor::new(identity).unwrap(),
             );
 
-            let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
-                .await
-                .expect("failed to bind web UI port");
+            // Auxiliary surface: if the web UI port is unavailable (e.g. a
+            // lingering listener from a previous instance), degrade to
+            // running without the web UI rather than panicking — the
+            // WebSocket core is independent of it.
+            let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+                Ok(l) => l,
+                Err(e) => {
+                    log::warn!(
+                        "web UI port {} unavailable ({}); continuing without web UI",
+                        port,
+                        e
+                    );
+                    return;
+                }
+            };
 
             loop {
                 let (stream, _) = match listener.accept().await {
@@ -176,10 +188,20 @@ impl WsServer {
         }
 
         // Plain HTTP — manual handler (no warp dependency).
+        // Auxiliary surface: degrade to no-web-UI on bind failure (see
+        // TLS branch above) — never panic the worker over it.
         let _addr = format!("http://localhost:{}", port);
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
-            .await
-            .expect("failed to bind web UI port");
+        let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!(
+                    "web UI port {} unavailable ({}); continuing without web UI",
+                    port,
+                    e
+                );
+                return;
+            }
+        };
         loop {
             let (stream, _) = match listener.accept().await {
                 Ok(s) => s,
