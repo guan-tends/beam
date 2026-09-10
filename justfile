@@ -367,7 +367,7 @@ smoke-test:
     cd "$TMPDIR"
     cargo init --name beam-smoke
     cargo add beamdb
-    echo 'fn main() { let _ = beamdb::Beam::new(); }' > src/main.rs
+    echo 'fn main() { let _ = beamdb::Node::new(); }' > src/main.rs
     cargo build
     echo "=== SMOKE TEST PASS ✅ ==="
     rm -rf "$TMPDIR"
