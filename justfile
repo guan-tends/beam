@@ -152,7 +152,7 @@ docs-audit:
     echo "=== Checking cargo doc for warnings ==="
     RUSTDOCFLAGS='-Dwarnings' cargo doc --workspace --all-features --no-deps 2>&1 || true
     echo ""
-    echo "=== DOC AUDIT COMPLETE — review findings above ===""
+    echo "=== DOC AUDIT COMPLETE — review findings above ==="
 
 # ─── Stage 9: Benchmarks ────────────────────────────────────────────
 
