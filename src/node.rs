@@ -549,6 +549,17 @@ impl Node {
     /// Returns a [`broadcast::Receiver`] that will receive [`Value`] updates
     /// whenever the node's value changes. The current value (if any) is
     /// requested from storage via a `Get` message — it arrives asynchronously.
+    ///
+    /// # Burst behavior (Lagged)
+    ///
+    /// The channel is bounded ([`Config::broadcast_buffer_size`], default
+    /// 4096). If a consumer falls behind by more than the buffer during a
+    /// replay burst, `recv()` yields
+    /// [`tokio::sync::broadcast::error::RecvError::Lagged(n)`] — `n` values
+    /// were skipped and delivery resumes at the oldest retained value. This
+    /// is expected behavior under bursts, not an error condition: handle
+    /// (or log-and-continue) `Lagged`, as [`Node::once`] does. [`Node::on`]
+    /// itself returns the raw receiver; the policy lives with the consumer.
     pub fn on(&mut self) -> broadcast::Receiver<Value> {
         let key = if self.inner.path.len() > 1 {
             self.inner.path.last().cloned()
@@ -789,6 +800,13 @@ impl Node {
     /// Returns a [`broadcast::Receiver`] that emits `(child_key, value)` tuples
     /// for each child. The current children (if any) are requested from storage
     /// via a `Get` message.
+    ///
+    /// # Burst behavior (Lagged)
+    ///
+    /// Same bounded-channel semantics as [`Node::on`]: under a replay burst
+    /// larger than [`Config::broadcast_buffer_size`], `recv()` yields
+    /// `RecvError::Lagged(n)` (n values skipped, delivery resumes at the
+    /// oldest retained). Expected under bursts — handle, don't panic.
     pub fn map(&self) -> broadcast::Receiver<(String, Value)> {
         let node_id = self.inner.uid.read().to_string();
         let addr = self.inner.addr.read().clone().unwrap();
@@ -1528,6 +1546,75 @@ mod tests {
         assert!(
             start.elapsed() < Duration::from_millis(90),
             "local value should resolve well before the default wait elapses"
+        );
+    }
+
+    // ── T6: Lagged-resilient receive (burst test) ──────────────────────
+
+    /// A replay burst larger than the broadcast buffer must NOT panic —
+    /// the pre-T6 code did `.expect("recv error??")` on Lagged, crashing
+    /// the node on a routine burst. With buffer size 2 and a burst of 10,
+    /// the receiver lags, but once() continues and returns the next
+    /// retained value (or the eventually-put target value).
+    #[tokio::test]
+    async fn once_survives_replay_burst_with_tiny_buffer() {
+        let mut node = Node::new_with_config(
+            crate::node::Config {
+                broadcast_buffer_size: 2,
+                ..Default::default()
+            },
+            vec![Box::new(crate::adapters::MemoryStorage::new()) as Box<dyn crate::actor::Actor>],
+            Vec::new(),
+        );
+
+        // Subscribe, then hammer past the buffer to force Lagged.
+        let mut sub = node.get("burst").on();
+        for i in 0..10 {
+            node.get("burst")
+                .put(format!("v{i}").into())
+                .await
+                .expect("put should succeed");
+            // Yield so puts reach the broadcast channel before the next.
+            crate::tokio_time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // Drain through the Lagged errors: recv() must yield Lagged (not
+        // panic) and then resume delivering retained values.
+        let mut saw_lagged = false;
+        let mut got_value_after_lag = false;
+        for _ in 0..5 {
+            match crate::tokio_time::timeout(Duration::from_millis(200), sub.recv()).await {
+                Ok(Ok(_val)) => {
+                    if saw_lagged {
+                        got_value_after_lag = true;
+                        break;
+                    }
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    saw_lagged = true;
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    panic!("channel must not close");
+                }
+                Err(_) => break, // no more values within timeout
+            }
+        }
+        assert!(
+            saw_lagged,
+            "10 values into a 2-slot buffer must produce Lagged"
+        );
+        assert!(
+            got_value_after_lag,
+            "delivery must resume after a Lagged event"
+        );
+
+        // The critical regression: once() over the same lagged path must
+        // return a value (not panic) — exercising the T6 policy directly.
+        let result = node.get("burst").once(Some(Duration::from_millis(500))).await;
+        assert_eq!(
+            result,
+            Some("v9".into()),
+            "once() must resolve to the final value through the burst"
         );
     }
 
