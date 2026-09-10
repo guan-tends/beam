@@ -1,10 +1,29 @@
 {
   "name": "msg_id_too_long",
-  "description": "Message ID exceeds 32 character limit — parser must reject",
+  "description": "Message ID longer than 32 chars \u2014 accepted (Gun.js imposes no length limit; strict validation lives behind the strict-msg-id feature flag)",
   "category": "edge",
   "input": "{\"put\":{\"soul/a\":{\"name\":\"x\"}},\"#\":\"abcdefghijklmnopqrstuvwxyz0123456789\"}",
   "expected": {
-    "parses": false,
-    "error": "msg id too long"
-  }
+    "parses": true,
+    "kind": "Put",
+    "souls": [
+      "soul/a"
+    ],
+    "fields": {
+      "soul/a": [
+        "name"
+      ]
+    },
+    "values": {
+      "soul/a": {
+        "name": "x"
+      }
+    },
+    "timestamps": {
+      "soul/a": {
+        "name": 0.0
+      }
+    }
+  },
+  "allow_public_space": true
 }
