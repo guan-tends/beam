@@ -669,8 +669,7 @@ mod tests {
     async fn start_actor_with_handle_resolves_on_stop_signal() {
         let ctx = ActorContext::new("t3-stop".to_string());
         let received = Arc::new(RwLock::new(Vec::new()));
-        let (_addr, handle) =
-            ctx.start_actor_with_handle(Box::new(TestActor { received }));
+        let (_addr, handle) = ctx.start_actor_with_handle(Box::new(TestActor { received }));
 
         // Actor is running (default run loop waits on mailbox/stop).
         crate::tokio_time::sleep(web_time::Duration::from_millis(50)).await;
@@ -681,8 +680,7 @@ mod tests {
 
         // Stop signal → run loop breaks → handle resolves.
         ctx.stop();
-        let resolved =
-            crate::tokio_time::timeout(web_time::Duration::from_secs(2), handle).await;
+        let resolved = crate::tokio_time::timeout(web_time::Duration::from_secs(2), handle).await;
         assert!(
             resolved.is_ok(),
             "handle must resolve after the stop signal"

@@ -34,12 +34,12 @@
 //! ```
 
 use crate::ack::{AckPolicy, ReplicationStatus};
-use crate::sentinel::QUORUM_MET;
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::MemoryStorage;
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::metrics::Metrics;
 use crate::router::Router;
+use crate::sentinel::QUORUM_MET;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::FxHashMap;
 use crate::utils::random_string;
@@ -425,7 +425,8 @@ impl Node {
                 }
                 if is_replay {
                     if let Some(sender) = self.inner.map_sender.read().as_ref() {
-                        let _ = sender.send((crate::sentinel::REPLAY_COMPLETE.to_string(), Value::Null));
+                        let _ = sender
+                            .send((crate::sentinel::REPLAY_COMPLETE.to_string(), Value::Null));
                     }
                 }
             } else {
@@ -632,9 +633,7 @@ impl Node {
                 Err(_) => return None,
                 // Subscription channel closed (node stopped) — no value
                 // will ever arrive.
-                Ok(Err(
-                    tokio::sync::broadcast::error::RecvError::Closed,
-                )) => return None,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return None,
                 // Bounded-buffer overflow during a replay burst: the receiver
                 // skipped `n` values but resumes at the oldest retained one.
                 // Log and keep waiting — the next delivered value satisfies
@@ -1350,14 +1349,6 @@ impl Node {
         }
     }
 
-    /// Connects to a relay server via WebSocket (WASM/browser only).
-    ///
-    /// Browser counterpart to connect_peer. Uses web_sys WebSocket
-    /// instead of tokio-tungstenite. The connection is async.
-    ///
-    /// # Arguments
-    ///
-    /// * url - WebSocket URL (e.g. wss://relay.example.com/ws)
     #[cfg(target_arch = "wasm32")]
     /// Connects to a remote relay via WebSocket (WASM/browser) with
     /// automatic reconnection.
@@ -1610,7 +1601,10 @@ mod tests {
 
         // The critical regression: once() over the same lagged path must
         // return a value (not panic) — exercising the T6 policy directly.
-        let result = node.get("burst").once(Some(Duration::from_millis(500))).await;
+        let result = node
+            .get("burst")
+            .once(Some(Duration::from_millis(500)))
+            .await;
         assert_eq!(
             result,
             Some("v9".into()),

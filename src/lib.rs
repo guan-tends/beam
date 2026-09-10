@@ -41,7 +41,7 @@ pub mod utils; // pub for benchmarking
 pub use dup::Dup;
 pub use sentinel::{ACK, ERR, QUORUM_MET, REPLAY_COMPLETE};
 pub mod sea;
-pub use node::{Config, Node, DEFAULT_ONCE_WAIT};
+pub use node::{Config, DEFAULT_ONCE_WAIT, Node};
 pub use types::Value;
 
 #[cfg(target_arch = "wasm32")]
