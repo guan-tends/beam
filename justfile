@@ -73,7 +73,10 @@ test-wasm:
     wasm-pack build --target web --release --no-default-features
     cp pkg/beam_bg.wasm pkg/beam.js pkg/beam.d.ts browser-test/
     echo "=== Playwright browser tests (gun-beam interop + OPFS persistence) ==="
-    npx playwright test --reporter=line
+    # Xvfb gives the browser a real display; dbus-run-session gives it a
+    # session bus (full chromium aborts at launch without one under CI).
+    # See playwright.config.mjs for the executablePath rationale.
+    xvfb-run -a dbus-run-session -- npx playwright test --reporter=line
     echo "=== WASM TESTS PASS ✅ (9 unit + 8 node integration + 5 playwright) ==="
 
 # ─── Stage 4: Fixture Tests ─────────────────────────────────────────
