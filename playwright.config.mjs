@@ -6,13 +6,15 @@ export default defineConfig({
   retries: 0,
   use: {
     headless: true,
-    // Headless CI over SSH: no X display, no /dev/dri GPU nodes.
-    // Playwright 1.62's default GPU fallback (--enable-unsafe-swiftshader)
-    // fails EGL/Vulkan init on such boxes and the browser process dies
-    // mid-test ("Target page, context or browser has been closed").
-    // --disable-gpu skips GPU init entirely; software compositing only.
+    // CI runs under Xvfb + dbus-run-session (see justfile test-wasm).
+    // executablePath pins Playwright's chromium build 1148 — the version
+    // this suite was green with at v0.17.0. The chrome-headless-shell that
+    // Playwright 1.62 downloads by default (CFT 151) silently kills pages
+    // running wasm async runtimes ~1s after init(); build 1148 does not.
+    // --disable-gpu keeps the run deterministic (software compositing).
     launchOptions: {
-      args: ['--disable-gpu'],
+      executablePath: '/home/guan/.cache/ms-playwright/chromium-1148/chrome-linux/chrome',
+      args: ['--disable-gpu', '--no-sandbox'],
     },
   },
   projects: [
