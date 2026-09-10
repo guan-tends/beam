@@ -242,6 +242,20 @@ pub struct Router {
     relay_servers: FxHashSet<Addr>,
     dup: Dup,
     seen_get_messages: BoundedHashMap<String, SeenGetMessage>,
+    /// The local node's outstanding soul subscriptions (Gun `node.ask`
+    /// registry parity), keyed by node_id — latest Get per soul wins.
+    ///
+    /// Populated in `handle` for Gets originating from the local node tree
+    /// (provenance: `from` not in `known_peers` — local Node actors never
+    /// send Hi, while every transport actor (WsConn/WasmWsConn/WebRtcPeer)
+    /// does, before any Gets flow through it). Re-issued with fresh message
+    /// IDs on peer (re)connect (see the Hi handler) so a reconnecting peer
+    /// immediately serves the node's live subscriptions — Gun.js
+    /// `mesh.js:338` re-asks `node.ask` souls on `'hi'`.
+    ///
+    /// Bounded to [`SEEN_MSGS_MAX_SIZE`] (Gun's own ceiling for ask-like
+    /// registries is ~10K) with FIFO eviction.
+    local_asks: BoundedHashMap<String, Get>,
     subscribers_by_topic: FxHashMap<String, FxHashSet<Addr>>,
     msg_counter: AtomicUsize,
     /// Tracks in-flight quorum-acked Puts.
@@ -360,7 +374,23 @@ impl Actor for Router {
             Message::BatchPut(batch) => {
                 self.handle_batch_put(batch);
             }
-            Message::Get(get) => self.handle_get(get),
+            Message::Get(get) => {
+                // Record local-origin Gets (the node tree's subscriptions)
+                // for resubscribe-on-reconnect. Provenance: transport actors
+                // (WsConn/WasmWsConn/WebRtcPeer) all send Hi on pre_start and
+                // are registered in known_peers BEFORE any Get flows through
+                // them — so a Get whose `from` is NOT a known peer was issued
+                // by a local Node actor. Remote subscriptions are NOT recorded
+                // here: the remote re-issues its own asks on ITS reconnect
+                // (Gun mesh.js parity — each side owns its node.ask registry).
+                if !self.known_peers.contains(&get.from) {
+                    let topic = get.node_id.split("/").next().unwrap_or("").to_string();
+                    debug!("Router recording local ask for {} (topic {})", get.node_id, topic);
+                    self.local_asks
+                        .insert(get.node_id.clone(), (*get).clone());
+                }
+                self.handle_get(get);
+            }
             Message::Flush(flush) => self.handle_flush(flush),
             Message::Hi {
                 from,
@@ -406,6 +436,34 @@ impl Actor for Router {
                         is_ack: Some(msg_id.clone()), // ack the incoming # ID
                         msg_id: crate::utils::random_string(8),
                     });
+
+                    // Resubscribe-on-reconnect (Gun mesh.js 'hi' parity).
+                    //
+                    // A peer's initial Hi means a (re)connection just came
+                    // up — our outstanding subscriptions may have missed
+                    // data while the link was down. Re-issue every recorded
+                    // local ask through the normal pipeline (storage read
+                    // actors + relays + subscribers) with FRESH message IDs:
+                    // reusing the original IDs would make
+                    // `seen_get_messages` silently drop the re-issued Gets.
+                    //
+                    // Gun.js does exactly this in mesh.js's `'hi'` handler
+                    // (re-asks all `node.ask` souls when a peer connects);
+                    // sent AFTER the dam:"?" ack above, since Gun.js
+                    // ignores Gets from peers that haven't completed the
+                    // PID handshake.
+                    if !self.local_asks.is_empty() {
+                        let asks: Vec<Get> =
+                            self.local_asks.iter().map(|(_, get)| get.clone()).collect();
+                        for mut get in asks {
+                            get.id = crate::utils::random_string(8);
+                            debug!(
+                                "Router resubscribing local ask for {} (fresh id {})",
+                                get.node_id, get.id
+                            );
+                            self.handle_get(&get);
+                        }
+                    }
                 }
             }
             Message::RtcSignal(rtc) => {
@@ -485,6 +543,7 @@ impl Router {
             relay_servers: FxHashSet::default(),
             dup: Dup::default_gun(),
             seen_get_messages: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
+            local_asks: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
             subscribers_by_topic: FxHashMap::default(),
             msg_counter: AtomicUsize::new(0),
             quorum_entries: BoundedHashMap::new(SEEN_MSGS_MAX_SIZE),
@@ -1389,6 +1448,174 @@ mod tests {
         let metrics = Arc::new(Metrics::new());
         let router = Router::new(vec![], vec![], metrics);
         assert_eq!(router.msg_counter.load(Ordering::Relaxed), 0);
+    }
+
+    // ── T4: resubscribe-on-reconnect (local_asks registry) ──────────────
+
+    fn t4_get(from: Addr, node_id: &str) -> Get {
+        Get::new(node_id.to_string(), None, from)
+    }
+
+    /// Local-origin Gets (from NOT a known peer) are recorded in the
+    /// local_asks registry, latest per soul.
+    #[tokio::test]
+    async fn t4_local_get_is_recorded() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let local = Addr::noop(); // not in known_peers → local origin
+        let get = t4_get(local, "soul/a");
+
+        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+        assert!(router.local_asks.get(&"soul/a".to_string()).is_some());
+    }
+
+    /// A repeat local Get for the same soul replaces the recorded one
+    /// (latest wins — Gun's node.ask registry is a per-soul map).
+    #[tokio::test]
+    async fn t4_local_get_latest_wins() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let local = Addr::noop();
+
+        let first = t4_get(local.clone(), "soul/a");
+        router.handle(Arc::new(Message::Get(first)), &test_ctx()).await;
+        let second = t4_get(local.clone(), "soul/a");
+        let second_id = second.id.clone();
+        router.handle(Arc::new(Message::Get(second)), &test_ctx()).await;
+
+        assert_eq!(router.local_asks.len(), 1, "one ask per soul");
+        let recorded = router.local_asks.get(&"soul/a".to_string()).unwrap();
+        assert_eq!(recorded.id, second_id, "latest Get per soul wins");
+    }
+
+    /// Remote-origin Gets (from a known peer — i.e. a transport actor that
+    /// sent Hi) are NOT recorded: each side owns its own ask registry
+    /// (Gun parity — the remote re-issues its asks on ITS reconnect).
+    #[tokio::test]
+    async fn t4_remote_get_not_recorded() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let ws_conn = Addr::noop(); // transport actor addr
+
+        // The transport actor registered via Hi first (pre_start ordering).
+        let hi = Message::Hi {
+            from: ws_conn.clone(),
+            peer_id: "remote-peer".to_string(),
+            is_ack: None,
+            msg_id: "hi1".to_string(),
+        };
+        router.handle(Arc::new(hi), &test_ctx()).await;
+
+        // Its Gets must not be recorded as local asks.
+        let get = t4_get(ws_conn, "soul/a");
+        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+        assert!(router.local_asks.is_empty(), "remote Gets are not local asks");
+    }
+
+    /// Hi (initial contact) re-issues recorded local asks with FRESH ids
+    /// through the normal pipeline — observable via seen_get_messages
+    /// (the re-issued Get is registered under its new id) and
+    /// subscribers_by_topic (the re-issued Get re-registers the topic).
+    #[tokio::test]
+    async fn t4_hi_reissues_local_asks_with_fresh_ids() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let local = Addr::noop();
+
+        let get = t4_get(local, "soul/a");
+        let original_id = get.id.clone();
+        router.handle(Arc::new(Message::Get(get)), &test_ctx()).await;
+
+        // A peer connects (initial Hi, is_ack = None).
+        let hi = Message::Hi {
+            from: Addr::noop(),
+            peer_id: "new-peer".to_string(),
+            is_ack: None,
+            msg_id: "hi2".to_string(),
+        };
+        router.handle(Arc::new(hi), &test_ctx()).await;
+
+        // The re-issued Get went through handle_get: it is seen under a
+        // NEW id (the original would have been dropped as a dupe), and
+        // the topic subscription is registered.
+        let seen_ids: Vec<&String> = router
+            .seen_get_messages
+            .iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(
+            seen_ids.iter().any(|id| id.as_str() != original_id.as_str()),
+            "re-issued Get must carry a fresh id; seen: {seen_ids:?}"
+        );
+        assert!(
+            router
+                .subscribers_by_topic
+                .get("soul")
+                .is_some_and(|subs| !subs.is_empty()),
+            "re-issued Get must register the topic subscription"
+        );
+    }
+
+    /// An ACK Hi (is_ack = Some) does NOT trigger re-issue — it is our own
+    /// response echoing back, not a new peer connection (Gun fires on the
+    /// initial 'hi' only).
+    #[tokio::test]
+    async fn t4_ack_hi_does_not_reissue() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let local = Addr::noop();
+
+        router.handle(Arc::new(Message::Get(t4_get(local, "soul/a"))), &test_ctx()).await;
+
+        // Count seen entries attributable to re-issue (none yet beyond the
+        // original Get's own registration).
+        let before = router.seen_get_messages.len();
+
+        let ack_hi = Message::Hi {
+            from: Addr::noop(),
+            peer_id: "some-peer".to_string(),
+            is_ack: Some("orig".to_string()),
+            msg_id: "ack1".to_string(),
+        };
+        router.handle(Arc::new(ack_hi), &test_ctx()).await;
+
+        assert_eq!(
+            router.seen_get_messages.len(),
+            before,
+            "ack Hi must not re-issue local asks"
+        );
+    }
+
+    /// The local_asks registry is FIFO-bounded at SEEN_MSGS_MAX_SIZE
+    /// (Gun's ~10K ask ceiling) — eviction keeps the mesh bounded.
+    #[tokio::test]
+    async fn t4_local_asks_bounded() {
+        let metrics = Arc::new(Metrics::new());
+        let mut router = Router::new(vec![], vec![], metrics);
+        let local = Addr::noop();
+
+        for i in 0..(SEEN_MSGS_MAX_SIZE + 50) {
+            router.handle(
+                Arc::new(Message::Get(t4_get(local.clone(), &format!("soul{i}")))),
+                &test_ctx(),
+            ).await;
+        }
+        assert_eq!(
+            router.local_asks.len(),
+            SEEN_MSGS_MAX_SIZE,
+            "registry must evict at capacity"
+        );
+        // Oldest souls evicted; newest retained.
+        assert!(router.local_asks.get(&"soul0".to_string()).is_none());
+        assert!(router
+            .local_asks
+            .get(&format!("soul{}", SEEN_MSGS_MAX_SIZE + 49))
+            .is_some());
+    }
+
+    /// Minimal ActorContext for driving `Router::handle` directly in tests.
+    fn test_ctx() -> ActorContext {
+        ActorContext::new("router-test".to_string())
     }
 
     // ========================================================================
