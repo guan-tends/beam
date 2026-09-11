@@ -356,7 +356,7 @@ github-release version:
     # Push the tag BEFORE gh release create — gh attaches to pre-existing
     # remote tag refs and does NOT create fresh ones (v0.18.0 lesson).
     git push github "refs/tags/{{version}}:refs/tags/{{version}}"
-    NOTES=$(awk "/^## \\[${VNUM}\\]/{f=1; next} f && /^## \\[{f=0} f" CHANGELOG.md)
+    NOTES=$(python3 -c "import sys,re; v=sys.argv[1]; t=open('CHANGELOG.md').read(); m=re.search(r'(?ms)^## \\['+re.escape(v)+r'\\][^\\n]*\\n(.*?)(?=^## \\[|\\Z)', t); print(m.group(1) if m else '', end='')" "$VNUM")
     if [ -z "$NOTES" ]; then
         echo "ERROR: no CHANGELOG section found for [${VNUM}] — refusing empty notes"
         exit 1
