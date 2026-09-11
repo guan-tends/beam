@@ -97,7 +97,13 @@ use web_time::Duration;
 ///
 /// The `__` prefix is filtered during normal data iteration so this
 /// sentinel never collides with user data.
-pub const QUORUM_MET_SENTINEL: &str = "__quorum_met__";
+///
+/// **Deprecated alias:** the canonical constant now lives in
+/// [`crate::sentinel::QUORUM_MET`] (single source of truth for all BEAM
+/// protocol sentinels). This alias is kept for API compatibility; prefer
+/// `beam::sentinel::QUORUM_MET` in new code.
+#[deprecated(since = "0.19.0", note = "use beam::sentinel::QUORUM_MET instead")]
+pub const QUORUM_MET_SENTINEL: &str = crate::sentinel::QUORUM_MET;
 
 /// Default timeout for quorum requests, matching Gun.js `lack = 9000ms`.
 ///
@@ -297,9 +303,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // asserts the deprecated alias still equals the wire string
     fn sentinel_constant_is_stable() {
         // The wire-format string is load-bearing — any change would
         // break interop with existing BEAM nodes. Lock it down.
+        // (The canonical const lives in crate::sentinel; this asserts the
+        // compatibility alias in ack.rs keeps mirroring it.)
+        assert_eq!(QUORUM_MET_SENTINEL, crate::sentinel::QUORUM_MET);
         assert_eq!(QUORUM_MET_SENTINEL, "__quorum_met__");
     }
 

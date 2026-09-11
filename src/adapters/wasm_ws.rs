@@ -52,8 +52,38 @@ impl WasmWsConn {
     /// The WebSocket begins connecting immediately. Messages sent via
     /// `handle()` before `onopen` fires are buffered in the outbox and
     /// flushed when the connection opens.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the WebSocket cannot be constructed (invalid URL scheme,
+    /// non-browser environment). The reconnecting caller
+    /// ([`crate::node::Node::connect_peer_wasm`]) uses [`Self::try_new`]
+    /// instead, which reports construction failures instead of panicking.
     pub fn new(url: &str, ctx: &ActorContext, allow_public_space: bool) -> Self {
         let ws = WebSocket::new(url).expect("Failed to create WebSocket");
+        Self::from_socket(ws, ctx, allow_public_space)
+    }
+
+    /// Like [`Self::new`] but returns construction errors instead of
+    /// panicking — the reconnect loop treats a failed construction as a
+    /// failed connection attempt and backs off.
+    pub fn try_new(
+        url: &str,
+        ctx: &ActorContext,
+        allow_public_space: bool,
+    ) -> Result<Self, JsValue> {
+        let ws = WebSocket::new(url)?;
+        Ok(Self::from_socket(ws, ctx, allow_public_space))
+    }
+
+    /// Wires an already-constructed WebSocket into a `WasmWsConn` actor.
+    ///
+    /// Installs the four lifecycle callbacks (`onopen` Hi + outbox flush,
+    /// `onmessage` parse-and-forward, `onerror`/`onclose` actor stop) and
+    /// returns the actor. Split from [`Self::new`] so the reconnect loop
+    /// in `connect_peer_wasm` can feed in a fresh socket per attempt
+    /// (closure wiring written once — DRY).
+    pub fn from_socket(ws: WebSocket, ctx: &ActorContext, allow_public_space: bool) -> Self {
         let peer_id = ctx.peer_id.read().clone();
         let router = ctx.router.read().clone();
         let addr = ctx.addr.clone();
@@ -105,12 +135,23 @@ impl WasmWsConn {
             });
 
         // --- onerror ---
+        let stop_ctx_err = stop_ctx.clone();
         let onerror: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {
-            stop_ctx.stop();
+            stop_ctx_err.stop();
         });
 
-        // --- onclose ---
-        let onclose: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {});
+        // --- onclose: end the actor so the reconnect loop can respawn ---
+        //
+        // The browser fires `close` after `error` (failed connection) or on
+        // its own (server closed / network drop). Stopping the actor ends
+        // its run loop, which resolves the lifecycle `JoinHandle` that
+        // `connect_peer_wasm`'s reconnect loop awaits — resumption there IS
+        // the disconnect signal (same chain as the native `WsConn`:
+        // child task ends → ctx.stop() → run breaks → handle resolves).
+        // Firing alongside `onerror`'s stop is idempotent (`is_stopped`).
+        let onclose: Closure<dyn FnMut(JsValue)> = Closure::new(move |_event: JsValue| {
+            stop_ctx.stop();
+        });
 
         ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
         ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));

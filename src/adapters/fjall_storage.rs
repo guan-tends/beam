@@ -434,7 +434,7 @@ fn build_ack_children(result: &Result<(), String>) -> (Children, Option<String>)
     match result {
         Ok(()) => (
             vec![(
-                "_ack".to_string(),
+                crate::sentinel::ACK.to_string(),
                 NodeData {
                     value: Value::Text("ok".to_string()),
                     updated_at: now_millis,
@@ -448,7 +448,7 @@ fn build_ack_children(result: &Result<(), String>) -> (Children, Option<String>)
             error!("fjall put failed: {}", e);
             (
                 vec![(
-                    "_err".to_string(),
+                    crate::sentinel::ERR.to_string(),
                     NodeData {
                         value: Value::Text(e.clone()),
                         updated_at: now_millis,
@@ -476,7 +476,7 @@ fn build_flush_ack_children(
     match result {
         Ok(Ok(())) => (
             vec![(
-                "_ack".to_string(),
+                crate::sentinel::ACK.to_string(),
                 NodeData {
                     value: Value::Text("ok".to_string()),
                     updated_at: now_millis,
@@ -490,7 +490,7 @@ fn build_flush_ack_children(
             error!("fjall persist failed: {}", e);
             (
                 vec![(
-                    "_err".to_string(),
+                    crate::sentinel::ERR.to_string(),
                     NodeData {
                         value: Value::Text(e.clone()),
                         updated_at: now_millis,
@@ -506,7 +506,7 @@ fn build_flush_ack_children(
             error!("fjall flush task panicked: {:?}", e);
             (
                 vec![(
-                    "_err".to_string(),
+                    crate::sentinel::ERR.to_string(),
                     NodeData {
                         value: Value::Text(msg.clone()),
                         updated_at: now_millis,
@@ -530,7 +530,7 @@ fn send_ack(
     ctx: &ActorContext,
 ) {
     let mut nodes = BTreeMap::default();
-    nodes.insert("_ack".to_string(), ack_children);
+    nodes.insert(crate::sentinel::ACK.to_string(), ack_children);
     let ack = Put::new(nodes, Some(put_id.to_string()), ctx.addr.clone());
     let _ = put_from.send(Message::Put(ack));
     if err_msg.is_some() {

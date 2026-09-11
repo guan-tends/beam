@@ -33,12 +33,13 @@
 //! // sub.recv().await == Some(Value::Text("Hello World!"))
 //! ```
 
-use crate::ack::{AckPolicy, QUORUM_MET_SENTINEL, ReplicationStatus};
+use crate::ack::{AckPolicy, ReplicationStatus};
 use crate::actor::{Actor, ActorContext, Addr};
 use crate::adapters::MemoryStorage;
 use crate::message::{BatchPut, Flush, Get, Message, Put};
 use crate::metrics::Metrics;
 use crate::router::Router;
+use crate::sentinel::QUORUM_MET;
 use crate::types::{Children, NodeData, Value};
 use crate::utils::FxHashMap;
 use crate::utils::random_string;
@@ -52,6 +53,23 @@ use tokio::sync::{broadcast, oneshot};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_websockets::ClientBuilder;
 use web_time::{Duration, SystemTime};
+
+/// Default wait for [`Node::once`] when no explicit timeout is given.
+///
+/// **99ms, matching Gun.js's `once()` default** (`opt.wait || 99`,
+/// `src/on.js:66` in the reference implementation). The previous BEAM
+/// default was 66ms with a doc comment claiming to "match Gun.js's
+/// `opt.wait`" — that value was never Gun's; this constant fixes both
+/// the number and the claim.
+///
+/// Semantics: this is a **liveness bound, not a correctness signal**.
+/// Gun's wire protocol has no "not found" (NACK) response, so absence
+/// cannot be positively acked — the bounded wait is what bounds the
+/// search (Gun's own `once()` is timer-based for exactly this reason).
+/// Local/likely-cached reads resolve well within 99ms; raise it per-call
+/// (`once(Some(Duration::from_millis(1000)))`) when waiting on remote
+/// peers over slow links.
+pub const DEFAULT_ONCE_WAIT: Duration = Duration::from_millis(99);
 
 /// Configuration for a [`Node`] and its associated adapters.
 ///
@@ -407,7 +425,8 @@ impl Node {
                 }
                 if is_replay {
                     if let Some(sender) = self.inner.map_sender.read().as_ref() {
-                        let _ = sender.send(("__beam_replay_complete__".to_string(), Value::Null));
+                        let _ = sender
+                            .send((crate::sentinel::REPLAY_COMPLETE.to_string(), Value::Null));
                     }
                 }
             } else {
@@ -531,6 +550,17 @@ impl Node {
     /// Returns a [`broadcast::Receiver`] that will receive [`Value`] updates
     /// whenever the node's value changes. The current value (if any) is
     /// requested from storage via a `Get` message — it arrives asynchronously.
+    ///
+    /// # Burst behavior (Lagged)
+    ///
+    /// The channel is bounded ([`Config::broadcast_buffer_size`], default
+    /// 4096). If a consumer falls behind by more than the buffer during a
+    /// replay burst, `recv()` yields
+    /// [`tokio::sync::broadcast::error::RecvError::Lagged(n)`] — `n` values
+    /// were skipped and delivery resumes at the oldest retained value. This
+    /// is expected behavior under bursts, not an error condition: handle
+    /// (or log-and-continue) `Lagged`, as [`Node::once`] does. [`Node::on`]
+    /// itself returns the raw receiver; the policy lives with the consumer.
     pub fn on(&mut self) -> broadcast::Receiver<Value> {
         let key = if self.inner.path.len() > 1 {
             self.inner.path.last().cloned()
@@ -566,18 +596,56 @@ impl Node {
     /// Reads the node's value once, or `None` if not found within the timeout.
     ///
     /// This is a convenience wrapper around [`Node::on`] with a timeout.
-    /// The default timeout is 66ms (matching Gun.js's `opt.wait`).
+    /// The default timeout is [`DEFAULT_ONCE_WAIT`] (99ms, matching Gun.js's
+    /// `once()` default — `opt.wait || 99`, `src/on.js:66` in the reference).
+    ///
+    /// # Why a timeout?
+    ///
+    /// Gun's wire protocol has no "not found" (NACK) signal — the reference
+    /// implementation notes at `src/root.js` that "not found is a sensitive
+    /// issue" and solves it with a timer, not an ack. BEAM mirrors that
+    /// contract: sentinels (`_ack`/`_err`) confirm *writes*; a bounded wait
+    /// bounds the search for data that may simply not exist. See
+    /// [`DEFAULT_ONCE_WAIT`] for tuning guidance.
     ///
     /// # Arguments
     ///
-    /// * `wait` - Optional timeout. Defaults to 66ms.
+    /// * `wait` - Optional timeout. Defaults to [`DEFAULT_ONCE_WAIT`] (99ms).
+    ///
+    /// # Errors
+    ///
+    /// Returns `None` on timeout or if the subscription channel closes
+    /// before a value arrives. On [`tokio::sync::broadcast::error::RecvError::Lagged`]
+    /// (bounded-buffer overflow during a replay burst), the wait continues
+    /// with the next retained value rather than panicking.
     pub async fn once(&mut self, wait: Option<Duration>) -> Option<Value> {
-        let val =
-            crate::tokio_time::timeout(wait.unwrap_or(Duration::from_millis(66)), self.on().recv())
-                .await
-                .ok()?
-                .expect("recv error??");
-        Some(val)
+        // Budget computed once so `Lagged` retries share the caller's
+        // original timeout — lag recovery must not extend the wait.
+        // (Remaining-budget pattern: portable `timeout` + `web_time::Instant`
+        // on both native and WASM — tokio_with_wasm has no `timeout_at`.)
+        let deadline = web_time::Instant::now() + wait.unwrap_or(DEFAULT_ONCE_WAIT);
+        loop {
+            let remaining = deadline.saturating_duration_since(web_time::Instant::now());
+            match crate::tokio_time::timeout(remaining, self.on().recv()).await {
+                // Budget exhausted waiting for a value — the Gun-parity
+                // "not found" outcome (no NACK in the protocol; see doc
+                // comment above).
+                Err(_) => return None,
+                // Subscription channel closed (node stopped) — no value
+                // will ever arrive.
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return None,
+                // Bounded-buffer overflow during a replay burst: the receiver
+                // skipped `n` values but resumes at the oldest retained one.
+                // Log and keep waiting — the next delivered value satisfies
+                // `once()` just as well, and panicking here would turn a
+                // routine burst into a node crash (was: `.expect("recv error??")`).
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                    warn!("once() receiver lagged, {} values skipped; continuing", n);
+                    continue;
+                }
+                Ok(Ok(val)) => return Some(val),
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -627,12 +695,20 @@ impl Node {
                     Ok(stream) => match ClientBuilder::from_uri(uri).connect_on(stream).await {
                         Ok((socket, _)) => {
                             let conn = crate::adapters::WsConn::new(socket, allow_public_space);
-                            let addr = ctx.start_actor(Box::new(conn));
+                            let (addr, handle) = ctx.start_actor_with_handle(Box::new(conn));
                             info!("BEAM connected to peer {} (addr: {})", url, addr);
                             backoff = Duration::from_secs(1);
-                            // Stay alive; WsConn runs until disconnect.
-                            // TODO: detect disconnect for faster reconnect loop.
-                            crate::tokio_time::sleep(Duration::from_secs(3600)).await;
+                            // Await the WsConn actor's lifecycle: its receive
+                            // loop ends when the WebSocket closes (peer close
+                            // frame, TCP reset, or relay shutdown), which
+                            // triggers ctx.stop() → the actor's run loop
+                            // breaks → this handle resolves. Resumption here
+                            // IS the disconnect signal — the loop re-enters
+                            // and reconnects immediately.
+                            // (Was: sleep(3600s) — reconnect latency up to
+                            // one hour after a mid-session disconnect.)
+                            let _ = handle.await;
+                            warn!("BEAM peer {} disconnected; reconnecting", url);
                         }
                         Err(e) => {
                             warn!(
@@ -723,6 +799,13 @@ impl Node {
     /// Returns a [`broadcast::Receiver`] that emits `(child_key, value)` tuples
     /// for each child. The current children (if any) are requested from storage
     /// via a `Get` message.
+    ///
+    /// # Burst behavior (Lagged)
+    ///
+    /// Same bounded-channel semantics as [`Node::on`]: under a replay burst
+    /// larger than [`Config::broadcast_buffer_size`], `recv()` yields
+    /// `RecvError::Lagged(n)` (n values skipped, delivery resumes at the
+    /// oldest retained). Expected under bursts — handle, don't panic.
     pub fn map(&self) -> broadcast::Receiver<(String, Value)> {
         let node_id = self.inner.uid.read().to_string();
         let addr = self.inner.addr.read().clone().unwrap();
@@ -798,6 +881,7 @@ impl Node {
     /// 2. Send `Message::Put` to the router
     /// 3. Storage adapter commits, then sends
     ///    `Put { in_response_to: Some(id), updated_nodes: { "_ack": { "_ack"|"_err": ... } } }`
+    ///    (the child keys are [`crate::sentinel::ACK`] / [`crate::sentinel::ERR`])
     ///    back to this node's `addr` directly (NOT through the router)
     /// 4. `Node::handle_put` drains `pending_puts` and resolves the oneshot
     ///
@@ -822,6 +906,7 @@ impl Node {
     /// 5. Router's `handle_put` ack branch counts each peer ack in the QuorumEntry
     /// 6. When `acked_by >= policy.quorum`, Router sends a sentinel
     ///    `Put { @: put_id, updated_nodes: { "__quorum_met__": ack_count } }`
+    ///    (the node ID is [`crate::sentinel::QUORUM_MET`])
     ///    back to this Node
     /// 7. This Node's `handle_put` drain decodes the sentinel via
     ///    [`Node::decode_quorum_payload`] and resolves the oneshot with the
@@ -1193,13 +1278,13 @@ impl Node {
     /// by the awaiting caller via `crate::tokio_time::timeout`.
     fn decode_put_ack_payload(put: &Put) -> Result<(), String> {
         for (_node_id, children) in put.updated_nodes.iter().rev() {
-            if let Some(node_data) = children.get("_err") {
+            if let Some(node_data) = children.get(crate::sentinel::ERR) {
                 if let Value::Text(msg) = &node_data.value {
                     return Err(msg.clone());
                 }
                 return Err("storage put commit failed (non-text _err payload)".to_string());
             }
-            if children.contains_key("_ack") {
+            if children.contains_key(crate::sentinel::ACK) {
                 return Ok(());
             }
         }
@@ -1224,7 +1309,7 @@ impl Node {
     ///
     /// ```text
     /// updated_nodes = {
-    ///     "__quorum_met__" => {
+    ///     "__quorum_met__" => {   // == crate::sentinel::QUORUM_MET
     ///         "_" => NodeData { value: Number(ack_count), updated_at: 0.0 }
     ///     }
     /// }
@@ -1246,7 +1331,7 @@ impl Node {
     /// entire drain with an `Instant`.
     fn decode_quorum_payload(put: &Put) -> Option<Result<ReplicationStatus, String>> {
         let started_at = web_time::Instant::now();
-        let children = put.updated_nodes.get(QUORUM_MET_SENTINEL)?;
+        let children = put.updated_nodes.get(QUORUM_MET)?;
         let node_data = children.get("_")?;
         match &node_data.value {
             Value::Number(n) => {
@@ -1264,21 +1349,55 @@ impl Node {
         }
     }
 
-    /// Connects to a relay server via WebSocket (WASM/browser only).
-    ///
-    /// Browser counterpart to connect_peer. Uses web_sys WebSocket
-    /// instead of tokio-tungstenite. The connection is async.
-    ///
-    /// # Arguments
-    ///
-    /// * url - WebSocket URL (e.g. wss://relay.example.com/ws)
     #[cfg(target_arch = "wasm32")]
+    /// Connects to a remote relay via WebSocket (WASM/browser) with
+    /// automatic reconnection.
+    ///
+    /// Mirrors the native [`Self::connect_peer`]: a child task owns the
+    /// connection lifecycle — construct the socket, start the
+    /// [`WasmWsConn`] actor, await its termination (its `onclose`/`onerror`
+    /// stop the actor, resolving the handle), then reconnect with
+    /// exponential backoff (1s → 60s). Each respawn's `pre_start` sends a
+    /// fresh `Hi`, which the Router uses to re-issue the node's local
+    /// subscriptions (resubscribe-on-reconnect) — the full reconnect chain
+    /// mirrors Gun.js's mesh behavior on browsers.
+    ///
+    /// The loop task is aborted on `node.stop()`; no zombie reconnects.
     pub fn connect_peer_wasm(&self, url: &str) {
         use crate::adapters::WasmWsConn;
         let ctx = self.inner.actor_context.clone();
-        let conn = WasmWsConn::new(url, &ctx, self.inner.allow_public_space);
-        ctx.start_actor(Box::new(conn));
-        info!("BEAM browser node connecting to relay: {}", url);
+        let ctx_for_loop = ctx.clone();
+        let url = url.to_string();
+        let allow_public_space = self.inner.allow_public_space;
+        ctx.child_task(async move {
+            let ctx = ctx_for_loop;
+            let mut backoff = Duration::from_secs(1);
+            let max_backoff = Duration::from_secs(60);
+            loop {
+                match WasmWsConn::try_new(&url, &ctx, allow_public_space) {
+                    Ok(conn) => {
+                        info!("BEAM browser node connecting to relay: {}", url);
+                        let (_addr, handle) = ctx.start_actor_with_handle(Box::new(conn));
+                        // Await the WsConn lifecycle: onclose/onerror stop
+                        // the actor → run loop breaks → handle resolves.
+                        // Resumption here IS the disconnect signal — the
+                        // loop re-enters and reconnects immediately (native
+                        // connect_peer semantics).
+                        let _ = handle.await;
+                        warn!("BEAM browser peer {} disconnected; reconnecting", url);
+                        backoff = Duration::from_secs(1);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "BEAM browser WebSocket to {} failed: {:?}. retry in {:?}",
+                            url, e, backoff
+                        );
+                        crate::tokio_time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(max_backoff);
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -1361,6 +1480,136 @@ mod tests {
         let child1 = node.get("key");
         let child2 = node.get("key");
         assert_eq!(child1.id(), child2.id());
+    }
+
+    // ── once() default wait (T1: Gun.js parity) ────────────────────────
+
+    /// Rename-guard: the default wait MUST be 99ms — Gun.js's `once()`
+    /// default is `opt.wait || 99` (`src/on.js:66`). The pre-hardening
+    /// value was 66ms with a doc comment falsely claiming to match Gun;
+    /// this assertion fails loudly if anyone regresses it.
+    #[test]
+    fn default_once_wait_matches_gun_js() {
+        assert_eq!(
+            DEFAULT_ONCE_WAIT,
+            Duration::from_millis(99),
+            "DEFAULT_ONCE_WAIT must equal Gun.js's once() default (opt.wait || 99)"
+        );
+    }
+
+    /// once() with the default wait returns None for a key that has no
+    /// value — the Gun-parity "not found" outcome (bounded wait, no panic,
+    /// no NACK in the protocol).
+    #[tokio::test]
+    async fn once_default_wait_returns_none_for_missing_value() {
+        let mut node = Node::new();
+        let start = std::time::Instant::now();
+        let result = node.get("nonexistent_key").once(None).await;
+        let elapsed = start.elapsed();
+        assert_eq!(result, None, "missing value must resolve to None");
+        // Must actually wait ~DEFAULT_ONCE_WAIT, not return instantly
+        // (instant None would mean the timeout envelope is broken).
+        assert!(
+            elapsed >= Duration::from_millis(90),
+            "once(None) must respect DEFAULT_ONCE_WAIT; resolved in {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "once(None) must not hang; resolved in {:?}",
+            elapsed
+        );
+    }
+
+    /// once() resolves quickly when the value exists locally — the happy
+    /// path must not be slowed by the default-wait change (99ms is an
+    /// upper bound for absence, not a floor for presence).
+    #[tokio::test]
+    async fn once_resolves_immediately_for_local_value() {
+        let mut node = Node::new();
+        node.get("present")
+            .put("value".into())
+            .await
+            .expect("put should succeed");
+        let start = std::time::Instant::now();
+        let result = node.get("present").once(None).await;
+        assert_eq!(result, Some("value".into()));
+        assert!(
+            start.elapsed() < Duration::from_millis(90),
+            "local value should resolve well before the default wait elapses"
+        );
+    }
+
+    // ── T6: Lagged-resilient receive (burst test) ──────────────────────
+
+    /// A replay burst larger than the broadcast buffer must NOT panic —
+    /// the pre-T6 code did `.expect("recv error??")` on Lagged, crashing
+    /// the node on a routine burst. With buffer size 2 and a burst of 10,
+    /// the receiver lags, but once() continues and returns the next
+    /// retained value (or the eventually-put target value).
+    #[tokio::test]
+    async fn once_survives_replay_burst_with_tiny_buffer() {
+        let mut node = Node::new_with_config(
+            crate::node::Config {
+                broadcast_buffer_size: 2,
+                ..Default::default()
+            },
+            vec![Box::new(crate::adapters::MemoryStorage::new()) as Box<dyn crate::actor::Actor>],
+            Vec::new(),
+        );
+
+        // Subscribe, then hammer past the buffer to force Lagged.
+        let mut sub = node.get("burst").on();
+        for i in 0..10 {
+            node.get("burst")
+                .put(format!("v{i}").into())
+                .await
+                .expect("put should succeed");
+            // Yield so puts reach the broadcast channel before the next.
+            crate::tokio_time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // Drain through the Lagged errors: recv() must yield Lagged (not
+        // panic) and then resume delivering retained values.
+        let mut saw_lagged = false;
+        let mut got_value_after_lag = false;
+        for _ in 0..5 {
+            match crate::tokio_time::timeout(Duration::from_millis(200), sub.recv()).await {
+                Ok(Ok(_val)) => {
+                    if saw_lagged {
+                        got_value_after_lag = true;
+                        break;
+                    }
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    saw_lagged = true;
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    panic!("channel must not close");
+                }
+                Err(_) => break, // no more values within timeout
+            }
+        }
+        assert!(
+            saw_lagged,
+            "10 values into a 2-slot buffer must produce Lagged"
+        );
+        assert!(
+            got_value_after_lag,
+            "delivery must resume after a Lagged event"
+        );
+
+        // The critical regression: once() over the same lagged path must
+        // return a value (not panic) — exercising the T6 policy directly.
+        let result = node
+            .get("burst")
+            .once(Some(Duration::from_millis(500)))
+            .await;
+        assert_eq!(
+            result,
+            Some("v9".into()),
+            "once() must resolve to the final value through the burst"
+        );
     }
 
     #[tokio::test]
@@ -1454,7 +1703,7 @@ mod tests {
         children.insert(
             sentinel.to_string(),
             NodeData {
-                value: Value::Text(if sentinel == "_err" {
+                value: Value::Text(if sentinel == crate::sentinel::ERR {
                     "test error".to_string()
                 } else {
                     "ok".to_string()
@@ -1463,7 +1712,7 @@ mod tests {
             },
         );
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), children);
+        nodes.insert(crate::sentinel::ACK.to_string(), children);
         let put = Put::new(nodes, Some(put_id.to_string()), Addr::noop());
         // Compute checksum so callers can serialize.
         put.to_string();
@@ -1472,14 +1721,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_decode_put_ack_payload_success() {
-        let ack = make_ack_put("put-1", "_ack");
+        let ack = make_ack_put("put-1", crate::sentinel::ACK);
         let result = Node::decode_put_ack_payload(&ack);
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
     }
 
     #[tokio::test]
     async fn test_decode_put_ack_payload_error_carries_message() {
-        let ack = make_ack_put("put-2", "_err");
+        let ack = make_ack_put("put-2", crate::sentinel::ERR);
         let result = Node::decode_put_ack_payload(&ack);
         assert!(result.is_err(), "expected Err");
         let err = result.unwrap_err();
@@ -1496,14 +1745,14 @@ mod tests {
         // presence is the signal. This matches the documented fallback.
         let mut children = BTreeMap::default();
         children.insert(
-            "_ack".to_string(),
+            crate::sentinel::ACK.to_string(),
             NodeData {
                 value: Value::Null,
                 updated_at: 0.0,
             },
         );
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), children);
+        nodes.insert(crate::sentinel::ACK.to_string(), children);
         let put = Put::new(nodes, Some("put-3".to_string()), Addr::noop());
         let result = Node::decode_put_ack_payload(&put);
         assert!(result.is_ok(), "no-sentinel ack should be success");
@@ -1534,7 +1783,7 @@ mod tests {
         node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
         // Build ack message
-        let ack = make_ack_put(&put_id, "_ack");
+        let ack = make_ack_put(&put_id, crate::sentinel::ACK);
 
         // Inject via the actor handle
         let ctx = ActorContext::new("test-peer".to_string());
@@ -1561,7 +1810,7 @@ mod tests {
         let put_id = "test-pending-err".to_string();
         node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
-        let ack = make_ack_put(&put_id, "_err");
+        let ack = make_ack_put(&put_id, crate::sentinel::ERR);
 
         let ctx = ActorContext::new("test-peer".to_string());
         node.handle(Arc::new(Message::Put(ack)), &ctx).await;
@@ -1585,7 +1834,7 @@ mod tests {
         node.inner.pending_puts.write().insert(put_id.clone(), tx);
 
         // Different ack id
-        let ack = make_ack_put("different-id", "_ack");
+        let ack = make_ack_put("different-id", crate::sentinel::ACK);
 
         let ctx = ActorContext::new("test-peer".to_string());
         node.handle(Arc::new(Message::Put(ack)), &ctx).await;
@@ -1710,7 +1959,7 @@ mod tests {
                 updated_at: 0.0,
             },
         );
-        let mut put = Put::new_from_kv(QUORUM_MET_SENTINEL.to_string(), children, Addr::noop());
+        let mut put = Put::new_from_kv(QUORUM_MET.to_string(), children, Addr::noop());
         put.id = "test_put_id".to_string();
         put.in_response_to = Some("test_put_id".to_string());
         put
@@ -1791,7 +2040,7 @@ mod tests {
                 updated_at: 0.0,
             },
         );
-        let put = Put::new_from_kv(QUORUM_MET_SENTINEL.to_string(), children, Addr::noop());
+        let put = Put::new_from_kv(QUORUM_MET.to_string(), children, Addr::noop());
         let result = Node::decode_quorum_payload(&put);
         assert!(result.is_none(), "missing _ key → None");
     }

@@ -9,6 +9,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Future Work — Absence Signaling (NACK)
+
+- **Documented limitation:** BEAM has no protocol-level "not found" (NACK) signal.
+  `Node::once()` therefore returns `None` after a bounded wait (Gun.js-parity
+  behavior — Gun's own `once()` is timer-based and its source notes at
+  `src/root.js` that "not found is a sensitive issue... should probably be
+  handled more carefully"; it never was).
+- **Path forward:** a feature-gated NACK extension (precedent: the
+  `strict-msg-id` feature flag) would let consumers distinguish
+  "confirmed absent" from "timed out." Deferred until a real consumer
+  need appears — wire parity with Gun.js is the standing rule, and a NACK
+  would be a BEAM-only wire extension Gun.js ignores.
+
+## [0.19.0] — 2026-09-10 — Gun.js Parity: Resubscribe-on-Reconnect + Reconnect Loops
+
+The hardening lap: close the one genuine parity gap found in the parity
+verification pass — BEAM nodes lost their live subscriptions whenever a
+relay connection dropped (Gun.js's `mesh.js` re-asks `node.ask` souls on
+`'hi'`; BEAM never did). Verified end-to-end against a real Gun.js relay
+with wire-level traces.
+
+### Added
+
+- **Resubscribe-on-reconnect** (Router, commit abfde42): the Router records
+  locally-originated `Get`s (asks) in a bounded registry
+  (`local_asks`, `SEEN_MSGS_MAX_SIZE` — matching Gun's ~10K ask ceiling).
+  On `Hi` (initial contact — the one transport-agnostic seam: native
+  WsConn, WASM WasmWsConn, and WebRTC all send `Hi` on `pre_start`),
+  after the `dam:"?"` ack, the Router re-issues every recorded ask with
+  FRESH message IDs (the `seen_get_messages` dedup would eat reused IDs)
+  through the normal pipeline. Live subscriptions now survive reconnects
+  with zero user action — Gun `mesh.js 'hi'` parity.
+- **E2E resubscribe test** (`resubscribe_after_reconnect`, wire_live,
+  commit b172dab): SAME node, persistent `on()` subscription survives a
+  relay kill + restart on the same port and receives post-restart data
+  without a new `on()` — the full disconnect-detect → reconnect → Hi →
+  re-issue chain verified against a real Gun.js relay (unlike the
+  existing `reconnection_sync` test, which reconnects a NEW node).
+- **Protocol sentinel module** (`src/sentinel.rs`, commit ce91802): the
+  wire protocol sentinels (`__beam_replay_complete__` etc.) centralized
+  as named constants with rename-guard + distinctness tests; 59 scattered
+  literals refactored across node/router/7 storage adapters;
+  `ack::QUORUM_MET_SENTINEL` kept as a deprecated alias (API preserved).
+  Storage table identifiers (`rod_nodes_v1`, `ROD_NODES`, …) deliberately
+  remain literals — they are wire-format/database identifiers, not
+  consumer sentinels.
+
+### Fixed
+
+- **Get fan-out for pure-client topologies** (Router, commit b172dab):
+  `handle_get`'s blanket `peer_addrs` already-sent marking assumed every
+  known peer is an OWM/WsServer-managed child. For pure
+  `Node::connect_peer` clients (WsConn actors with no OWM parent) that
+  suppressed the ONLY path a Get had to the relay — such clients could
+  push data but never fetch it. Now the marking applies only when a
+  server peer exists to do the fan-out; otherwise the known-peers sample
+  delivers the Get directly. (Hybrid topologies keep the marking —
+  documented pre-existing limitation.)
+- **connect_peer disconnect detection** (commit 610adbd): `connect_peer`
+  slept 3600s after connecting ("TODO: detect disconnect") — reconnect
+  latency up to an hour. It now awaits the `WsConn` actor's lifecycle
+  handle via the new `start_actor_with_handle`; resumption of the
+  connect loop IS the disconnect signal. Reconnects within seconds.
+- **WASM reconnect loop** (commit 25bfab6): browser `WebSocket` peers
+  never reconnected — `WasmWsConn.onclose` was an empty closure and
+  `connect_peer_wasm` was one-shot. Now: `onclose`/`onerror` stop the
+  actor (same chain as native), `new()` split into `from_socket` (closure
+  wiring, written once) + `try_new` (URL → `Result`, no panic on
+  construction failure), and `connect_peer_wasm` runs the same reconnect
+  loop as native (immediate reconnect on disconnect; exponential backoff
+  1s→60s only on construction failures; loop aborted on `node.stop()`).
+  `ActorContext::child_task` drops its `Send` bound on WASM (browser
+  futures are `!Send` via `spawn_local`; existing callers unchanged).
+- **once() Lagged panic** (commits f1bd37b + 7511542): `once()` panicked
+  on `RecvError::Lagged` (`.expect("recv error??")`) — a routine replay
+  burst larger than the broadcast buffer crashed the node. Now: bounded
+  wait with a remaining-budget loop (lag recovery never extends the
+  caller's timeout; portable across native + WASM), `Lagged` → log and
+  continue (delivery resumes at the oldest retained value), `Closed` →
+  `None`. Burst test with `broadcast_buffer_size = 2` proves the crash
+  path is structurally impossible.
+- **Wire msg-id edge fixtures** (commit 94c76f7): three edge fixtures
+  predated the `c8e8268` Gun-parity msg-id relaxation and failed on a
+  clean checkout of main — updated to the standing spec (any string
+  accepted, missing ID generated). Pre-existing breakage, verified
+  against a clean worktree before fixing.
+
+### Changed
+
+- **once() default wait 99ms** (commit f1bd37b): was 66ms, documented as
+  "matching Gun opt.wait" — Gun's actual default is `opt.wait || 99`
+  (`src/on.js:66`). Now exported as `DEFAULT_ONCE_WAIT` with tuning
+  guidance; the doc lie is fixed.
+- **CHANGELOG**: NACK absence-signal documented as future work with the
+  Gun.js parity rationale (commit 8ed33a7).
+
 ## [0.18.0] — 2026-09-10 — PANIC Distributed Test Suite + Gun.js Wire Compatibility Fixes
 
 ### Added — PANIC Distributed Test Suite (18 test files, all green)

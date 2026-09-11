@@ -378,7 +378,7 @@ impl WasmNodeFsStorage {
         // Send batch ack
         let mut ack_children = BTreeMap::default();
         ack_children.insert(
-            "_ack".to_string(),
+            crate::sentinel::ACK.to_string(),
             NodeData {
                 value: Value::Text("ok".to_string()),
                 updated_at: web_time::SystemTime::now()
@@ -388,7 +388,7 @@ impl WasmNodeFsStorage {
             },
         );
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), ack_children);
+        nodes.insert(crate::sentinel::ACK.to_string(), ack_children);
         let ack = Put::new(nodes, Some(batch.id.clone()), ctx.addr.clone());
         let _ = batch.from.send(Message::Put(ack));
     }
@@ -397,7 +397,7 @@ impl WasmNodeFsStorage {
     fn send_put_ack(&self, put: &Put, ctx: &ActorContext) {
         let mut ack_children = BTreeMap::default();
         ack_children.insert(
-            "_ack".to_string(),
+            crate::sentinel::ACK.to_string(),
             NodeData {
                 value: Value::Text("ok".to_string()),
                 updated_at: web_time::SystemTime::now()
@@ -407,7 +407,7 @@ impl WasmNodeFsStorage {
             },
         );
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), ack_children);
+        nodes.insert(crate::sentinel::ACK.to_string(), ack_children);
         let ack = Put::new(nodes, Some(put.id.clone()), ctx.addr.clone());
         let _ = put.from.send(Message::Put(ack));
     }
@@ -466,7 +466,7 @@ impl Actor for WasmNodeFsStorage {
                     },
                 );
                 let mut nodes = BTreeMap::default();
-                nodes.insert("_ack".to_string(), ack);
+                nodes.insert(crate::sentinel::ACK.to_string(), ack);
                 let put = Put::new(nodes, Some(flush.id.clone()), ctx.addr.clone());
                 let _ = flush.from.send(Message::Put(put));
             }

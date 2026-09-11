@@ -1,10 +1,29 @@
 {
   "name": "non_alphanumeric_msg_id",
-  "description": "Message ID with special characters — parser must reject",
+  "description": "Message ID with special characters \u2014 accepted (Gun.js accepts any string; dedup is a plain object-key lookup)",
   "category": "edge",
   "input": "{\"put\":{\"soul/a\":{\"name\":\"x\"}},\"#\":\"msg!@#$\"}",
   "expected": {
-    "parses": false,
-    "error": "alphanumeric"
-  }
+    "parses": true,
+    "kind": "Put",
+    "souls": [
+      "soul/a"
+    ],
+    "fields": {
+      "soul/a": [
+        "name"
+      ]
+    },
+    "values": {
+      "soul/a": {
+        "name": "x"
+      }
+    },
+    "timestamps": {
+      "soul/a": {
+        "name": 0.0
+      }
+    }
+  },
+  "allow_public_space": true
 }

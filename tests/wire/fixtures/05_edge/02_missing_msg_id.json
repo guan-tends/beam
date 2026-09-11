@@ -1,10 +1,29 @@
 {
   "name": "missing_msg_id",
-  "description": "Message without # (msg id) field — parser must reject",
+  "description": "Message without # (msg id) field \u2014 parser generates a Gun-compatible random id (Gun.js:1681 String.random(9) parity)",
   "category": "edge",
   "input": "{\"put\":{\"soul/a\":{\"name\":\"test\"}}}",
   "expected": {
-    "parses": false,
-    "error": "msg id not a string"
-  }
+    "parses": true,
+    "kind": "Put",
+    "souls": [
+      "soul/a"
+    ],
+    "fields": {
+      "soul/a": [
+        "name"
+      ]
+    },
+    "values": {
+      "soul/a": {
+        "name": "test"
+      }
+    },
+    "timestamps": {
+      "soul/a": {
+        "name": 0.0
+      }
+    }
+  },
+  "allow_public_space": true
 }
