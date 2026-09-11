@@ -351,8 +351,16 @@ github-release version:
         echo "Usage: just github-release vX.Y.Z"
         exit 1
     fi
-    echo "=== Creating GitHub release: {{version}} ==="
-    NOTES=$(awk '/^## \[{{version}}\]/{found=1} found && /^## \[/ && !/^\[{{version}}\]/{found=0} found' CHANGELOG.md)
+    VNUM=$(echo "{{version}}" | sed 's/^v//')
+    echo "=== Creating GitHub release: {{version}} (CHANGELOG section [${VNUM}]) ==="
+    # Push the tag BEFORE gh release create — gh attaches to pre-existing
+    # remote tag refs and does NOT create fresh ones (v0.18.0 lesson).
+    git push github "refs/tags/{{version}}:refs/tags/{{version}}"
+    NOTES=$(awk "/^## \\[${VNUM}\\]/{f=1; next} f && /^## \\[{f=0} f" CHANGELOG.md)
+    if [ -z "$NOTES" ]; then
+        echo "ERROR: no CHANGELOG section found for [${VNUM}] — refusing empty notes"
+        exit 1
+    fi
     gh release create "{{version}}" --title "BEAM {{version}}" --notes "$NOTES"
     echo "=== GITHUB RELEASE COMPLETE ✅ ==="
 
