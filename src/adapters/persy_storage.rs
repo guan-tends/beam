@@ -353,7 +353,7 @@ fn build_ack_children(
     match result {
         Ok(Ok(())) => (
             vec![(
-                "_ack".to_string(),
+                crate::sentinel::ACK.to_string(),
                 NodeData {
                     value: Value::Text("ok".to_string()),
                     updated_at: now_millis,
@@ -367,7 +367,7 @@ fn build_ack_children(
             error!("persy put commit failed: {}", e);
             (
                 vec![(
-                    "_err".to_string(),
+                    crate::sentinel::ERR.to_string(),
                     NodeData {
                         value: Value::Text(e.clone()),
                         updated_at: now_millis,
@@ -383,7 +383,7 @@ fn build_ack_children(
             error!("persy put task panicked: {:?}", e);
             (
                 vec![(
-                    "_err".to_string(),
+                    crate::sentinel::ERR.to_string(),
                     NodeData {
                         value: Value::Text(msg.clone()),
                         updated_at: now_millis,
@@ -459,7 +459,7 @@ impl Actor for PersyStorage {
                     },
                 );
                 let mut ack_nodes = BTreeMap::default();
-                ack_nodes.insert("_ack".to_string(), ack_children);
+                ack_nodes.insert(crate::sentinel::ACK.to_string(), ack_children);
                 let put = Put::new(ack_nodes, Some(flush_id), ctx_addr);
                 put.to_string();
                 let _ = from_addr.send(Message::Put(put));
@@ -491,7 +491,7 @@ impl PersyStorage {
     ) {
         let (ack_children, err_msg) = build_ack_children(result);
         let mut nodes = BTreeMap::default();
-        nodes.insert("_ack".to_string(), ack_children);
+        nodes.insert(crate::sentinel::ACK.to_string(), ack_children);
         let ack = Put::new(nodes, Some(put_id.to_string()), ctx.addr.clone());
         let _ = put_from.send(Message::Put(ack));
         if err_msg.is_some() {

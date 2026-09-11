@@ -328,9 +328,28 @@ impl ActorContext {
     /// Spawns a child async task (non-blocking).
     ///
     /// The task's `JoinHandle` is tracked so it can be aborted on stop.
+    ///
+    /// On native, tasks must be `Send` (multi-threaded scheduler). On
+    /// WASM, futures are `!Send` by design — they run on the single-threaded
+    /// browser event loop via `spawn_local` (see `crate::tokio_spawn`), so
+    /// the `Send` bound is dropped there. All existing callers compile
+    /// unchanged on both targets (`Send` futures satisfy the weaker bound).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn child_task<T>(&self, task: T)
     where
         T: Future<Output = ()> + Send + 'static,
+    {
+        let handle = crate::tokio_spawn::spawn(task);
+        self.task_handles.write().push(handle);
+    }
+
+    /// WASM variant of [`child_task`](Self::child_task) — same behavior,
+    /// without the `Send` bound (browser futures are `!Send`; see
+    /// [`crate::tokio_spawn`]).
+    #[cfg(target_arch = "wasm32")]
+    pub fn child_task<T>(&self, task: T)
+    where
+        T: Future<Output = ()> + 'static,
     {
         let handle = crate::tokio_spawn::spawn(task);
         self.task_handles.write().push(handle);
@@ -348,12 +367,33 @@ impl ActorContext {
         self.task_handles.write().push(handle);
     }
 
-    fn start_actor_or_router(
+    /// Starts an actor and returns both its address and lifecycle handle.
+    ///
+    /// The returned `JoinHandle` resolves when the actor's `run` loop ends —
+    /// either via stop signal (graceful shutdown) or when the actor's work
+    /// terminates on its own (e.g. a [`crate::adapters::WsConn`] whose
+    /// WebSocket closed). Awaiting the handle is how callers *detect
+    /// disconnect*: the handle resolving means the actor is no longer
+    /// running.
+    ///
+    /// Dropping the returned handle detaches the task (it keeps running) —
+    /// identical semantics to [`start_actor`](Self::start_actor).
+    pub fn start_actor_with_handle(
+        &self,
+        actor: Box<dyn Actor>,
+    ) -> (Addr, crate::tokio_spawn::JoinHandle<()>) {
+        self.start_actor_lifecycle(actor, false, None)
+    }
+
+    /// Shared actor-spawn implementation: wires the mailbox, stop signal,
+    /// and child context; spawns the actor's run loop; returns the address
+    /// and the run-loop's `JoinHandle`.
+    fn start_actor_lifecycle(
         &self,
         mut actor: Box<dyn Actor>,
         is_router: bool,
         bound: Option<usize>,
-    ) -> Addr {
+    ) -> (Addr, crate::tokio_spawn::JoinHandle<()>) {
         let capacity = bound.unwrap_or(DEFAULT_MAILBOX_CAPACITY);
         let (sender, receiver) = mailbox::mailbox(capacity);
         let addr = Addr::new(sender);
@@ -365,10 +405,23 @@ impl ActorContext {
         self.stop_signals.write().insert(addr.clone(), stop_sender);
         let stop_signals = self.stop_signals.clone();
         let addr_clone = addr.clone();
-        crate::tokio_spawn::spawn(async move {
+        let handle = crate::tokio_spawn::spawn(async move {
             actor.run(receiver, stop_receiver, new_context).await;
             stop_signals.write().remove(&addr_clone);
         });
+        (addr, handle)
+    }
+
+    fn start_actor_or_router(
+        &self,
+        actor: Box<dyn Actor>,
+        is_router: bool,
+        bound: Option<usize>,
+    ) -> Addr {
+        // Dropping the handle detaches the task (does not abort) — the
+        // actor keeps running until stopped via its stop signal, exactly
+        // as before this method existed.
+        let (addr, _handle) = self.start_actor_lifecycle(actor, is_router, bound);
         addr
     }
 
@@ -572,6 +625,66 @@ mod tests {
         // Stop the actor
         ctx.stop();
         assert!(*ctx.is_stopped.read());
+    }
+
+    /// Models a `WsConn` mid-disconnect: a child task (the receive loop)
+    /// ends and calls `ctx.stop()` — the exact production chain in
+    /// `ws_conn.rs` (`receive loop ended → ctx2.stop() → run breaks`).
+    struct DisconnectOnStartActor;
+
+    #[async_trait]
+    impl Actor for DisconnectOnStartActor {
+        async fn handle(&mut self, _msg: Arc<Message>, _ctx: &ActorContext) {}
+        async fn pre_start(&mut self, ctx: &ActorContext) {
+            let ctx2 = ctx.clone();
+            ctx.child_task(async move { ctx2.stop() });
+        }
+    }
+
+    /// T3: `start_actor_with_handle` returns a handle that resolves when the
+    /// actor's run loop ends on its own — the disconnect-detection primitive
+    /// that `connect_peer` now awaits (was: sleep(3600)).
+    ///
+    /// The disconnect chain is modeled exactly as `WsConn` does it: a child
+    /// task (the receive loop) ends → `ctx.stop()` → run loop breaks →
+    /// handle resolves. (Note: dropping the *sender* does NOT close the
+    /// mailbox — close fires on receiver drop — so sender-drop is not a
+    /// valid end-of-run trigger here.)
+    #[tokio::test]
+    async fn start_actor_with_handle_resolves_on_disconnect_chain() {
+        let ctx = ActorContext::new("t3-exit".to_string());
+        let (_addr, handle) = ctx.start_actor_with_handle(Box::new(DisconnectOnStartActor));
+
+        let resolved = crate::tokio_time::timeout(web_time::Duration::from_secs(2), handle).await;
+        assert!(
+            resolved.is_ok(),
+            "handle must resolve when the actor's run loop ends via the disconnect chain"
+        );
+    }
+
+    /// T3: the handle stays pending while the actor runs and resolves after
+    /// a stop signal — the graceful-shutdown path (ctx.stop() → signal →
+    /// run loop breaks → handle resolves).
+    #[tokio::test]
+    async fn start_actor_with_handle_resolves_on_stop_signal() {
+        let ctx = ActorContext::new("t3-stop".to_string());
+        let received = Arc::new(RwLock::new(Vec::new()));
+        let (_addr, handle) = ctx.start_actor_with_handle(Box::new(TestActor { received }));
+
+        // Actor is running (default run loop waits on mailbox/stop).
+        crate::tokio_time::sleep(web_time::Duration::from_millis(50)).await;
+        assert!(
+            !handle.is_finished(),
+            "handle must stay pending while the actor runs"
+        );
+
+        // Stop signal → run loop breaks → handle resolves.
+        ctx.stop();
+        let resolved = crate::tokio_time::timeout(web_time::Duration::from_secs(2), handle).await;
+        assert!(
+            resolved.is_ok(),
+            "handle must resolve after the stop signal"
+        );
     }
 }
 

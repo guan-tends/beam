@@ -25,6 +25,7 @@ pub mod mailbox;
 #[doc(hidden)]
 pub mod message; // pub for benchmarking
 pub mod metrics;
+pub mod sentinel;
 mod tokio_spawn;
 mod tokio_time;
 
@@ -38,8 +39,9 @@ mod stun;
 pub mod types;
 pub mod utils; // pub for benchmarking
 pub use dup::Dup;
+pub use sentinel::{ACK, ERR, QUORUM_MET, REPLAY_COMPLETE};
 pub mod sea;
-pub use node::{Config, Node};
+pub use node::{Config, DEFAULT_ONCE_WAIT, Node};
 pub use types::Value;
 
 #[cfg(target_arch = "wasm32")]

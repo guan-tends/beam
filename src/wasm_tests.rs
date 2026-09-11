@@ -267,4 +267,41 @@ mod opfs_tests {
             Value::Link("node/abc".to_string())
         );
     }
+
+    // ─── T5 (hardening): WASM reconnect primitives ──────────────────────
+
+    /// T5: `WasmWsConn::try_new` returns Err instead of panicking on a
+    /// non-WebSocket URL (Node's test env has no valid ws:// endpoint here;
+    /// a bad URL must surface as a construction error so the reconnect
+    /// loop in `connect_peer_wasm` can back off rather than crash).
+    #[wasm_bindgen_test]
+    fn try_new_rejects_invalid_url() {
+        use crate::actor::ActorContext;
+        use crate::adapters::WasmWsConn;
+
+        let ctx = ActorContext::new("t5-test".to_string());
+        let result = WasmWsConn::try_new("not-a-valid-url", &ctx, true);
+        assert!(
+            result.is_err(),
+            "invalid URL must be a construction error, not a panic"
+        );
+    }
+
+    /// T5: `try_new` accepts a well-formed ws:// URL in a JS environment
+    /// (Node 22 has native WebSocket) and wires the four lifecycle
+    /// callbacks — construction succeeds and the socket starts CONNECTING.
+    #[wasm_bindgen_test]
+    fn try_new_accepts_valid_url() {
+        use crate::actor::ActorContext;
+        use crate::adapters::WasmWsConn;
+
+        let ctx = ActorContext::new("t5-test".to_string());
+        // Node's WebSocket accepts the URL; the connection itself may fail
+        // asynchronously (no relay listening) — construction must succeed.
+        let result = WasmWsConn::try_new("ws://127.0.0.1:1", &ctx, true);
+        assert!(
+            result.is_ok(),
+            "well-formed URL must construct without panic"
+        );
+    }
 }
