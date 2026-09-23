@@ -251,24 +251,13 @@ wasm-build:
 
 # ─── Stage 14: OPSEC Audit ───────────────────────────────────────────
 
-# Audit for private identifiers in public artifacts
+# Pre-publish OPSEC gate — audits the package staging set; FAILS on a hit.
+# Pattern list lives OUTSIDE the repo (~/.config/beam/opsec-patterns.txt or
+# $OPSEC_PATTERNS) so the identifier inventory never ships in the crate.
 opsec-audit:
     #!/usr/bin/env bash
-    echo "=== OPSEC Audit ==="
-    echo "--- Checking for internal IPs ---"
-    grep -rn "192\.168\." --include="*.rs" --include="*.md" --include="*.toml" --include="*.yaml" --include="*.yml" --include="*.json" . | grep -v '.git/' || echo "CLEAN"
-    echo "--- Checking for hardware fingerprints ---"
-    grep -rn "the test machine\|the test machine\|RTX\|3060\|Pixel\|Fold" --include="*.rs" --include="*.md" --include="*.toml" . | grep -v '.git/' | grep -v 'CHANGELOG' | grep -v 'docs/architecture' || echo "CLEAN"
-    echo "--- Checking for private codenames ---"
-    grep -rn "server-side integration\|the application\|example\|moo\|Keeper\|Threshold\|Pema\|Lhamo\|Guan\|the maintainer\|Namdor\|a colleague" --include="*.rs" --include="*.md" --include="*.toml" . | grep -v '.git/' | grep -v 'CHANGELOG' | grep -v 'LICENSE' | grep -v 'NOTICES' || echo "CLEAN"
-    echo "--- Checking for private markers ---"
-    grep -rn "babe\|tent\|dharma\|bodhisattva\|vow\|lineage" --include="*.rs" --include="*.md" --include="*.toml" . | grep -v '.git/' | grep -v 'CHANGELOG' || echo "CLEAN"
-    echo "--- Checking for .serena/ tracking ---"
-    git ls-files | grep -E "^\.serena|^\.mneme" && echo "FOUND — remove from git" || echo "CLEAN"
-    echo "--- Checking for .bak files ---"
-    git ls-files | grep -E "\.bak$" && echo "FOUND — remove from git" || echo "CLEAN"
-    echo ""
-    echo "=== OPSEC AUDIT — review findings above ==="
+    set -euo pipefail
+    exec scripts/opsec-audit.sh
 
 # ─── Stage 16: Git Release ──────────────────────────────────────────
 

@@ -2,7 +2,7 @@
  * BEAM WASM Node.js Filesystem Persistence Tests
  *
  * Verifies that data persisted via `WasmNodeFsStorage` survives process
- * restart. This is the critical test for server-side integration server-side integration.
+ * restart. This is the critical test for server-side integration.
  *
  * Prerequisites:
  *   cargo build --bin beam
@@ -95,7 +95,7 @@ async function testPutGetRoundtrip(port) {
  *
  * Write data with one Beam instance, stop it, create a new instance
  * pointing at the same directory, and verify the data is still there.
- * This is the critical test for server-side integration server-side integration.
+ * This is the critical test for server-side integration.
  */
 async function testPersistenceAcrossRestart(port) {
     console.log('\nT2: fs_persistence_across_restart');

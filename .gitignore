@@ -24,3 +24,7 @@ bench/results/
 node_modules/
 test-results/
 playwright-report/
+
+# Raw benchmark data (build artifacts — do not ship)
+bench/*.tgz
+*.bundle

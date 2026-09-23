@@ -131,7 +131,7 @@ This runs all 4 tools sequentially, saving results to `bench/results/`.
 
 ## Historical Results
 
-Previous profiling results are stored in the research notes:
+Previous profiling results are stored in the project's internal research notes:
 - v0.12.0: Initial flame graph analysis (Session 14-15)
 - v0.14.0: Full profiling report with CPU, allocation, and DHAT breakdown (Session 38)
 - v0.15.0: Post-mimalloc profiling (Session 41)

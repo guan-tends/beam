@@ -2,7 +2,7 @@
 
 **Branch:** `feature/fjall-storage-adapter`
 **Date:** 2026-08-20
-**Author:** Guan (Guan)
+**Author:** Guan
 **Status:** ✅ IMPLEMENTED — code review complete, all tests green, pushed to Gitea
 
 ### Implementation Corrections (post-build)
@@ -376,7 +376,7 @@ git commit -m "feat: add FjallStorage adapter — LSM-tree backend for high-writ
 - Unit tests + e2e tests + benchmark integration
 - Benchmarks: redb vs fjall head-to-head on BEAM's workload
 
-Research: wing_beam/storage-backend-research in the research notes"
+Research: internal storage-backend research notes"
 git push origin feature/fjall-storage-adapter
 ```
 

@@ -4,7 +4,7 @@
  * Tests cross-talk between two WASM BEAM clients through a real relay,
  * using Node's native libuv event loop (not wasm-bindgen-test-runner).
  *
- * This is the critical path for server-side integration server-side integration:
+ * This is the critical path for server-side integration:
  *   import { Beam } from './pkg/beam.js';
  *
  * Run: node tests/wasm_node_integration.js
