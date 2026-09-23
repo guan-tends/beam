@@ -22,6 +22,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   need appears — wire parity with Gun.js is the standing rule, and a NACK
   would be a BEAM-only wire extension Gun.js ignores.
 
+## [0.19.1] — 2026-09-23 — OPSEC Remediation
+
+Clean-up release superseding 0.19.0: the published 0.19.0 crate carried
+internal-only identifiers in shipped documentation and a release-pipeline
+recipe, and its `opsec-audit` stage printed findings without failing the
+build. No functional or API changes.
+
+### Changed
+- Shipped docs (`docs/FJALL_ADAPTER_PLAN.md`, `docs/PROFILING.md`) no longer
+  reference internal identifiers or internal research-system names.
+- Test-file comments no longer carry personal/directive attributions.
+- `justfile`: the release pipeline's audit stage now delegates to an
+  externalized gate (pattern list kept OUTSIDE the repository, never packaged).
+
+### Added
+- `scripts/opsec-audit.sh` — pre-publish gate that audits the exact
+  `cargo package` staging set and exits non-zero on any hit, failing the
+  release instead of printing and continuing.
+
+### Security
+- Supersedes 0.19.0, which is yanked.
+
 ## [0.19.0] — 2026-09-10 — Gun.js Parity: Resubscribe-on-Reconnect + Reconnect Loops
 
 The hardening lap: close the one genuine parity gap found in the parity
