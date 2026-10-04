@@ -1204,3 +1204,7 @@ If BEAM saves you or your company time, consider sponsoring ongoing maintenance,
 | **Solana** | `Eu8wQcW68TKMs1a6eqzZu8znzU52QLqQugAMG8uCD6y6` |
 | **Ethereum / EVM** | `0x2733ff7c865C56d565a99BE1DC11B81cc76850A5` |
 | **XRP Ledger** | `r4X6e7McAQj7e8vBCeued1RYu4mCJrREDG` |
+
+---
+
+Crafted with ❤️ by [Sage Labs](https://sagelabs.dev)
