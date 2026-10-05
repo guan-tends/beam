@@ -5,7 +5,7 @@ Thank you for your interest in contributing!
 ## Development Setup
 
 ```bash
-git clone https://github.com/guan-tends/beam.git
+git clone https://github.com/sagelabs-dev/beam.git
 cd beam
 cargo build
 cargo test

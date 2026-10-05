@@ -1,8 +1,8 @@
 {
   "name": "beam",
   "stack": "heroku-20",
-  "website": "https://github.com/guan-tends/beam",
-  "repository": "https://github.com/guan-tends/beam",
+  "website": "https://github.com/sagelabs-dev/beam",
+  "repository": "https://github.com/sagelabs-dev/beam",
   "keywords": ["rust", "gun", "beam", "gunDB", "database", "graph", "offline-first"],
   "description": "BEAM — Offline-First Rust Graph Database Server Peer (Gun.js-compatible)",
   "buildpacks": [

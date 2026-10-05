@@ -1159,7 +1159,7 @@ PRs welcome. Read [COMPASS.md](COMPASS.md) for architecture context and [DEPLOY.
 
 ```bash
 # Clone and build
-git clone https://github.com/guan-tends/beam.git
+git clone https://github.com/sagelabs-dev/beam.git
 cd beam
 cargo build
 

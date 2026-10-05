@@ -10,7 +10,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/guan-tends/beam"
+    "url": "https://github.com/sagelabs-dev/beam"
   },
   "files": [
     "beam_bg.wasm",
@@ -18,7 +18,7 @@
     "beam.d.ts"
   ],
   "main": "beam.js",
-  "homepage": "https://github.com/guan-tends/beam",
+  "homepage": "https://github.com/sagelabs-dev/beam",
   "types": "beam.d.ts",
   "sideEffects": [
     "./snippets/*"
