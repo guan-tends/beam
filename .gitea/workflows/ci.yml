@@ -1,0 +1,11 @@
+name: Gitea CI
+on:
+  push:
+    branches: [master]
+jobs:
+  ping:
+    runs-on: self-hosted
+    container:
+      image: alpine:latest
+    steps:
+      - run: echo "gitea ci fired for beamdb"
