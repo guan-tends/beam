@@ -1195,15 +1195,13 @@ MIT — see [LICENSE](LICENSE).
 
 ## Sponsors
 
-If BEAM saves you or your company time, consider sponsoring ongoing maintenance, dependency updates, and issue triage.
+If BEAM is useful to you, consider supporting its continued development:
 
-### Donate
-
-| Chain | Address |
-|-------|---------|
-| **Solana** | `Eu8wQcW68TKMs1a6eqzZu8znzU52QLqQugAMG8uCD6y6` |
-| **Ethereum / EVM** | `0x2733ff7c865C56d565a99BE1DC11B81cc76850A5` |
-| **XRP Ledger** | `r4X6e7McAQj7e8vBCeued1RYu4mCJrREDG` |
+- **[GitHub Sponsors](https://github.com/sponsors/guan-tends)**
+- **Bitcoin:** `bc1q0gd3mwjg3zy9sghv22kmpg823vss4c0zzdzg24`
+- **Solana:** `Eu8wQcW68TKMs1a6eqzZu8znzU52QLqQugAMG8uCD6y6`
+- **Ethereum / EVM:** `0x2733ff7c865C56d565a99BE1DC11B81cc76850A5`
+- **XRP Ledger:** `r4X6e7McAQj7e8vBCeued1RYu4mCJrREDG`
 
 ---
 
