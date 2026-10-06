@@ -1,11 +1,29 @@
 name: Gitea CI
+# Gitea-native CI. Runner = act_runner v0.4.1, labels self-hosted/linux/docker.
+#  - Gitea reads .gitea/workflows/, NOT .github/workflows/.
+#  - runs-on MUST be a runner label (self-hosted), not ubuntu-latest.
+#  - actions/checkout@v4 is a Node action; the job runs in a rust container
+#    without node, so clone with git directly. safe.directory first; the
+#    container cannot resolve the internal "gitea" hostname, so clone over
+#    the host LAN address.
 on:
   push:
     branches: [master]
+  pull_request:
+    branches: [master]
 jobs:
-  ping:
+  check-test:
     runs-on: self-hosted
     container:
-      image: alpine:latest
+      image: rust:latest
     steps:
-      - run: echo "gitea ci fired for beamdb"
+      - name: Checkout (git clone)
+        run: |
+          git config --global --add safe.directory '*'
+          git clone --depth 1 "http://guan:${{ github.token }}@192.168.8.210:8561/guan/beamdb.git" .repo
+      - name: cargo check
+        working-directory: .repo
+        run: cargo check --all-targets --all-features
+      - name: cargo test (lib + doc)
+        working-directory: .repo
+        run: cargo test --workspace --lib && cargo test --workspace --doc
