@@ -1,4 +1,10 @@
-# Funding configuration for GitHub Sponsor button
-# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+# Funding configuration — crypto-native, self-custody wallets.
+# Solana · Ethereum/EVM · XRPL · Bitcoin
 
-custom: ["https://github.com/sagelabs-dev/beam#sponsors"]
+custom:
+  [
+    'https://solscan.io/account/Eu8wQcW68TKMs1a6eqzZu8znzU52QLqQugAMG8uCD6y6',
+    'https://etherscan.io/address/0x2733ff7c865C56d565a99BE1DC11B81cc76850A5',
+    'https://livenet.xrpl.org/accounts/r4X6e7McAQj7e8vBCeued1RYu4mCJrREDG',
+    'https://mempool.space/address/bc1q0gd3mwjg3zy9sghv22kmpg823vss4c0zzdzg24',
+  ]
