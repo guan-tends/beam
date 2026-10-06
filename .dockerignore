@@ -7,4 +7,3 @@ benches/_data
 *.md
 !README.md
 tests
-examples

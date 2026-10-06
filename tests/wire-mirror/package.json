@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node mirror_test.js"
+    "test": "node --test-force-exit mirror_test.js"
   },
   "devDependencies": {
     "gun": "^0.2020.1230"

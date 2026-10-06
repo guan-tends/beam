@@ -7,6 +7,7 @@ WORKDIR /app
 COPY Cargo.toml .
 COPY Cargo.lock .
 COPY benches benches
+COPY examples examples
 COPY src src
 
 RUN --mount=type=cache,target=/app/target \
